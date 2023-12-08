@@ -39,7 +39,7 @@ inputs:
   storage-iops:
     description: 'IOPS for io1 or io2 storage type. Ignored if storage-type is not io1 or io2.'
     required: false
-    default: "600"
+    default: "300"
   admins:
     description: 'List of admins (GitHub usernames) who can SSH into the runner instances. Comma-separated.'
     required: false

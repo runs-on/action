@@ -1,5 +1,13 @@
 ## RunsOn: self‐hosted runners made simple, fast, and cheap
 
+> [!IMPORTANT]
+> **Update 2024-01-25**
+> 
+> This action is deprecated.
+> See [runs-on/runs-on](https://github.com/runs-on/runs-on) for a self-hosted solution to launch 10x cheaper GitHub Action runners in your own AWS account.
+
+---
+
 The `runs-on/action` GitHub Action allows anyone with access to an AWS account to spawn ephemeral and very cheap self-hosted runners that can be used by your workflows.
 
 This allows you to tactically use more powerful or specialized instances for workflows that cannot run on one of the provided GitHub runner types.

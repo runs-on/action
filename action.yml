@@ -1,0 +1,11 @@
+name: 'RunsOn'
+description: 'RunsOn Action for magic caching, and more'
+runs:
+  using: 'node20'
+  main: 'index.js'
+
+inputs:
+  show-env:
+    description: 'Show all environment variables'
+    required: false
+    default: 'false'

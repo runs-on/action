@@ -1,4 +1,4 @@
-name: 'RunsOn'
+name: 'runs-on/action'
 description: 'RunsOn Action for magic caching, and more'
 runs:
   using: 'node20'

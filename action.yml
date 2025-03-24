@@ -10,7 +10,7 @@ inputs:
     description: 'Show all environment variables'
     required: false
     default: 'false'
-  display-costs:
-    description: 'Control how execution costs are displayed: "inline" for console output, "summary" for GitHub job summary, any other value disables the feature'
+  show-costs:
+    description: 'Control how execution costs are displayed: "inline" for log output, "summary" for GitHub job summary, any other value disables the feature'
     required: false
     default: 'inline'

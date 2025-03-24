@@ -4,11 +4,11 @@ const path = require('path');
 
 async function computeExecutionCost() {
   // Get the display costs option value
-  const displayCostsOption = process.env.INPUT_DISPLAY_COSTS || 'inline';
+  const displayCostsOption = process.env.INPUT_SHOW_COSTS || 'inline';
 
   // Disable if not 'inline' or 'summary'
   if (displayCostsOption !== 'inline' && displayCostsOption !== 'summary') {
-    console.log(`Cost calculation is disabled (display-costs=${displayCostsOption})`);
+    console.log(`Cost calculation is disabled (show-costs=${displayCostsOption})`);
     return;
   }
 

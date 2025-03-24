@@ -1,9 +1,14 @@
 const process = require('process');
+const fs = require('fs');
+const path = require('path');
 
 async function computeExecutionCost() {
-  // Check if cost display is disabled
-  if (process.env.INPUT_DISPLAY_COSTS === 'false') {
-    console.log('Cost calculation is disabled (display-costs=false)');
+  // Get the display costs option value
+  const displayCostsOption = process.env.INPUT_DISPLAY_COSTS || 'inline';
+
+  // Disable if not 'inline' or 'summary'
+  if (displayCostsOption !== 'inline' && displayCostsOption !== 'summary') {
+    console.log(`Cost calculation is disabled (display-costs=${displayCostsOption})`);
     return;
   }
 
@@ -44,14 +49,35 @@ async function computeExecutionCost() {
 
     const costData = await response.json();
     
-    console.log('\n===== Execution Cost Summary =====');
-    console.log(`Instance Type: ${costData.instanceType}`);
-    console.log(`Region: ${costData.region}`);
-    console.log(`Duration: ${costData.durationMinutes} minutes`);
-    console.log(`Cost: $${costData.totalCost}`);
-    console.log(`GitHub equivalent cost: $${costData.github.totalCost}`);
-    console.log(`Savings: $${costData.savings.amount} (${costData.savings.percentage}%)`);
-    console.log('==================================\n');
+    if (displayCostsOption === 'inline' || displayCostsOption === 'summary') {
+      // Display in console as before
+      console.log('\n===== Execution Cost Summary =====');
+      console.log(`Instance Type: ${costData.instanceType}`);
+      console.log(`Region: ${costData.region}`);
+      console.log(`Duration: ${costData.durationMinutes} minutes`);
+      console.log(`Cost: $${costData.totalCost}`);
+      console.log(`GitHub equivalent cost: $${costData.github.totalCost}`);
+      console.log(`Savings: $${costData.savings.amount} (${costData.savings.percentage}%)`);
+      console.log('==================================\n');
+    }
+    if (displayCostsOption === 'summary') {
+      // Add to GitHub job summary
+      const summaryPath = process.env.GITHUB_STEP_SUMMARY;
+      const summary = `
+## Execution Cost Summary
+
+| Metric | Value |
+| ------ | ----- |
+| Instance Type | ${costData.instanceType} |
+| Region | ${costData.region} |
+| Duration | ${costData.durationMinutes} minutes |
+| Cost | $${costData.totalCost} |
+| GitHub equivalent cost | $${costData.github.totalCost} |
+| Savings | $${costData.savings.amount} (${costData.savings.percentage}%) |
+`;
+      fs.appendFileSync(summaryPath, summary);
+      console.log('Cost summary added to job summary');
+    }
 
   } catch (error) {
     console.error('Error computing execution cost:', error);

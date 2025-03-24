@@ -7,10 +7,10 @@ async function computeExecutionCost() {
     return;
   }
 
-  const instanceStartedAt = process.env.RUNS_ON_INSTANCE_STARTED_AT;
+  const instanceLaunchedAt = process.env.RUNS_ON_INSTANCE_LAUNCHED_AT;
   
-  if (!instanceStartedAt) {
-    console.log('RUNS_ON_INSTANCE_STARTED_AT environment variable not found. Cannot compute cost.');
+  if (!instanceLaunchedAt) {
+    console.log('RUNS_ON_INSTANCE_LAUNCHED_AT environment variable not found. Cannot compute cost.');
     return;
   }
 
@@ -32,7 +32,7 @@ async function computeExecutionCost() {
         instanceType,
         region,
         instanceLifecycle,
-        startedAt: instanceStartedAt
+        startedAt: instanceLaunchedAt
       }),
       signal: controller.signal
     });

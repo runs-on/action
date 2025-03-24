@@ -6,11 +6,11 @@ runs:
   post: 'post.js'
 
 inputs:
-  show-env:
+  show_env:
     description: 'Show all environment variables'
     required: false
     default: 'false'
-  show-costs:
+  show_costs:
     description: 'Control how execution costs are displayed: "inline" for log output, "summary" for GitHub job summary, any other value disables the feature'
     required: false
     default: 'inline'

@@ -85,7 +85,6 @@ async function computeExecutionCost() {
 }
 
 async function main() {
-  console.log("env", process.env);
   await computeExecutionCost();
 }
 

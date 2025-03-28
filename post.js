@@ -23,6 +23,8 @@ async function computeExecutionCost() {
   const region = process.env.RUNS_ON_AWS_REGION || '';
   const instanceType = process.env.RUNS_ON_INSTANCE_TYPE || '';
   const instanceLifecycle = process.env.RUNS_ON_INSTANCE_LIFECYCLE || 'spot';
+  // x64 or arm64
+  const instanceArchitecture = process.env.RUNS_ON_AGENT_ARCH || 'x64';
 
   // get average price for the region for now
   try {
@@ -35,8 +37,9 @@ async function computeExecutionCost() {
       },
       body: JSON.stringify({
         instanceType,
-        region,
         instanceLifecycle,
+        region,
+        arch: instanceArchitecture,
         startedAt: instanceLaunchedAt
       }),
       signal: controller.signal
@@ -44,7 +47,7 @@ async function computeExecutionCost() {
     clearTimeout(timeoutId);
 
     if (!response.ok) {
-      throw new Error(`HTTP error! Status: ${response.status}`);
+      throw new Error(`HTTP error! Status: ${response.status}: ${response.text()}`);
     }
 
     const costData = await response.json();

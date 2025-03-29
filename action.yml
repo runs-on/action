@@ -3,9 +3,14 @@ description: 'RunsOn Action for magic caching, and more'
 runs:
   using: 'node20'
   main: 'index.js'
+  post: 'post.js'
 
 inputs:
-  show-env:
+  show_env:
     description: 'Show all environment variables'
     required: false
     default: 'false'
+  show_costs:
+    description: 'Control how execution costs are displayed: "inline" for log output, "summary" for GitHub job summary, any other value disables the feature'
+    required: false
+    default: 'inline'

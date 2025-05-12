@@ -3,7 +3,7 @@ description: 'RunsOn Action for magic caching, and more'
 runs:
   using: 'node20'
   main: 'index.js'
-  post: 'index.js --post'
+  post: 'post.js'
 
 inputs:
   show_env:

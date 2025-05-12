@@ -16,7 +16,8 @@ const childProcess = require('child_process')
 const os = require('os')
 const process = require('process')
 
-const VERSION = '5772eb3d18f10b6f8761adedb3e74cd967618598'
+const VERSION = '0c4da4827d6ee4f960acc6c0c31e9205cbc9ba40'
+const ARGS = ''
 
 function chooseBinary() {
     const platform = os.platform()
@@ -39,7 +40,7 @@ function chooseBinary() {
 function main() {
     const binary = chooseBinary()
     const mainScript = `${__dirname}/${binary}`
-    const spawnSyncReturns = childProcess.spawnSync(mainScript, process.argv.slice(2), { stdio: 'inherit' })
+    const spawnSyncReturns = childProcess.spawnSync(mainScript, ARGS.split(' '), { stdio: 'inherit' })
     const status = spawnSyncReturns.status
     if (typeof status === 'number') {
         process.exit(status)

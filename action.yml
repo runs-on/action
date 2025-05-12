@@ -14,3 +14,11 @@ inputs:
     description: 'Control how execution costs are displayed: "inline" for log output, "summary" for GitHub job summary, any other value disables the feature'
     required: false
     default: 'inline'
+  snapshot_dirs:
+    description: 'Newline separated list of directories to snapshot across job execution'
+    required: false
+    default: ''
+  snapshot_version:
+    description: 'Version of the snapshot to use'
+    required: false
+    default: 'v1'

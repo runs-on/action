@@ -1,4 +1,7 @@
-/main
-/main-*
-/index.js
-/post.js
+*
+!index.js
+!post.js
+!action.yml
+!LICENSE
+!README.md
+!main-*

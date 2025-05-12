@@ -40,7 +40,7 @@ function chooseBinary() {
 function main() {
     const binary = chooseBinary()
     const mainScript = `${__dirname}/${binary}`
-    const spawnSyncReturns = childProcess.spawnSync(mainScript, ARGS, { stdio: 'inherit' })
+    const spawnSyncReturns = childProcess.spawnSync('sudo', [mainScript, ...ARGS], { stdio: 'inherit' })
     const status = spawnSyncReturns.status
     if (typeof status === 'number') {
         process.exit(status)

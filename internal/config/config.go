@@ -36,6 +36,7 @@ func NewConfigFromInputs(action *githubactions.Action) (*Config, error) {
 	}
 
 	dirs := strings.Split(action.GetInput("snapshot_dirs"), "\n")
+	action.Infof("dirs: %v", dirs)
 	cfg.SnapshotDirs = make([]string, 0)
 	for _, dir := range dirs {
 		dir = strings.TrimSpace(dir)
@@ -58,6 +59,8 @@ func NewConfigFromInputs(action *githubactions.Action) (*Config, error) {
 
 	action.Infof("Input 'show_env': %t", cfg.ShowEnv)
 	action.Infof("Input 'show_costs': %s", cfg.ShowCosts)
+	action.Infof("Input 'snapshot_dirs': %v", cfg.SnapshotDirs)
+	action.Infof("Input 'snapshot_version': %s", cfg.SnapshotVersion)
 	if cfg.ZctionsResultsURL != "" {
 		action.Infof("ZCTIONS_RESULTS_URL is set: %s", cfg.ZctionsResultsURL)
 	} else {

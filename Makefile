@@ -33,10 +33,11 @@ VERSION ?= $(shell git log -1 --pretty=%H 2> /dev/null)
 UPX_BIN := $(shell command -v upx 2> /dev/null)
 COMMAND := "./cmd/action/"
 
-.PHONY: generate-index
-generate-index:
-	rm -f index.js
-	echo 'package main; import ("os"; "text/template"); func main() { tmpl, _ := template.ParseFiles("index.template.js"); tmpl.Execute(os.Stdout, map[string]string{"Version": "$(VERSION)"}) }' > temp.go && go run temp.go > index.js && rm temp.go
+.PHONY: generate-js
+generate-js:
+	rm -f index.js post.js
+	echo 'package main; import ("os"; "text/template"); func main() { tmpl, _ := template.ParseFiles("index.template.js"); tmpl.Execute(os.Stdout, map[string]string{"Version": "$(VERSION)", "Args": ""}) }' > temp.go && go run temp.go > index.js && rm temp.go
+	echo 'package main; import ("os"; "text/template"); func main() { tmpl, _ := template.ParseFiles("index.template.js"); tmpl.Execute(os.Stdout, map[string]string{"Version": "$(VERSION)", "Args": "--post"}) }' > temp.go && go run temp.go > post.js && rm temp.go
 
 # NOTE: Targets to build Go binaries are marked `.PHONY` even though they
 #       produce real files. We do this intentionally to defer to Go's build
@@ -64,7 +65,7 @@ main-windows-amd64: _require-upx _require-version
 	upx -q -9 "main-windows-amd64-$(VERSION)"
 
 .PHONY: release
-release: main-linux-amd64 main-linux-arm64 main-windows-amd64 generate-index
+release: main-linux-amd64 main-linux-arm64 main-windows-amd64 generate-js
 
 ################################################################################
 # Doctor Commands (these do not show up in `make help`)

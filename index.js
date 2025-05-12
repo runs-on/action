@@ -16,7 +16,6 @@ const childProcess = require('child_process')
 const os = require('os')
 const process = require('process')
 
-const VERSION = '91e30c0f14bc1dfedf353defd58eaaf7bbe253e6'
 const ARGS = ''.split(',')
 
 function chooseBinary() {
@@ -24,13 +23,13 @@ function chooseBinary() {
     const arch = os.arch()
 
     if (platform === 'linux' && arch === 'x64') {
-        return `main-linux-amd64-${VERSION}`
+        return `main-linux`
     }
     if (platform === 'linux' && arch === 'arm64') {
-        return `main-linux-arm64-${VERSION}`
+        return `main-linux`
     }
     if (platform === 'windows' && arch === 'x64') {
-        return `main-windows-amd64-${VERSION}`
+        return `main-windows`
     }
 
     console.error(`Unsupported platform (${platform}) and architecture (${arch})`)
@@ -40,7 +39,7 @@ function chooseBinary() {
 function main() {
     const binary = chooseBinary()
     const mainScript = `${__dirname}/${binary}`
-    const spawnSyncReturns = childProcess.spawnSync('sudo', [mainScript, ...ARGS], { stdio: 'inherit' })
+    const spawnSyncReturns = childProcess.spawnSync('sudo', ['-E', mainScript, ...ARGS], { stdio: 'inherit' })
     const status = spawnSyncReturns.status
     if (typeof status === 'number') {
         process.exit(status)

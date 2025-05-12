@@ -29,15 +29,14 @@ help:
 ################################################################################
 # Meta-variables
 ################################################################################
-VERSION ?= $(shell git log -1 --pretty=%H 2> /dev/null)
 UPX_BIN := $(shell command -v upx 2> /dev/null)
 COMMAND := "./cmd/action/"
 
 .PHONY: generate-js
 generate-js:
 	rm -f index.js post.js
-	echo 'package main; import ("os"; "text/template"); func main() { tmpl, _ := template.ParseFiles("index.template.js"); tmpl.Execute(os.Stdout, map[string]string{"Version": "$(VERSION)", "Args": ""}) }' > temp.go && go run temp.go > index.js && rm temp.go
-	echo 'package main; import ("os"; "text/template"); func main() { tmpl, _ := template.ParseFiles("index.template.js"); tmpl.Execute(os.Stdout, map[string]string{"Version": "$(VERSION)", "Args": "--post"}) }' > temp.go && go run temp.go > post.js && rm temp.go
+	echo 'package main; import ("os"; "text/template"); func main() { tmpl, _ := template.ParseFiles("index.template.js"); tmpl.Execute(os.Stdout, map[string]string{"Args": ""}) }' > temp.go && go run temp.go > index.js && rm temp.go
+	echo 'package main; import ("os"; "text/template"); func main() { tmpl, _ := template.ParseFiles("index.template.js"); tmpl.Execute(os.Stdout, map[string]string{"Args": "--post"}) }' > temp.go && go run temp.go > post.js && rm temp.go
 
 # NOTE: Targets to build Go binaries are marked `.PHONY` even though they
 #       produce real files. We do this intentionally to defer to Go's build
@@ -47,22 +46,22 @@ generate-js:
 #       https://blog.filippo.io/shrink-your-go-binaries-with-this-one-weird-trick/
 
 .PHONY: main-linux-amd64
-main-linux-amd64: _require-upx _require-version
+main-linux-amd64: _require-upx
 	rm -f main-linux-amd64-*
-	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -installsuffix static -o "main-linux-amd64-$(VERSION)" $(COMMAND)
-	upx -q -9 "main-linux-amd64-$(VERSION)"
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -installsuffix static -o "main-linux-amd64" $(COMMAND)
+	upx -q -9 "main-linux-amd64"
 
 .PHONY: main-linux-arm64
-main-linux-arm64: _require-upx _require-version
+main-linux-arm64: _require-upx
 	rm -f main-linux-arm64-*
-	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -installsuffix static -o "main-linux-arm64-$(VERSION)" $(COMMAND)
-	upx -q -9 "main-linux-arm64-$(VERSION)"
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -installsuffix static -o "main-linux-arm64" $(COMMAND)
+	upx -q -9 "main-linux-arm64"
 
 .PHONY: main-windows-amd64
-main-windows-amd64: _require-upx _require-version
+main-windows-amd64: _require-upx
 	rm -f main-windows-amd64-*
-	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -installsuffix static -o "main-windows-amd64-$(VERSION)" $(COMMAND)
-	upx -q -9 "main-windows-amd64-$(VERSION)"
+	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -installsuffix static -o "main-windows-amd64" $(COMMAND)
+	upx -q -9 "main-windows-amd64"
 
 .PHONY: release
 release: main-linux-amd64 main-linux-arm64 main-windows-amd64 generate-js
@@ -75,13 +74,4 @@ release: main-linux-amd64 main-linux-arm64 main-windows-amd64 generate-js
 _require-upx:
 ifndef UPX_BIN
 	$(error 'upx is not installed, it can be installed via "apt-get install upx", "apk add upx" or "brew install upx".')
-endif
-
-.PHONY: _require-version
-_require-version:
-ifeq ($(VERSION),)
-	$(error 'VERSION variable is not set.')
-endif
-ifndef VERSION
-	$(error 'VERSION variable is not set.')
 endif

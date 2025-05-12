@@ -1,0 +1,8 @@
+*
+!.gitignore
+!index.js
+!post.js
+!action.yml
+!LICENSE
+!README.md
+!main-*

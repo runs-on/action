@@ -189,7 +189,7 @@ func (c *KopiaClient) Restore(ctx context.Context, directory string) error {
 	// Restore.Snapshot is deprecated, use restore.Entry
 	stats, err := restore.Entry(ctx, rep, filesystemOutput, snapshotRootEntry, restore.Options{
 		RestoreDirEntryAtDepth: math.MaxInt32,
-		Parallel:               1024,
+		Parallel:               24,
 		Incremental:            true,
 		IgnoreErrors:           false,
 		MinSizeForPlaceholder:  0,

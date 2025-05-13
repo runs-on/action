@@ -5,7 +5,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"os/exec"
 
 	"github.com/rs/zerolog"
 	"github.com/runs-on/action/internal/cache"
@@ -20,7 +19,7 @@ func getKopiaClient(ctx context.Context, logger *zerolog.Logger, version string)
 	kopiaConfig := &kopia.Config{
 		Region:   os.Getenv("RUNS_ON_AWS_REGION"),
 		S3Bucket: os.Getenv("RUNS_ON_S3_BUCKET_CACHE"),
-		Prefix:   fmt.Sprintf("cache/snapshots/%s/%s", version, os.Getenv("GITHUB_REPOSITORY")),
+		Prefix:   fmt.Sprintf("cache/snapshots/%s/%s/", os.Getenv("GITHUB_REPOSITORY"), version),
 		Password: "p4ssw0rd",
 	}
 	if kopiaConfig.Region == "" {
@@ -51,11 +50,6 @@ func handleMainExecution(action *githubactions.Action, ctx context.Context, logg
 	// Execute logic based on configuration
 	if cfg.HasShowEnv() {
 		env.DisplayEnvVars()
-	}
-
-	err = exec.Command("sudo", "-n", "-E", "env").Run()
-	if err != nil {
-		action.Fatalf("Failed to run sudo command: %v", err)
 	}
 
 	cache.UpdateZctionsConfig(action, cfg)

@@ -3,18 +3,22 @@ const os = require('os')
 const process = require('process')
 
 const ARGS = ''.split(',')
+const WINDOWS = 'win32'
+const LINUX = 'linux'
+const AMD64 = 'x64'
+const ARM64 = 'arm64'
 
 function chooseBinary() {
     const platform = os.platform()
     const arch = os.arch()
 
-    if (platform === 'linux' && arch === 'x64') {
+    if (platform === LINUX && arch === AMD64) {
         return `main-linux-amd64`
     }
-    if (platform === 'linux' && arch === 'arm64') {
+    if (platform === LINUX && arch === ARM64) {
         return `main-linux-arm64`
     }
-    if (platform === 'windows' && arch === 'x64') {
+    if (platform === WINDOWS && arch === AMD64) {
         return `main-windows-amd64`
     }
 
@@ -25,15 +29,16 @@ function chooseBinary() {
 function main() {
     const binary = chooseBinary()
     const mainScript = `${__dirname}/${binary}`
-    console.log('Current user:', childProcess.execFileSync('sudo', ['-n', '-E', 'whoami']).toString().trim())
+    console.log('Current user:', childProcess.execSync('whoami').toString().trim())
     
-    // Create a simple askpass script that returns empty password
-    // const askpassScript = `${__dirname}/askpass.sh`
-    // fs.writeFileSync(askpassScript, '#!/bin/sh\necho ""', { mode: 0o755 })
-    
-    // // Set SUDO_ASKPASS and use -A flag
-    // process.env.SUDO_ASKPASS = askpassScript
-    childProcess.execFileSync('sudo', ['-n', '-E', mainScript, ...ARGS], { stdio: 'inherit' })
+    if (os.platform() === WINDOWS) {
+        childProcess.execFileSync('powershell', [
+            '-Command',
+            `Start-Process -FilePath "${mainScript}" -ArgumentList "${ARGS.join(' ')}" -Verb RunAs -WindowStyle Hidden -Wait`
+        ], { stdio: 'inherit' })
+    } else {
+        childProcess.execFileSync('sudo', ['-n', '-E', mainScript, ...ARGS], { stdio: 'inherit' })
+    }
     process.exit(0)
 }
 

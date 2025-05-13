@@ -193,7 +193,7 @@ func (c *KopiaClient) Restore(ctx context.Context, directory string) error {
 		Incremental:            true,
 		IgnoreErrors:           false,
 		MinSizeForPlaceholder:  0,
-		ProgressCallback:       progressReporter.callback,
+		ProgressCallback:       progressReporter.callbackRestore,
 	})
 	if err != nil {
 		// Finish won't necessarily clear the line on error, but maybe it should?
@@ -203,7 +203,7 @@ func (c *KopiaClient) Restore(ctx context.Context, directory string) error {
 	}
 
 	// Explicitly call callback with final stats before finish() runs
-	progressReporter.callback(ctx, stats)
+	progressReporter.callbackRestore(ctx, stats)
 
 	c.logger.Info().
 		Str("snapshot_id", string(latestManifest.ID)).
@@ -250,9 +250,17 @@ func (c *KopiaClient) Snapshot(ctx context.Context, directory string) error {
 			return fmt.Errorf("failed to get local directory entry '%s': %w", directory, err)
 		}
 
+		maxParallelFileReads := policy.OptionalInt(1024)
+		parallelUploadAboveSize := policy.OptionalInt64(10 * 1024 * 1024) // 10MB
+		maxParallelSnapshots := policy.OptionalInt(12)
 		policyOverride := policy.Policy{
 			CompressionPolicy: policy.CompressionPolicy{
 				CompressorName: "zstd-fastest",
+			},
+			UploadPolicy: policy.UploadPolicy{
+				MaxParallelFileReads:    &maxParallelFileReads,
+				ParallelUploadAboveSize: &parallelUploadAboveSize,
+				MaxParallelSnapshots:    &maxParallelSnapshots,
 			},
 		}
 		policyTree, err := policy.TreeForSourceWithOverride(ctx, rep, sourceInfo, &policyOverride)
@@ -277,11 +285,21 @@ func (c *KopiaClient) Snapshot(ctx context.Context, directory string) error {
 			previousManifests = append(previousManifests, m)
 		}
 
+		progressReporter := newSimpleRestoreProgressReporter(1500*time.Millisecond, os.Stderr)
+		defer progressReporter.finish()
+
 		uploader := snapshotfs.NewUploader(w)
+		uploader.ParallelUploads = 1024
+		uploader.Progress = newSnapshotProgressAdapter(ctx, progressReporter.callbackSnapshot, 1500*time.Millisecond)
 		manifest, err := uploader.Upload(ctx, localEntry, policyTree, sourceInfo, previousManifests...)
 		if err != nil {
 			return fmt.Errorf("failed to upload Kopia snapshot: %w", err)
 		}
+
+		c.logger.Info().Interface("stats", manifest.Stats).Msg("Kopia snapshot manifest created successfully.")
+
+		// Explicitly call callback with final stats before finish() runs
+		progressReporter.callbackSnapshot(ctx, manifest.Stats)
 
 		// Save the snapshot manifest
 		snapID, err := snapshot.SaveSnapshot(ctx, w, manifest)

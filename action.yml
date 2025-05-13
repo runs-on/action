@@ -22,3 +22,7 @@ inputs:
     description: 'Version of the snapshot to use'
     required: false
     default: 'v1'
+  git_mirrors:
+    description: 'Newline separated list of github repositories to mirror'
+    required: false
+    default: ''

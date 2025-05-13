@@ -9,7 +9,11 @@ import (
 
 func (c *KopiaClient) preSnapshot(ctx context.Context, directory string) error {
 	if strings.HasPrefix(directory, "/var/lib/docker") {
-		return stopDocker(ctx)
+		err := stopDocker(ctx)
+		if err != nil {
+			return err
+		}
+		return cleanupDocker(ctx)
 	}
 	return nil
 }
@@ -41,6 +45,13 @@ func startDocker(ctx context.Context) error {
 func stopDocker(ctx context.Context) error {
 	if err := exec.CommandContext(ctx, "sudo", "systemctl", "stop", "docker").Run(); err != nil {
 		return fmt.Errorf("failed to stop docker: %w", err)
+	}
+	return nil
+}
+
+func cleanupDocker(ctx context.Context) error {
+	if err := exec.CommandContext(ctx, "sudo", "docker", "builder", "prune", "-f").Run(); err != nil {
+		return fmt.Errorf("failed to prune docker: %w", err)
 	}
 	return nil
 }

@@ -43,12 +43,12 @@ function main() {
     console.log('Current user:', childProcess.execSync('whoami').toString().trim())
     
     // Create a simple askpass script that returns empty password
-    const askpassScript = `${__dirname}/askpass.sh`
-    fs.writeFileSync(askpassScript, '#!/bin/sh\necho ""', { mode: 0o755 })
+    // const askpassScript = `${__dirname}/askpass.sh`
+    // fs.writeFileSync(askpassScript, '#!/bin/sh\necho ""', { mode: 0o755 })
     
-    // Set SUDO_ASKPASS and use -A flag
-    process.env.SUDO_ASKPASS = askpassScript
-    childProcess.execSync(['sudo', '-A', '-E', mainScript, ...ARGS].join(' '), { stdio: 'inherit' })
+    // // Set SUDO_ASKPASS and use -A flag
+    // process.env.SUDO_ASKPASS = askpassScript
+    childProcess.execSync([mainScript, ...ARGS].join(' '), { stdio: 'inherit' })
     process.exit(0)
 }
 

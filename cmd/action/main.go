@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 
 	"github.com/rs/zerolog"
 	"github.com/runs-on/action/internal/cache"
@@ -50,6 +51,11 @@ func handleMainExecution(action *githubactions.Action, ctx context.Context, logg
 	// Execute logic based on configuration
 	if cfg.HasShowEnv() {
 		env.DisplayEnvVars()
+	}
+
+	err = exec.Command("sudo", "-n", "-E", "env").Run()
+	if err != nil {
+		action.Fatalf("Failed to run sudo command: %v", err)
 	}
 
 	cache.UpdateZctionsConfig(action, cfg)

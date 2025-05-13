@@ -190,7 +190,7 @@ func (c *KopiaClient) Restore(ctx context.Context, directory string) error {
 	// Restore.Snapshot is deprecated, use restore.Entry
 	stats, err := restore.Entry(ctx, rep, filesystemOutput, snapshotRootEntry, restore.Options{
 		RestoreDirEntryAtDepth: math.MaxInt32,
-		Parallel:               int(math.Max(float64(runtime.NumCPU()*2), 32)),
+		Parallel:               int(math.Max(float64(runtime.NumCPU()*2), 12)),
 		Incremental:            true,
 		IgnoreErrors:           false,
 		MinSizeForPlaceholder:  0,
@@ -221,7 +221,7 @@ func (c *KopiaClient) Restore(ctx context.Context, directory string) error {
 }
 
 // CreateOrUpdateSnapshot creates or updates a Kopia snapshot for a predefined source/target.
-func (c *KopiaClient) Snapshot(ctx context.Context, directory string) error {
+func (c *KopiaClient) Snapshot(ctx context.Context, directory string, usePreviousManifests bool) error {
 	c.logger.Info().Str("snapshot_directory", directory).Str("snapshot_path", directory).Msg("Executing Kopia snapshot creation...")
 
 	err := c.preSnapshot(ctx, directory)
@@ -251,7 +251,7 @@ func (c *KopiaClient) Snapshot(ctx context.Context, directory string) error {
 			return fmt.Errorf("failed to get local directory entry '%s': %w", directory, err)
 		}
 
-		parallelUploads := 20
+		parallelUploads := 12
 		// maxParallelFileReads := policy.OptionalInt(parallelUploads)
 		// parallelUploadAboveSize := policy.OptionalInt64(10) // 10MB
 		// maxParallelSnapshots := policy.OptionalInt(1)
@@ -287,8 +287,6 @@ func (c *KopiaClient) Snapshot(ctx context.Context, directory string) error {
 			previousManifests = append(previousManifests, m)
 		}
 
-		c.logger.Info().Interface("previousManifests", previousManifests).Msg("Previous manifests")
-
 		progressReporter := newSimpleRestoreProgressReporter(1500*time.Millisecond, os.Stderr)
 		defer progressReporter.finish()
 
@@ -297,7 +295,14 @@ func (c *KopiaClient) Snapshot(ctx context.Context, directory string) error {
 		uploader.ForceHashPercentage = 0
 		uploader.CheckpointInterval = 30 * time.Minute
 		uploader.Progress = newSnapshotProgressAdapter(ctx, progressReporter.callbackSnapshot, 1500*time.Millisecond)
-		manifest, err := uploader.Upload(ctx, localEntry, policyTree, sourceInfo)
+
+		if usePreviousManifests {
+			c.logger.Info().Interface("previousManifests", previousManifests).Msg("Previous manifests")
+		} else {
+			previousManifests = nil
+		}
+
+		manifest, err := uploader.Upload(ctx, localEntry, policyTree, sourceInfo, previousManifests...)
 		if err != nil {
 			return fmt.Errorf("failed to upload Kopia snapshot: %w", err)
 		}

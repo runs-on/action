@@ -5,20 +5,19 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/runs-on/action/internal/config"
 	"github.com/sethvargo/go-githubactions"
 )
 
 // UpdateZctionsConfig sends a PUT request if ZCTIONS_RESULTS_URL is set.
-func UpdateZctionsConfig(action *githubactions.Action, cfg *config.Config) {
-	if cfg.ZctionsResultsURL == "" {
+func UpdateZctionsConfig(action *githubactions.Action, zctionsResultsURL string) {
+	if zctionsResultsURL == "" {
 		return
 	}
 
-	configURL := cfg.ZctionsResultsURL + "/config" // Simplified string concatenation
+	configURL := zctionsResultsURL + "/config"
 	data := url.Values{}
 	// Send the ZCTIONS_RESULTS_URL value under the key 'ACTIONS_RESULTS_URL'
-	data.Set("ACTIONS_RESULTS_URL", cfg.ZctionsResultsURL)
+	data.Set("ACTIONS_RESULTS_URL", zctionsResultsURL)
 
 	req, err := http.NewRequest(http.MethodPut, configURL, strings.NewReader(data.Encode()))
 	if err != nil {

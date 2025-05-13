@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/runs-on/action/internal/cache"
 	"github.com/sethvargo/go-githubactions"
 )
 
@@ -15,6 +16,8 @@ type Config struct {
 	ZctionsResultsURL string
 	SnapshotDirs      []string
 	SnapshotVersion   string
+	GitHubMirrors     []cache.Mirror
+	GitHubToken       string
 }
 
 // NewConfigFromInputs parses action inputs and environment variables to build the Config struct.
@@ -33,6 +36,24 @@ func NewConfigFromInputs(action *githubactions.Action) (*Config, error) {
 	cfg.ShowCosts = action.GetInput("show_costs")
 	if cfg.ShowCosts == "" {
 		cfg.ShowCosts = "inline"
+	}
+
+	gitMirrors := strings.Split(action.GetInput("github_mirrors"), "\n")
+	cfg.GitHubMirrors = make([]cache.Mirror, 0)
+	for _, mirror := range gitMirrors {
+		mirror = strings.TrimSpace(mirror)
+		if mirror == "" {
+			continue
+		}
+		if strings.HasPrefix(mirror, "https://github.com/") {
+			mirror = strings.TrimPrefix(mirror, "https://github.com/")
+		}
+		mirror = strings.TrimSuffix(mirror, ".git")
+		mirror, err := cache.NewMirror(mirror, cfg.GitHubToken)
+		if err != nil {
+			action.Errorf("Error creating mirror: %v", err)
+		}
+		cfg.GitHubMirrors = append(cfg.GitHubMirrors, *mirror)
 	}
 
 	dirs := strings.Split(action.GetInput("snapshot_dirs"), "\n")
@@ -61,6 +82,8 @@ func NewConfigFromInputs(action *githubactions.Action) (*Config, error) {
 	action.Infof("Input 'show_costs': %s", cfg.ShowCosts)
 	action.Infof("Input 'snapshot_dirs': %v", cfg.SnapshotDirs)
 	action.Infof("Input 'snapshot_version': %s", cfg.SnapshotVersion)
+	action.Infof("Input 'github_mirrors': %v", cfg.GitHubMirrors)
+
 	if cfg.ZctionsResultsURL != "" {
 		action.Infof("ZCTIONS_RESULTS_URL is set: %s", cfg.ZctionsResultsURL)
 	} else {

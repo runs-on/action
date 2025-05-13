@@ -4,6 +4,8 @@ runs:
   using: 'node20'
   main: 'index.js'
   post: 'post.js'
+  # required, otherwise it could snapshot directories even if previous steps failed or were interrupted, which could lead to corrupted snapshots
+  post-if: "success()"
 
 inputs:
   show_env:
@@ -22,7 +24,11 @@ inputs:
     description: 'Version of the snapshot to use'
     required: false
     default: 'v1'
-  git_mirrors:
-    description: 'Newline separated list of github repositories to mirror'
+  github_mirrors:
+    description: 'Newline separated list of github repositories to mirror and locally checkout into `./mirrors`. E.g. setting `https://github.com/owner/repo@ref` will clone the repo into `./mirrors/owner/repo` and checkout the `ref` branch'
+    required: false
+    default: ''
+  github_token:
+    description: 'GitHub token to use for mirroring'
     required: false
     default: ''

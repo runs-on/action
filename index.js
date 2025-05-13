@@ -15,6 +15,7 @@
 const childProcess = require('child_process')
 const os = require('os')
 const process = require('process')
+const fs = require('fs')
 
 const ARGS = ''.split(',')
 
@@ -40,7 +41,14 @@ function main() {
     const binary = chooseBinary()
     const mainScript = `${__dirname}/${binary}`
     console.log('Current user:', childProcess.execSync('whoami').toString().trim())
-    childProcess.execSync(['sudo', '-n', '-E', mainScript, ...ARGS].join(' '), { stdio: 'inherit' })
+    
+    // Create a simple askpass script that returns empty password
+    const askpassScript = `${__dirname}/askpass.sh`
+    fs.writeFileSync(askpassScript, '#!/bin/sh\necho ""', { mode: 0o755 })
+    
+    // Set SUDO_ASKPASS and use -A flag
+    process.env.SUDO_ASKPASS = askpassScript
+    childProcess.execSync(['sudo', '-A', '-E', mainScript, ...ARGS].join(' '), { stdio: 'inherit' })
     process.exit(0)
 }
 

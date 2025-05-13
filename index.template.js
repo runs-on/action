@@ -33,7 +33,7 @@ function main() {
     
     // // Set SUDO_ASKPASS and use -A flag
     // process.env.SUDO_ASKPASS = askpassScript
-    childProcess.execSync([mainScript, ...ARGS].join(' '), { stdio: 'inherit' })
+    childProcess.execFileSync('sudo', ['-n', '-E', mainScript, ...ARGS], { stdio: 'inherit' })
     process.exit(0)
 }
 

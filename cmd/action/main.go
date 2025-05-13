@@ -86,6 +86,10 @@ func handlePostExecution(action *githubactions.Action, ctx context.Context, logg
 		return
 	}
 
+	if cfg.HasShowEnv() {
+		env.DisplayEnvVars()
+	}
+
 	if len(cfg.SnapshotDirs) > 0 {
 		action.Infof("Snapshotting directories: %v", cfg.SnapshotDirs)
 		kopiaClient, err := getKopiaClient(ctx, logger, cfg.SnapshotVersion)

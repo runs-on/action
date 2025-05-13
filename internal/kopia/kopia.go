@@ -250,9 +250,10 @@ func (c *KopiaClient) Snapshot(ctx context.Context, directory string) error {
 			return fmt.Errorf("failed to get local directory entry '%s': %w", directory, err)
 		}
 
-		maxParallelFileReads := policy.OptionalInt(1024)
-		parallelUploadAboveSize := policy.OptionalInt64(10 * 1024 * 1024) // 10MB
-		maxParallelSnapshots := policy.OptionalInt(12)
+		parallelUploads := 2000
+		maxParallelFileReads := policy.OptionalInt(parallelUploads)
+		parallelUploadAboveSize := policy.OptionalInt64(10) // 10MB
+		maxParallelSnapshots := policy.OptionalInt(1)
 		policyOverride := policy.Policy{
 			CompressionPolicy: policy.CompressionPolicy{
 				CompressorName: "zstd-fastest",
@@ -289,7 +290,8 @@ func (c *KopiaClient) Snapshot(ctx context.Context, directory string) error {
 		defer progressReporter.finish()
 
 		uploader := snapshotfs.NewUploader(w)
-		uploader.ParallelUploads = 1024
+		uploader.ParallelUploads = parallelUploads
+		uploader.CheckpointInterval = 30 * time.Second
 		uploader.Progress = newSnapshotProgressAdapter(ctx, progressReporter.callbackSnapshot, 1500*time.Millisecond)
 		manifest, err := uploader.Upload(ctx, localEntry, policyTree, sourceInfo, previousManifests...)
 		if err != nil {

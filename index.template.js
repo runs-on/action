@@ -39,12 +39,9 @@ function chooseBinary() {
 function main() {
     const binary = chooseBinary()
     const mainScript = `${__dirname}/${binary}`
-    const spawnSyncReturns = childProcess.spawnSync('sudo', ['-n', '-E', mainScript, ...ARGS], { stdio: 'inherit', input: process.env.SUDO_PASSWORD || '' })
-    const status = spawnSyncReturns.status
-    if (typeof status === 'number') {
-        process.exit(status)
-    }
-    process.exit(1)
+    console.log('Current user:', childProcess.execSync('whoami').toString().trim())
+    childProcess.execSync(['sudo', '-n', '-E', mainScript, ...ARGS].join(' '), { stdio: 'inherit' })
+    process.exit(0)
 }
 
 if (require.main === module) {

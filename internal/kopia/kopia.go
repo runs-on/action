@@ -250,21 +250,21 @@ func (c *KopiaClient) Snapshot(ctx context.Context, directory string) error {
 			return fmt.Errorf("failed to get local directory entry '%s': %w", directory, err)
 		}
 
-		parallelUploads := 2000
-		maxParallelFileReads := policy.OptionalInt(parallelUploads)
-		parallelUploadAboveSize := policy.OptionalInt64(10) // 10MB
-		maxParallelSnapshots := policy.OptionalInt(1)
-		policyOverride := policy.Policy{
-			CompressionPolicy: policy.CompressionPolicy{
-				CompressorName: "zstd-fastest",
-			},
-			UploadPolicy: policy.UploadPolicy{
-				MaxParallelFileReads:    &maxParallelFileReads,
-				ParallelUploadAboveSize: &parallelUploadAboveSize,
-				MaxParallelSnapshots:    &maxParallelSnapshots,
-			},
-		}
-		policyTree, err := policy.TreeForSourceWithOverride(ctx, rep, sourceInfo, &policyOverride)
+		parallelUploads := 20
+		// maxParallelFileReads := policy.OptionalInt(parallelUploads)
+		// parallelUploadAboveSize := policy.OptionalInt64(10) // 10MB
+		// maxParallelSnapshots := policy.OptionalInt(1)
+		// policyOverride := policy.Policy{
+		// 	CompressionPolicy: policy.CompressionPolicy{
+		// 		CompressorName: "zstd-fastest",
+		// 	},
+		// 	UploadPolicy: policy.UploadPolicy{
+		// 		MaxParallelFileReads:    &maxParallelFileReads,
+		// 		ParallelUploadAboveSize: &parallelUploadAboveSize,
+		// 		MaxParallelSnapshots:    &maxParallelSnapshots,
+		// 	},
+		// }
+		policyTree, err := policy.TreeForSource(ctx, rep, sourceInfo)
 		if err != nil {
 			return fmt.Errorf("failed to get policy tree: %w", err)
 		}
@@ -286,12 +286,15 @@ func (c *KopiaClient) Snapshot(ctx context.Context, directory string) error {
 			previousManifests = append(previousManifests, m)
 		}
 
+		c.logger.Info().Interface("previousManifests", previousManifests).Msg("Previous manifests")
+
 		progressReporter := newSimpleRestoreProgressReporter(1500*time.Millisecond, os.Stderr)
 		defer progressReporter.finish()
 
 		uploader := snapshotfs.NewUploader(w)
 		uploader.ParallelUploads = parallelUploads
-		uploader.CheckpointInterval = 30 * time.Second
+		uploader.ForceHashPercentage = 0
+		uploader.CheckpointInterval = 30 * time.Minute
 		uploader.Progress = newSnapshotProgressAdapter(ctx, progressReporter.callbackSnapshot, 1500*time.Millisecond)
 		manifest, err := uploader.Upload(ctx, localEntry, policyTree, sourceInfo, previousManifests...)
 		if err != nil {

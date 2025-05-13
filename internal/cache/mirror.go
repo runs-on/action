@@ -116,18 +116,10 @@ func (m *Mirror) Mirror(ctx context.Context, logger *zerolog.Logger) (*git.Repos
 	}
 	return repo, nil
 }
+func (m *Mirror) Checkout(ctx context.Context, logger *zerolog.Logger) error {
+	logger.Info().Msgf("Opening git repository: %s", m.MirrorDir)
 
-func (m *Mirror) Clone(ctx context.Context, logger *zerolog.Logger) error {
-	logger.Info().Msgf("Cloning git repository: %s", m.URL)
-	repo, err := git.PlainClone(m.TargetDir, false, &git.CloneOptions{
-		URL:      "file://" + m.MirrorDir,
-		Progress: os.Stdout,
-	})
-	if err != nil {
-		return err
-	}
-
-	worktree, err := repo.Worktree()
+	mirrorRepo, err := git.PlainOpen(m.MirrorDir)
 	if err != nil {
 		return err
 	}
@@ -135,7 +127,7 @@ func (m *Mirror) Clone(ctx context.Context, logger *zerolog.Logger) error {
 	var hash *plumbing.Hash
 	if len(m.Ref) >= 4 && len(m.Ref) <= 40 {
 		// Try to resolve short/full SHA
-		if h, err := repo.ResolveRevision(plumbing.Revision(m.Ref)); err == nil {
+		if h, err := mirrorRepo.ResolveRevision(plumbing.Revision(m.Ref)); err == nil {
 			hash = h
 		}
 	}
@@ -151,16 +143,28 @@ func (m *Mirror) Clone(ctx context.Context, logger *zerolog.Logger) error {
 		ref = "refs/remotes/origin/HEAD"
 	}
 
-	opts := &git.CheckoutOptions{
-		Force: true,
-	}
+	logger.Info().Msgf("Checking out git reference: %s", ref)
+
+	// Get the reference or hash
+	var revision plumbing.Hash
 	if hash != nil {
-		opts.Hash = *hash
+		revision = *hash
 	} else {
-		opts.Branch = plumbing.ReferenceName(ref)
+		ref, err := mirrorRepo.Reference(plumbing.ReferenceName(ref), true)
+		if err != nil {
+			return err
+		}
+		revision = ref.Hash()
 	}
 
-	err = worktree.Checkout(opts)
+	logger.Info().Msgf("Checking out git commit: %s", revision.String())
+
+	_, err = git.PlainClone(m.TargetDir, false, &git.CloneOptions{
+		URL:           "file://" + m.MirrorDir,
+		Progress:      os.Stdout,
+		Depth:         1,
+		ReferenceName: plumbing.ReferenceName(ref),
+	})
 	if err != nil {
 		return err
 	}

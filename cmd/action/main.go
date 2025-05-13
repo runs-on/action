@@ -62,36 +62,42 @@ func handleMainExecution(action *githubactions.Action, ctx context.Context, logg
 		kopiaClient, err := getKopiaClient(ctx, logger, cfg.SnapshotVersion)
 		if err != nil {
 			action.Errorf("Failed to create Kopia client: %v", err)
-		}
+		} else {
 
-		if len(cfg.GitHubMirrors) > 0 {
-			action.Infof("Mirroring git repositories: %v", cfg.GitHubMirrors)
-			for _, mirror := range cfg.GitHubMirrors {
-				action.Infof("Mirroring git repository: %s", mirror.URL)
-				err = kopiaClient.Restore(ctx, mirror.MirrorDir)
-				if err != nil {
-					action.Infof("Failed to restore git repository: %v", err)
-				}
-				err = mirror.MirrorOrUpdate(ctx, logger)
-				if err != nil {
-					action.Errorf("Failed to mirror or update git repository: %v", err)
-					continue
-				}
-				err = mirror.Clone(ctx, logger)
-				if err != nil {
-					action.Errorf("Failed to clone git repository: %v", err)
-					continue
+			if len(cfg.GitHubMirrors) > 0 {
+				action.Infof("Mirroring git repositories: %v", cfg.GitHubMirrors)
+				for _, mirror := range cfg.GitHubMirrors {
+					action.Infof("Mirroring git repository: %s", mirror.URL)
+					err = kopiaClient.Restore(ctx, mirror.MirrorDir)
+					if err != nil {
+						action.Infof("Failed to restore git repository: %v", err)
+					}
+					err = mirror.MirrorOrUpdate(ctx, logger)
+					if err != nil {
+						action.Errorf("Failed to mirror or update git repository: %v", err)
+						continue
+					}
+					err = mirror.Checkout(ctx, logger)
+					if err != nil {
+						action.Errorf("Failed to clone git repository: %v", err)
+						continue
+					}
+					err = kopiaClient.Snapshot(ctx, mirror.MirrorDir, false)
+					if err != nil {
+						action.Errorf("Failed to snapshot git repository: %v", err)
+						continue
+					}
 				}
 			}
-		}
 
-		if len(cfg.SnapshotDirs) > 0 {
-			action.Infof("Restoring directories: %v", cfg.SnapshotDirs)
-			for _, dir := range cfg.SnapshotDirs {
-				action.Infof("Restoring directory: %s", dir)
-				err = kopiaClient.Restore(ctx, dir)
-				if err != nil {
-					action.Errorf("Failed to restore directory: %v", err)
+			if len(cfg.SnapshotDirs) > 0 {
+				action.Infof("Restoring directories: %v", cfg.SnapshotDirs)
+				for _, dir := range cfg.SnapshotDirs {
+					action.Infof("Restoring directory: %s", dir)
+					err = kopiaClient.Restore(ctx, dir)
+					if err != nil {
+						action.Errorf("Failed to restore directory: %v", err)
+					}
 				}
 			}
 		}
@@ -126,17 +132,6 @@ func handlePostExecution(action *githubactions.Action, ctx context.Context, logg
 		kopiaClient, err := getKopiaClient(ctx, logger, cfg.SnapshotVersion)
 		if err != nil {
 			action.Errorf("Failed to create Kopia client: %v", err)
-		}
-
-		if len(cfg.GitHubMirrors) > 0 {
-			action.Infof("Mirroring git repositories: %v", cfg.GitHubMirrors)
-			for _, mirror := range cfg.GitHubMirrors {
-				action.Infof("Mirroring git repository: %s", mirror.URL)
-				err = kopiaClient.Snapshot(ctx, mirror.MirrorDir, true)
-				if err != nil {
-					action.Errorf("Failed to snapshot directory: %v", err)
-				}
-			}
 		}
 
 		if len(cfg.SnapshotDirs) > 0 {

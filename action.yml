@@ -29,6 +29,6 @@ inputs:
     required: false
     default: ''
   github_token:
-    description: 'GitHub token to use for mirroring'
+    description: 'GitHub token to use for mirroring. Only useful if github_mirrors is enabled.'
     required: false
     default: ''

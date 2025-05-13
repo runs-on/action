@@ -190,7 +190,7 @@ func (c *KopiaClient) Restore(ctx context.Context, directory string) error {
 	// Restore.Snapshot is deprecated, use restore.Entry
 	stats, err := restore.Entry(ctx, rep, filesystemOutput, snapshotRootEntry, restore.Options{
 		RestoreDirEntryAtDepth: math.MaxInt32,
-		Parallel:               int(math.Max(float64(runtime.NumCPU()*2), 12)),
+		Parallel:               int(math.Min(float64(runtime.NumCPU()*2), 12)),
 		Incremental:            true,
 		IgnoreErrors:           false,
 		MinSizeForPlaceholder:  0,
@@ -251,20 +251,7 @@ func (c *KopiaClient) Snapshot(ctx context.Context, directory string, usePreviou
 			return fmt.Errorf("failed to get local directory entry '%s': %w", directory, err)
 		}
 
-		parallelUploads := 12
-		// maxParallelFileReads := policy.OptionalInt(parallelUploads)
-		// parallelUploadAboveSize := policy.OptionalInt64(10) // 10MB
-		// maxParallelSnapshots := policy.OptionalInt(1)
-		// policyOverride := policy.Policy{
-		// 	CompressionPolicy: policy.CompressionPolicy{
-		// 		CompressorName: "zstd-fastest",
-		// 	},
-		// 	UploadPolicy: policy.UploadPolicy{
-		// 		MaxParallelFileReads:    &maxParallelFileReads,
-		// 		ParallelUploadAboveSize: &parallelUploadAboveSize,
-		// 		MaxParallelSnapshots:    &maxParallelSnapshots,
-		// 	},
-		// }
+		parallelUploads := int(math.Min(float64(runtime.NumCPU()*2), 12))
 		policyTree, err := policy.TreeForSource(ctx, rep, sourceInfo)
 		if err != nil {
 			return fmt.Errorf("failed to get policy tree: %w", err)

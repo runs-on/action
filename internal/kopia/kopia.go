@@ -296,7 +296,7 @@ func (c *KopiaClient) Snapshot(ctx context.Context, directory string) error {
 		uploader.ForceHashPercentage = 0
 		uploader.CheckpointInterval = 30 * time.Minute
 		uploader.Progress = newSnapshotProgressAdapter(ctx, progressReporter.callbackSnapshot, 1500*time.Millisecond)
-		manifest, err := uploader.Upload(ctx, localEntry, policyTree, sourceInfo, previousManifests...)
+		manifest, err := uploader.Upload(ctx, localEntry, policyTree, sourceInfo)
 		if err != nil {
 			return fmt.Errorf("failed to upload Kopia snapshot: %w", err)
 		}

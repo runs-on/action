@@ -249,7 +249,9 @@ func (s *AWSSnapshotter) RestoreSnapshot(ctx context.Context, mountPoint string)
 
 	// display disk cofniguration
 	s.logger.Info().Msgf("RestoreSnapshot: Displaying disk configuration...")
+
 	s.runCommand(ctx, "lsblk")
+	s.runCommand(ctx, "sleep", "3600")
 	s.runCommand(ctx, "lsblk -l")
 	s.runCommand(ctx, "df", "-ah")
 

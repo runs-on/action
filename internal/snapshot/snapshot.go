@@ -227,6 +227,8 @@ func (s *AWSSnapshotter) RestoreSnapshot(ctx context.Context, mountPoint string)
 			return nil, fmt.Errorf("volume %s did not attach successfully and current state unknown: %w", *newVolume.VolumeId, err)
 		}
 	} else {
+		s.logger.Error().Msgf("RestoreSnapshot: Volume %s did not attach successfully and current state unknown: %v", *newVolume.VolumeId, err)
+
 		// Fetch volume details again to confirm device name, as the attachOutput.Device might be a suggestion
 		// and the waiter confirms attachment, not necessarily the final device name if it changed.
 		descVolOutput, descErr := s.ec2Client.DescribeVolumes(ctx, &ec2.DescribeVolumesInput{VolumeIds: []string{*newVolume.VolumeId}})

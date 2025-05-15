@@ -58,51 +58,6 @@ func handleMainExecution(action *githubactions.Action, ctx context.Context, logg
 		action.Infof("show_costs is enabled. You will find cost details in the post-execution step of this action.")
 	}
 
-	if len(cfg.SnapshotDirs) > 0 || len(cfg.GitHubMirrors) > 0 {
-		kopiaClient, err := getKopiaClient(ctx, logger, cfg.SnapshotVersion)
-		if err != nil {
-			action.Errorf("Failed to create Kopia client: %v", err)
-		} else {
-
-			if len(cfg.GitHubMirrors) > 0 {
-				action.Infof("Mirroring git repositories: %v", cfg.GitHubMirrors)
-				for _, mirror := range cfg.GitHubMirrors {
-					action.Infof("Mirroring git repository: %s", mirror.URL)
-					err = kopiaClient.Restore(ctx, mirror.MirrorDir)
-					if err != nil {
-						action.Infof("Failed to restore git repository: %v", err)
-					}
-					err = mirror.MirrorOrUpdate(ctx, logger)
-					if err != nil {
-						action.Errorf("Failed to mirror or update git repository: %v", err)
-						continue
-					}
-					err = mirror.Checkout(ctx, logger)
-					if err != nil {
-						action.Errorf("Failed to clone git repository: %v", err)
-						continue
-					}
-					err = kopiaClient.Snapshot(ctx, mirror.MirrorDir, false)
-					if err != nil {
-						action.Errorf("Failed to snapshot git repository: %v", err)
-						continue
-					}
-				}
-			}
-
-			if len(cfg.SnapshotDirs) > 0 {
-				action.Infof("Restoring directories: %v", cfg.SnapshotDirs)
-				for _, dir := range cfg.SnapshotDirs {
-					action.Infof("Restoring directory: %s", dir)
-					err = kopiaClient.Restore(ctx, dir)
-					if err != nil {
-						action.Errorf("Failed to restore directory: %v", err)
-					}
-				}
-			}
-		}
-	}
-
 	action.Infof("Action finished.")
 }
 
@@ -117,33 +72,6 @@ func handlePostExecution(action *githubactions.Action, ctx context.Context, logg
 
 	if cfg.HasShowEnv() {
 		env.DisplayEnvVars()
-	}
-
-	if stateFile := os.Getenv("GITHUB_STATE"); stateFile != "" {
-		content, err := os.ReadFile(stateFile)
-		if err != nil {
-			action.Errorf("Failed to read state file: %v", err)
-		} else {
-			action.Infof("State file contents:\n%s", string(content))
-		}
-	}
-
-	if len(cfg.SnapshotDirs) > 0 || len(cfg.GitHubMirrors) > 0 {
-		kopiaClient, err := getKopiaClient(ctx, logger, cfg.SnapshotVersion)
-		if err != nil {
-			action.Errorf("Failed to create Kopia client: %v", err)
-		}
-
-		if len(cfg.SnapshotDirs) > 0 {
-			action.Infof("Snapshotting directories: %v", cfg.SnapshotDirs)
-			for _, dir := range cfg.SnapshotDirs {
-				action.Infof("Snapshotting directory: %s", dir)
-				err = kopiaClient.Snapshot(ctx, dir, false)
-				if err != nil {
-					action.Errorf("Failed to snapshot directory: %v", err)
-				}
-			}
-		}
 	}
 
 	err = costs.ComputeAndDisplayCosts(action, cfg)

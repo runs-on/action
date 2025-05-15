@@ -250,10 +250,19 @@ func (s *AWSSnapshotter) RestoreSnapshot(ctx context.Context, mountPoint string)
 	// display disk cofniguration
 	s.logger.Info().Msgf("RestoreSnapshot: Displaying disk configuration...")
 
-	s.runCommand(ctx, "lsblk")
-	s.runCommand(ctx, "sleep", "3600")
-	s.runCommand(ctx, "lsblk -l")
-	s.runCommand(ctx, "df", "-ah")
+	// actual device name is the last entry from `lsblk -d -n -o PATH,MODEL` that has a MODEL = 'Amazon Elastic Block Store'
+	lsblkOutput, err := s.runCommand(ctx, "lsblk", "-d", "-n", "-o", "PATH,MODEL")
+	if err != nil {
+		s.logger.Warn().Msgf("RestoreSnapshot: Failed to display disk configuration: %v", err)
+	}
+	for _, line := range strings.Split(string(lsblkOutput), "\n") {
+		fields := strings.Fields(line)
+		// first volume is the root volume, so we need to skip it
+		if len(fields) > 1 && fields[1] == "Amazon Elastic Block Store" {
+			actualDeviceName = fields[0]
+		}
+	}
+	s.logger.Info().Msgf("RestoreSnapshot: Actual device name: %s", actualDeviceName)
 
 	if volumeIsNewAndUnformatted {
 		s.logger.Info().Msgf("RestoreSnapshot: Formatting new volume %s (%s) with ext4...", *newVolume.VolumeId, actualDeviceName)

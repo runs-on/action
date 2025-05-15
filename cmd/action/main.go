@@ -42,7 +42,6 @@ func getKopiaClient(ctx context.Context, logger *zerolog.Logger, version string)
 
 // handleMainExecution contains the original main logic.
 func handleMainExecution(action *githubactions.Action, ctx context.Context, logger *zerolog.Logger) {
-
 	cfg, err := config.NewConfigFromInputs(action)
 	if err != nil {
 		action.Fatalf("Failed to load configuration: %v", err)
@@ -60,12 +59,21 @@ func handleMainExecution(action *githubactions.Action, ctx context.Context, logg
 	}
 
 	if len(cfg.SnapshotDirs) > 0 {
-		snapshotter, err := snapshot.NewAWSSnapshotter(ctx, logger)
+		snapshotter, err := snapshot.NewAWSSnapshotter(ctx, logger, snapshot.SnapshotterConfig{
+			GithubRef:  os.Getenv("GITHUB_REF"),
+			InstanceID: os.Getenv("RUNS_ON_INSTANCE_ID"),
+			Az:         os.Getenv("RUNS_ON_AWS_AZ"),
+		})
 		if err != nil {
 			action.Errorf("Failed to create snapshotter: %v", err)
-		}
-		for _, dir := range cfg.SnapshotDirs {
-			snapshotter.CreateSnapshot(ctx, dir)
+		} else {
+			for _, dir := range cfg.SnapshotDirs {
+				action.Infof("Creating snapshot for %s", dir)
+				_, err := snapshotter.RestoreSnapshot(ctx, dir)
+				if err != nil {
+					action.Errorf("Failed to restore snapshot for %s: %v", dir, err)
+				}
+			}
 		}
 	}
 

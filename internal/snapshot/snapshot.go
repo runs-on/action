@@ -3,14 +3,12 @@ package snapshot
 import (
 	"context"
 	"fmt"
-	"os"
 	"os/exec"
 	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/feature/ec2/imds"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/rs/zerolog"
@@ -51,33 +49,41 @@ type Snapshotter interface {
 
 // AWSSnapshotter provides methods to manage EBS snapshots and volumes.
 type AWSSnapshotter struct {
-	logger     *zerolog.Logger
-	ec2Client  *ec2.Client
-	instanceID string
-	az         string
-	region     string
+	logger    *zerolog.Logger
+	config    SnapshotterConfig
+	ec2Client *ec2.Client
+}
+
+type SnapshotterConfig struct {
+	GithubRef  string
+	InstanceID string
+	Az         string
 }
 
 // NewAWSSnapshotter creates a new AWSSnapshotter instance.
 // It initializes the AWS SDK configuration and fetches EC2 instance metadata.
-func NewAWSSnapshotter(ctx context.Context, logger *zerolog.Logger) (*AWSSnapshotter, error) {
-	cfg, err := config.LoadDefaultConfig(ctx)
+func NewAWSSnapshotter(ctx context.Context, logger *zerolog.Logger, cfg SnapshotterConfig) (*AWSSnapshotter, error) {
+	awsConfig, err := config.LoadDefaultConfig(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load AWS SDK config: %w", err)
 	}
 
-	imdsClient := imds.NewFromConfig(cfg)
+	if cfg.InstanceID == "" {
+		return nil, fmt.Errorf("instanceID is required")
+	}
 
-	identityDoc, err := imdsClient.GetInstanceIdentityDocument(ctx, &imds.GetInstanceIdentityDocumentInput{})
-	if err != nil {
-		return nil, fmt.Errorf("failed to get instance identity document: %w", err)
+	if cfg.Az == "" {
+		return nil, fmt.Errorf("az is required")
+	}
+
+	if cfg.GithubRef == "" {
+		return nil, fmt.Errorf("githubRef is required")
 	}
 
 	return &AWSSnapshotter{
-		ec2Client:  ec2.NewFromConfig(cfg, func(o *ec2.Options) { o.Region = identityDoc.Region }),
-		instanceID: identityDoc.InstanceID,
-		az:         identityDoc.AvailabilityZone,
-		region:     identityDoc.Region,
+		logger:    logger,
+		config:    cfg,
+		ec2Client: ec2.NewFromConfig(awsConfig),
 	}, nil
 }
 
@@ -91,11 +97,8 @@ type RestoreSnapshotOutput struct {
 // creates a volume from it (or a new volume if no snapshot exists),
 // attaches it to the instance, and mounts it to the specified mountPoint.
 func (s *AWSSnapshotter) RestoreSnapshot(ctx context.Context, mountPoint string) (*RestoreSnapshotOutput, error) {
-	gitBranch := os.Getenv(gitBranchEnvVar)
-	if gitBranch == "" {
-		return nil, fmt.Errorf("git branch environment variable '%s' is not set", gitBranchEnvVar)
-	}
-	s.logger.Info().Msgf("RestoreSnapshot: Using git branch: %s, Instance ID: %s, AZ: %s", gitBranch, s.instanceID, s.az)
+	gitBranch := s.config.GithubRef
+	s.logger.Info().Msgf("RestoreSnapshot: Using git ref: %s", gitBranch)
 
 	var newVolume *types.Volume
 	var volumeIsNewAndUnformatted bool
@@ -137,7 +140,7 @@ func (s *AWSSnapshotter) RestoreSnapshot(ctx context.Context, mountPoint string)
 		s.logger.Info().Msgf("RestoreSnapshot: Creating volume from snapshot %s", *latestSnapshot.SnapshotId)
 		createVolumeOutput, err := s.ec2Client.CreateVolume(ctx, &ec2.CreateVolumeInput{
 			SnapshotId:       latestSnapshot.SnapshotId,
-			AvailabilityZone: aws.String(s.az),
+			AvailabilityZone: latestSnapshot.AvailabilityZone,
 			VolumeType:       defaultVolumeType,
 			// Size is determined by snapshot, but can be increased. Ensure it meets min throughput if increasing.
 			// Size:             aws.Int32(defaultVolumeSizeGiB),
@@ -157,7 +160,7 @@ func (s *AWSSnapshotter) RestoreSnapshot(ctx context.Context, mountPoint string)
 		// 3. No snapshot found, create a new volume
 		s.logger.Info().Msgf("RestoreSnapshot: Creating a new blank volume")
 		createVolumeOutput, err := s.ec2Client.CreateVolume(ctx, &ec2.CreateVolumeInput{
-			AvailabilityZone: aws.String(s.az),
+			AvailabilityZone: aws.String(s.config.Az),
 			VolumeType:       defaultVolumeType,
 			Size:             aws.Int32(defaultVolumeSizeGiB),
 			Iops:             aws.Int32(defaultVolumeIops),
@@ -183,14 +186,14 @@ func (s *AWSSnapshotter) RestoreSnapshot(ctx context.Context, mountPoint string)
 	s.logger.Info().Msgf("RestoreSnapshot: Volume %s is available.", *newVolume.VolumeId)
 
 	// 5. Attach Volume
-	s.logger.Info().Msgf("RestoreSnapshot: Attaching volume %s to instance %s as %s", *newVolume.VolumeId, s.instanceID, suggestedDeviceName)
+	s.logger.Info().Msgf("RestoreSnapshot: Attaching volume %s to instance %s as %s", *newVolume.VolumeId, s.config.InstanceID, suggestedDeviceName)
 	attachOutput, err := s.ec2Client.AttachVolume(ctx, &ec2.AttachVolumeInput{
 		Device:     aws.String(suggestedDeviceName),
-		InstanceId: aws.String(s.instanceID),
+		InstanceId: aws.String(s.config.InstanceID),
 		VolumeId:   newVolume.VolumeId,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to attach volume %s to instance %s: %w", *newVolume.VolumeId, s.instanceID, err)
+		return nil, fmt.Errorf("failed to attach volume %s to instance %s: %w", *newVolume.VolumeId, s.config.InstanceID, err)
 	}
 	actualDeviceName := *attachOutput.Device
 	s.logger.Info().Msgf("RestoreSnapshot: Volume %s attach initiated, device hint: %s. Waiting for attachment...", *newVolume.VolumeId, actualDeviceName)
@@ -267,11 +270,11 @@ type CreateSnapshotOutput struct {
 // CreateSnapshot finds the volume associated with the mountPoint, detaches it,
 // creates a new snapshot, tags it as the latest for the branch, and cleans up old resources.
 func (s *AWSSnapshotter) CreateSnapshot(ctx context.Context, mountPoint string) (*CreateSnapshotOutput, error) {
-	gitBranch := os.Getenv(gitBranchEnvVar)
+	gitBranch := s.config.GithubRef
 	if gitBranch == "" {
 		return nil, fmt.Errorf("git branch environment variable '%s' is not set", gitBranchEnvVar)
 	}
-	s.logger.Info().Msgf("CreateSnapshot: Using git branch: %s, Instance ID: %s, MountPoint: %s", gitBranch, s.instanceID, mountPoint)
+	s.logger.Info().Msgf("CreateSnapshot: Using git ref: %s, Instance ID: %s, MountPoint: %s", gitBranch, s.config.InstanceID, mountPoint)
 
 	// 1. Find device for mountPoint
 	s.logger.Info().Msgf("CreateSnapshot: Finding device for mount point %s", mountPoint)
@@ -296,21 +299,21 @@ func (s *AWSSnapshotter) CreateSnapshot(ctx context.Context, mountPoint string) 
 	s.logger.Info().Msgf("CreateSnapshot: Found device %s for mount point %s", devicePath, mountPoint)
 
 	// Find Volume ID for this device on this instance
-	s.logger.Info().Msgf("CreateSnapshot: Finding volume ID for device %s on instance %s", devicePath, s.instanceID)
+	s.logger.Info().Msgf("CreateSnapshot: Finding volume ID for device %s on instance %s", devicePath, s.config.InstanceID)
 	volumesOutput, err := s.ec2Client.DescribeVolumes(ctx, &ec2.DescribeVolumesInput{
 		Filters: []types.Filter{
-			{Name: aws.String("attachment.instance-id"), Values: []string{s.instanceID}},
+			{Name: aws.String("attachment.instance-id"), Values: []string{s.config.InstanceID}},
 			{Name: aws.String("attachment.device"), Values: []string{devicePath}},
 		},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to describe volumes for device %s on instance %s: %w", devicePath, s.instanceID, err)
+		return nil, fmt.Errorf("failed to describe volumes for device %s on instance %s: %w", devicePath, s.config.InstanceID, err)
 	}
 	if len(volumesOutput.Volumes) == 0 {
-		return nil, fmt.Errorf("no volume found for device %s attached to instance %s", devicePath, s.instanceID)
+		return nil, fmt.Errorf("no volume found for device %s attached to instance %s", devicePath, s.config.InstanceID)
 	}
 	if len(volumesOutput.Volumes) > 1 {
-		s.logger.Warn().Msgf("Warning: Found multiple volumes for device %s on instance %s. Using the first one: %s", devicePath, s.instanceID, *volumesOutput.Volumes[0].VolumeId)
+		s.logger.Warn().Msgf("Warning: Found multiple volumes for device %s on instance %s. Using the first one: %s", devicePath, s.config.InstanceID, *volumesOutput.Volumes[0].VolumeId)
 	}
 	jobVolumeID := *volumesOutput.Volumes[0].VolumeId
 	s.logger.Info().Msgf("CreateSnapshot: Found volume ID %s for device %s", jobVolumeID, devicePath)
@@ -335,7 +338,7 @@ func (s *AWSSnapshotter) CreateSnapshot(ctx context.Context, mountPoint string) 
 	s.logger.Info().Msgf("CreateSnapshot: Detaching volume %s...", jobVolumeID)
 	_, err = s.ec2Client.DetachVolume(ctx, &ec2.DetachVolumeInput{
 		VolumeId:   aws.String(jobVolumeID),
-		InstanceId: aws.String(s.instanceID),
+		InstanceId: aws.String(s.config.InstanceID),
 	})
 	if err != nil {
 		descVol, descErr := s.ec2Client.DescribeVolumes(ctx, &ec2.DescribeVolumesInput{VolumeIds: []string{jobVolumeID}})
@@ -360,22 +363,22 @@ func (s *AWSSnapshotter) CreateSnapshot(ctx context.Context, mountPoint string) 
 
 	// 3. Create new snapshot
 	currentTime := time.Now()
-	snapshotName := fmt.Sprintf("snapshot-%s-%s", gitBranch, currentTime.Format("20060102-150405"))
-	s.logger.Info().Msgf("CreateSnapshot: Creating snapshot '%s' from volume %s for branch %s...", snapshotName, jobVolumeID, gitBranch)
+	snapshotName := fmt.Sprintf("snapshot-%s-%s", s.config.GithubRef, currentTime.Format("20060102-150405"))
+	s.logger.Info().Msgf("CreateSnapshot: Creating snapshot '%s' from volume %s for branch %s...", snapshotName, jobVolumeID, s.config.GithubRef)
 	createSnapshotOutput, err := s.ec2Client.CreateSnapshot(ctx, &ec2.CreateSnapshotInput{
 		VolumeId: aws.String(jobVolumeID),
 		TagSpecifications: []types.TagSpecification{
 			{
 				ResourceType: types.ResourceTypeSnapshot,
 				Tags: []types.Tag{
-					{Key: aws.String(snapshotBranchTagKey), Value: aws.String(gitBranch)},
+					{Key: aws.String(snapshotBranchTagKey), Value: aws.String(s.config.GithubRef)},
 					{Key: aws.String(latestSnapshotTagKey), Value: aws.String("true")},
 					{Key: aws.String(nameTagKey), Value: aws.String(snapshotName)},
 					{Key: aws.String(timestampTagKey), Value: aws.String(currentTime.Format(time.RFC3339))},
 				},
 			},
 		},
-		Description: aws.String(fmt.Sprintf("Snapshot for branch %s taken at %s", gitBranch, currentTime.Format(time.RFC3339))),
+		Description: aws.String(fmt.Sprintf("Snapshot for branch %s taken at %s", s.config.GithubRef, currentTime.Format(time.RFC3339))),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create snapshot from volume %s: %w", jobVolumeID, err)

@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"flag"
-	"fmt"
 	"os"
 
 	"github.com/rs/zerolog"
@@ -11,34 +10,9 @@ import (
 	"github.com/runs-on/action/internal/config"
 	"github.com/runs-on/action/internal/costs"
 	"github.com/runs-on/action/internal/env"
-	"github.com/runs-on/action/internal/kopia"
 	"github.com/runs-on/action/internal/snapshot"
 	"github.com/sethvargo/go-githubactions"
 )
-
-func getKopiaClient(ctx context.Context, logger *zerolog.Logger, version string) (*kopia.KopiaClient, error) {
-	kopiaConfig := &kopia.Config{
-		Region:   os.Getenv("RUNS_ON_AWS_REGION"),
-		S3Bucket: os.Getenv("RUNS_ON_S3_BUCKET_CACHE"),
-		Prefix:   fmt.Sprintf("cache/snapshots/%s/%s/", os.Getenv("GITHUB_REPOSITORY"), version),
-		Password: "p4ssw0rd",
-	}
-	if kopiaConfig.Region == "" {
-		return nil, fmt.Errorf("RUNS_ON_AWS_REGION is not set")
-	}
-	if kopiaConfig.S3Bucket == "" {
-		return nil, fmt.Errorf("RUNS_ON_S3_BUCKET_CACHE is not set")
-	}
-	if kopiaConfig.Prefix == "" {
-		return nil, fmt.Errorf("GITHUB_REPOSITORY is not set")
-	}
-
-	kopiaClient, err := kopia.NewKopiaClient(ctx, logger, kopiaConfig)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create Kopia client: %v", err)
-	}
-	return kopiaClient, nil
-}
 
 // handleMainExecution contains the original main logic.
 func handleMainExecution(action *githubactions.Action, ctx context.Context, logger *zerolog.Logger) {

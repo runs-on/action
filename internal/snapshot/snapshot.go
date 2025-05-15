@@ -100,6 +100,8 @@ func (s *AWSSnapshotter) RestoreSnapshot(ctx context.Context, mountPoint string)
 	gitBranch := s.config.GithubRef
 	s.logger.Info().Msgf("RestoreSnapshot: Using git ref: %s", gitBranch)
 
+	var err error
+
 	var newVolume *types.Volume
 	var volumeIsNewAndUnformatted bool
 	currentTime := time.Now()
@@ -178,6 +180,7 @@ func (s *AWSSnapshotter) RestoreSnapshot(ctx context.Context, mountPoint string)
 	}
 
 	defer func() {
+		s.logger.Info().Msgf("RestoreSnapshot: Deferring cleanup of volume %s", *newVolume.VolumeId)
 		if err != nil {
 			s.logger.Error().Msgf("RestoreSnapshot: Error: %v", err)
 			if newVolume != nil {
@@ -212,7 +215,8 @@ func (s *AWSSnapshotter) RestoreSnapshot(ctx context.Context, mountPoint string)
 	s.logger.Info().Msgf("RestoreSnapshot: Volume %s attach initiated, device hint: %s. Waiting for attachment...", *newVolume.VolumeId, actualDeviceName)
 
 	volumeInUseWaiter := ec2.NewVolumeInUseWaiter(s.ec2Client)
-	if err := volumeInUseWaiter.Wait(ctx, &ec2.DescribeVolumesInput{VolumeIds: []string{*newVolume.VolumeId}}, 2*time.Minute); err != nil {
+	err = volumeInUseWaiter.Wait(ctx, &ec2.DescribeVolumesInput{VolumeIds: []string{*newVolume.VolumeId}}, 2*time.Minute)
+	if err != nil {
 		// Check actual attachment state if waiter fails
 		descVol, descErr := s.ec2Client.DescribeVolumes(ctx, &ec2.DescribeVolumesInput{VolumeIds: []string{*newVolume.VolumeId}})
 		if descErr == nil && len(descVol.Volumes) > 0 && len(descVol.Volumes[0].Attachments) > 0 {

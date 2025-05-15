@@ -272,9 +272,9 @@ func (s *AWSSnapshotter) RestoreSnapshot(ctx context.Context, mountPoint string)
 	if err != nil {
 		s.logger.Warn().Msgf("RestoreSnapshot: Failed to display disk configuration: %v", err)
 	}
-	for _, line := range strings.Split(string(lsblkOutput), "\n") {
+	for _, line := range strings.Split(strings.TrimSpace(string(lsblkOutput)), "\n") {
 		s.logger.Info().Msgf("RestoreSnapshot: lsblk output: %s", line)
-		fields := strings.Fields(line)
+		fields := strings.SplitN(line, " ", 2)
 		s.logger.Info().Msgf("RestoreSnapshot: fields: %v", fields)
 		// first volume is the root volume, so we need to skip it
 		if len(fields) > 1 && fields[1] == "Amazon Elastic Block Store" {

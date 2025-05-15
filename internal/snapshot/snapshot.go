@@ -215,7 +215,15 @@ func (s *AWSSnapshotter) RestoreSnapshot(ctx context.Context, mountPoint string)
 	s.logger.Info().Msgf("RestoreSnapshot: Volume %s attach initiated, device hint: %s. Waiting for attachment...", *newVolume.VolumeId, actualDeviceName)
 
 	volumeInUseWaiter := ec2.NewVolumeInUseWaiter(s.ec2Client)
-	err = volumeInUseWaiter.Wait(ctx, &ec2.DescribeVolumesInput{VolumeIds: []string{*newVolume.VolumeId}}, 2*time.Minute)
+	err = volumeInUseWaiter.Wait(ctx, &ec2.DescribeVolumesInput{
+		VolumeIds: []string{*newVolume.VolumeId},
+		Filters: []types.Filter{
+			{
+				Name:   aws.String("attachment.status"),
+				Values: []string{"attached"},
+			},
+		},
+	}, 2*time.Minute)
 	if err != nil {
 		s.logger.Error().Msgf("RestoreSnapshot: Volume %s did not attach successfully and current state unknown: %v", *newVolume.VolumeId, err)
 

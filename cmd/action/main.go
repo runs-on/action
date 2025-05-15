@@ -76,7 +76,7 @@ func handlePostExecution(action *githubactions.Action, ctx context.Context, logg
 
 func main() {
 	ctx := context.Background()
-	logger := zerolog.New(os.Stdout)
+	logger := zerolog.New(os.Stdout).With().Timestamp().Logger()
 	postFlag := flag.Bool("post", false, "Indicates the post-execution phase")
 	flag.Parse()
 

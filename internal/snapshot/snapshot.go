@@ -177,6 +177,19 @@ func (s *AWSSnapshotter) RestoreSnapshot(ctx context.Context, mountPoint string)
 		s.logger.Info().Msgf("RestoreSnapshot: Created new blank volume %s", *newVolume.VolumeId)
 	}
 
+	defer func() {
+		if err != nil {
+			s.logger.Error().Msgf("RestoreSnapshot: Error: %v", err)
+			if newVolume != nil {
+				s.logger.Info().Msgf("RestoreSnapshot: Deleting volume %s", *newVolume.VolumeId)
+				_, err := s.ec2Client.DeleteVolume(ctx, &ec2.DeleteVolumeInput{VolumeId: newVolume.VolumeId})
+				if err != nil {
+					s.logger.Error().Msgf("RestoreSnapshot: Error deleting volume %s: %v", *newVolume.VolumeId, err)
+				}
+			}
+		}
+	}()
+
 	// 4. Wait for volume to be 'available'
 	s.logger.Info().Msgf("RestoreSnapshot: Waiting for volume %s to become available...", *newVolume.VolumeId)
 	volumeAvailableWaiter := ec2.NewVolumeAvailableWaiter(s.ec2Client)
@@ -233,6 +246,12 @@ func (s *AWSSnapshotter) RestoreSnapshot(ctx context.Context, mountPoint string)
 	if _, err := s.runCommand(ctx, "sudo", "umount", mountPoint); err != nil {
 		s.logger.Warn().Msgf("RestoreSnapshot: Defensive unmount of %s failed (likely not mounted): %v", mountPoint, err)
 	}
+
+	// display disk cofniguration
+	s.logger.Info().Msgf("RestoreSnapshot: Displaying disk configuration...")
+	s.runCommand(ctx, "lsblk")
+	s.runCommand(ctx, "lsblk -l")
+	s.runCommand(ctx, "df", "-ah")
 
 	if volumeIsNewAndUnformatted {
 		s.logger.Info().Msgf("RestoreSnapshot: Formatting new volume %s (%s) with ext4...", *newVolume.VolumeId, actualDeviceName)

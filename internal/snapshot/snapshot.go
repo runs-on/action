@@ -217,6 +217,8 @@ func (s *AWSSnapshotter) RestoreSnapshot(ctx context.Context, mountPoint string)
 	volumeInUseWaiter := ec2.NewVolumeInUseWaiter(s.ec2Client)
 	err = volumeInUseWaiter.Wait(ctx, &ec2.DescribeVolumesInput{VolumeIds: []string{*newVolume.VolumeId}}, 2*time.Minute)
 	if err != nil {
+		s.logger.Error().Msgf("RestoreSnapshot: Volume %s did not attach successfully and current state unknown: %v", *newVolume.VolumeId, err)
+
 		// Check actual attachment state if waiter fails
 		descVol, descErr := s.ec2Client.DescribeVolumes(ctx, &ec2.DescribeVolumesInput{VolumeIds: []string{*newVolume.VolumeId}})
 		if descErr == nil && len(descVol.Volumes) > 0 && len(descVol.Volumes[0].Attachments) > 0 {
@@ -231,14 +233,15 @@ func (s *AWSSnapshotter) RestoreSnapshot(ctx context.Context, mountPoint string)
 			return nil, fmt.Errorf("volume %s did not attach successfully and current state unknown: %w", *newVolume.VolumeId, err)
 		}
 	} else {
-		s.logger.Error().Msgf("RestoreSnapshot: Volume %s did not attach successfully and current state unknown: %v", *newVolume.VolumeId, err)
-
 		// Fetch volume details again to confirm device name, as the attachOutput.Device might be a suggestion
 		// and the waiter confirms attachment, not necessarily the final device name if it changed.
 		descVolOutput, descErr := s.ec2Client.DescribeVolumes(ctx, &ec2.DescribeVolumesInput{VolumeIds: []string{*newVolume.VolumeId}})
+		s.logger.Info().Msgf("RestoreSnapshot: Volume %s attachments: %v", *newVolume.VolumeId, descVolOutput.Volumes[0].Attachments)
 		if descErr == nil && len(descVolOutput.Volumes) > 0 && len(descVolOutput.Volumes[0].Attachments) > 0 {
 			actualDeviceName = *descVolOutput.Volumes[0].Attachments[0].Device
-		} // else stick with actualDeviceName from attachOutput or waiter confirmation
+		} else {
+			return nil, fmt.Errorf("volume %s did not attach successfully and current state unknown: %w", *newVolume.VolumeId, err)
+		}
 		s.logger.Info().Msgf("RestoreSnapshot: Volume %s attached as %s.", *newVolume.VolumeId, actualDeviceName)
 	}
 

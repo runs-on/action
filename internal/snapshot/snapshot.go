@@ -26,10 +26,10 @@ const (
 	timestampTagKey      = "runs-on-timestamp"
 
 	// Default Volume Specifications
-	defaultVolumeSizeGiB        int32 = 60
+	defaultVolumeSizeGiB        int32 = 20
 	defaultVolumeType                 = types.VolumeTypeGp3
 	defaultVolumeIops           int32 = 3000
-	defaultVolumeThroughputMBps int32 = 700        // As per user's README
+	defaultVolumeThroughputMBps int32 = 125        // As per user's README
 	suggestedDeviceName               = "/dev/sdf" // AWS might assign /dev/xvdf etc.
 )
 
@@ -273,9 +273,12 @@ func (s *AWSSnapshotter) RestoreSnapshot(ctx context.Context, mountPoint string)
 		s.logger.Warn().Msgf("RestoreSnapshot: Failed to display disk configuration: %v", err)
 	}
 	for _, line := range strings.Split(string(lsblkOutput), "\n") {
+		s.logger.Info().Msgf("RestoreSnapshot: lsblk output: %s", line)
 		fields := strings.Fields(line)
+		s.logger.Info().Msgf("RestoreSnapshot: fields: %v", fields)
 		// first volume is the root volume, so we need to skip it
 		if len(fields) > 1 && fields[1] == "Amazon Elastic Block Store" {
+			s.logger.Info().Msgf("RestoreSnapshot: Found volume: %s", fields[0])
 			actualDeviceName = fields[0]
 		}
 	}

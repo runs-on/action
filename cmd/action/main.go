@@ -12,6 +12,7 @@ import (
 	"github.com/runs-on/action/internal/costs"
 	"github.com/runs-on/action/internal/env"
 	"github.com/runs-on/action/internal/kopia"
+	"github.com/runs-on/action/internal/snapshot"
 	"github.com/sethvargo/go-githubactions"
 )
 
@@ -56,6 +57,16 @@ func handleMainExecution(action *githubactions.Action, ctx context.Context, logg
 
 	if cfg.HasShowCosts() {
 		action.Infof("show_costs is enabled. You will find cost details in the post-execution step of this action.")
+	}
+
+	if len(cfg.SnapshotDirs) > 0 {
+		snapshotter, err := snapshot.NewAWSSnapshotter(ctx, logger)
+		if err != nil {
+			action.Errorf("Failed to create snapshotter: %v", err)
+		}
+		for _, dir := range cfg.SnapshotDirs {
+			snapshotter.CreateSnapshot(ctx, dir)
+		}
 	}
 
 	action.Infof("Action finished.")

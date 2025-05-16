@@ -250,7 +250,10 @@ func (s *AWSSnapshotter) RestoreSnapshot(ctx context.Context, mountPoint string)
 
 	// 4. Wait for volume to be 'available'
 	s.logger.Info().Msgf("RestoreSnapshot: Waiting for volume %s to become available...", *newVolume.VolumeId)
-	volumeAvailableWaiter := ec2.NewVolumeAvailableWaiter(s.ec2Client)
+	volumeAvailableWaiter := ec2.NewVolumeAvailableWaiter(s.ec2Client, func(o *ec2.VolumeAvailableWaiterOptions) {
+		o.MaxDelay = 10 * time.Second
+		o.MinDelay = 5 * time.Second
+	})
 	if err := volumeAvailableWaiter.Wait(ctx, &ec2.DescribeVolumesInput{VolumeIds: []string{*newVolume.VolumeId}}, 5*time.Minute); err != nil {
 		return nil, fmt.Errorf("volume %s did not become available in time: %w", *newVolume.VolumeId, err)
 	}
@@ -420,9 +423,12 @@ func (s *AWSSnapshotter) CreateSnapshot(ctx context.Context, mountPoint string) 
 		return nil, fmt.Errorf("failed to initiate detach for volume %s: %w", volumeInfo.VolumeID, err)
 	}
 
-	volumeDetachedWaiter := ec2.NewVolumeAvailableWaiter(s.ec2Client) // Available state implies detached
+	volumeDetachedWaiter := ec2.NewVolumeAvailableWaiter(s.ec2Client, func(o *ec2.VolumeAvailableWaiterOptions) {
+		o.MaxDelay = 10 * time.Second
+		o.MinDelay = 5 * time.Second
+	}) // Available state implies detached
 	s.logger.Info().Msgf("CreateSnapshot: Waiting for volume %s to become available (detached)...", volumeInfo.VolumeID)
-	if err := volumeDetachedWaiter.Wait(ctx, &ec2.DescribeVolumesInput{VolumeIds: []string{volumeInfo.VolumeID}}, 2*time.Minute); err != nil {
+	if err := volumeDetachedWaiter.Wait(ctx, &ec2.DescribeVolumesInput{VolumeIds: []string{volumeInfo.VolumeID}}, 5*time.Minute); err != nil {
 		return nil, fmt.Errorf("volume %s did not become available (detach) in time: %w", volumeInfo.VolumeID, err)
 	}
 	s.logger.Info().Msgf("CreateSnapshot: Volume %s is detached.", volumeInfo.VolumeID)

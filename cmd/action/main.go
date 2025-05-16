@@ -67,6 +67,26 @@ func handlePostExecution(action *githubactions.Action, ctx context.Context, logg
 		env.DisplayEnvVars()
 	}
 
+	if len(cfg.SnapshotDirs) > 0 {
+		action.Infof("Snapshotting volumes...")
+		snapshotter, err := snapshot.NewAWSSnapshotter(ctx, logger, snapshot.SnapshotterConfig{
+			GithubRef:  os.Getenv("GITHUB_REF"),
+			InstanceID: os.Getenv("RUNS_ON_INSTANCE_ID"),
+			Az:         os.Getenv("RUNS_ON_AWS_AZ"),
+		})
+		if err != nil {
+			action.Errorf("Failed to create snapshotter: %v", err)
+		} else {
+			for _, dir := range cfg.SnapshotDirs {
+				snapshot, err := snapshotter.CreateSnapshot(ctx, dir)
+				if err != nil {
+					action.Errorf("Failed to snapshot volumes: %v", err)
+					continue
+				}
+				action.Infof("Snapshot created: %s", snapshot.SnapshotID)
+			}
+		}
+	}
 	err = costs.ComputeAndDisplayCosts(action, cfg)
 	if err != nil {
 		action.Errorf("Failed to compute or display costs: %v", err)

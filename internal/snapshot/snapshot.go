@@ -2,8 +2,11 @@ package snapshot
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -45,6 +48,14 @@ type Snapshotter interface {
 	CreateSnapshot(ctx context.Context, snapshot *Snapshot) error
 	GetSnapshot(ctx context.Context, id string) (*Snapshot, error)
 	DeleteSnapshot(ctx context.Context, id string) error
+}
+
+// VolumeInfo stores information about the mounted volume
+type VolumeInfo struct {
+	VolumeID     string `json:"volume_id"`
+	DeviceName   string `json:"device_name"`
+	MountPoint   string `json:"mount_point"`
+	AttachmentID string `json:"attachment_id,omitempty"`
 }
 
 // AWSSnapshotter provides methods to manage EBS snapshots and volumes.
@@ -91,6 +102,50 @@ func NewAWSSnapshotter(ctx context.Context, logger *zerolog.Logger, cfg Snapshot
 type RestoreSnapshotOutput struct {
 	VolumeID   string
 	DeviceName string
+}
+
+// getVolumeInfoPath returns the path to the volume info JSON file for a given mount point
+func getVolumeInfoPath(mountPoint string) string {
+	// Replace slashes with hyphens and remove leading/trailing hyphens
+	sanitizedPath := strings.Trim(strings.ReplaceAll(mountPoint, "/", "-"), "-")
+	return filepath.Join("/runs-on", fmt.Sprintf("snapshot-%s.json", sanitizedPath))
+}
+
+// saveVolumeInfo writes volume information to a JSON file
+func (s *AWSSnapshotter) saveVolumeInfo(volumeInfo *VolumeInfo) error {
+	infoPath := getVolumeInfoPath(volumeInfo.MountPoint)
+
+	// Create directory if it doesn't exist
+	if err := os.MkdirAll(filepath.Dir(infoPath), 0755); err != nil {
+		return fmt.Errorf("failed to create directory for volume info: %w", err)
+	}
+
+	data, err := json.MarshalIndent(volumeInfo, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal volume info: %w", err)
+	}
+
+	if err := os.WriteFile(infoPath, data, 0644); err != nil {
+		return fmt.Errorf("failed to write volume info file: %w", err)
+	}
+
+	return nil
+}
+
+// loadVolumeInfo reads volume information from a JSON file
+func (s *AWSSnapshotter) loadVolumeInfo(mountPoint string) (*VolumeInfo, error) {
+	infoPath := getVolumeInfoPath(mountPoint)
+	data, err := os.ReadFile(infoPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read volume info file: %w", err)
+	}
+
+	var volumeInfo VolumeInfo
+	if err := json.Unmarshal(data, &volumeInfo); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal volume info: %w", err)
+	}
+
+	return &volumeInfo, nil
 }
 
 // RestoreSnapshot finds the latest snapshot for the current git branch,
@@ -284,6 +339,16 @@ func (s *AWSSnapshotter) RestoreSnapshot(ctx context.Context, mountPoint string)
 	}
 	s.logger.Info().Msgf("RestoreSnapshot: Actual device name: %s", actualDeviceName)
 
+	// Save volume info to JSON file
+	volumeInfo := &VolumeInfo{
+		VolumeID:   *newVolume.VolumeId,
+		DeviceName: actualDeviceName,
+		MountPoint: mountPoint,
+	}
+	if err := s.saveVolumeInfo(volumeInfo); err != nil {
+		s.logger.Warn().Msgf("RestoreSnapshot: Failed to save volume info: %v", err)
+	}
+
 	if volumeIsNewAndUnformatted {
 		s.logger.Info().Msgf("RestoreSnapshot: Formatting new volume %s (%s) with ext4...", *newVolume.VolumeId, actualDeviceName)
 		if _, err := s.runCommand(ctx, "sudo", "mkfs.ext4", "-F", actualDeviceName); err != nil { // -F to force if already formatted by mistake or small
@@ -321,52 +386,13 @@ type CreateSnapshotOutput struct {
 // creates a new snapshot, tags it as the latest for the branch, and cleans up old resources.
 func (s *AWSSnapshotter) CreateSnapshot(ctx context.Context, mountPoint string) (*CreateSnapshotOutput, error) {
 	gitBranch := s.config.GithubRef
-	if gitBranch == "" {
-		return nil, fmt.Errorf("git branch environment variable '%s' is not set", gitBranchEnvVar)
-	}
 	s.logger.Info().Msgf("CreateSnapshot: Using git ref: %s, Instance ID: %s, MountPoint: %s", gitBranch, s.config.InstanceID, mountPoint)
 
-	// 1. Find device for mountPoint
-	s.logger.Info().Msgf("CreateSnapshot: Finding device for mount point %s", mountPoint)
-	devicePathOutput, err := s.runCommand(ctx, "sudo", "findmnt", "-n", "-o", "SOURCE", "--target", mountPoint)
+	// Load volume info from JSON file
+	volumeInfo, err := s.loadVolumeInfo(mountPoint)
 	if err != nil {
-		return nil, fmt.Errorf("failed to find device for mount point %s: %w. Output: %s", mountPoint, err, string(devicePathOutput))
+		return nil, fmt.Errorf("failed to load volume info: %w", err)
 	}
-	devicePath := strings.TrimSpace(string(devicePathOutput))
-	if devicePath == "" {
-		return nil, fmt.Errorf("no device found for mount point %s", mountPoint)
-	}
-	// Sometimes findmnt returns /dev/root for root, which is not what EC2 knows. We need the actual block device.
-	// This is a simplification; a more robust solution might involve checking lsblk or other tools if findmnt isn't sufficient.
-	if devicePath == "/dev/root" {
-		s.logger.Warn().Msgf("CreateSnapshot: findmnt returned /dev/root, attempting to find actual block device (common on some AMIs)")
-		// This is a best-effort; specific AMIs might need different discovery.
-		// For now, we assume if it's root, there might be an issue or it's the main EBS, which we shouldn't be snapshotting this way.
-		// Consider if this use case implies a different strategy or erroring out.
-		// For now, let's try to proceed but log a clear warning. It might work if /dev/root symlinks to the correct /dev/xvda etc.
-		s.logger.Warn().Msgf("Warning: Device for %s identified as %s. If this is the root device, snapshotting workflow might need adjustment.", mountPoint, devicePath)
-	}
-	s.logger.Info().Msgf("CreateSnapshot: Found device %s for mount point %s", devicePath, mountPoint)
-
-	// Find Volume ID for this device on this instance
-	s.logger.Info().Msgf("CreateSnapshot: Finding volume ID for device %s on instance %s", devicePath, s.config.InstanceID)
-	volumesOutput, err := s.ec2Client.DescribeVolumes(ctx, &ec2.DescribeVolumesInput{
-		Filters: []types.Filter{
-			{Name: aws.String("attachment.instance-id"), Values: []string{s.config.InstanceID}},
-			{Name: aws.String("attachment.device"), Values: []string{devicePath}},
-		},
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to describe volumes for device %s on instance %s: %w", devicePath, s.config.InstanceID, err)
-	}
-	if len(volumesOutput.Volumes) == 0 {
-		return nil, fmt.Errorf("no volume found for device %s attached to instance %s", devicePath, s.config.InstanceID)
-	}
-	if len(volumesOutput.Volumes) > 1 {
-		s.logger.Warn().Msgf("Warning: Found multiple volumes for device %s on instance %s. Using the first one: %s", devicePath, s.config.InstanceID, *volumesOutput.Volumes[0].VolumeId)
-	}
-	jobVolumeID := *volumesOutput.Volumes[0].VolumeId
-	s.logger.Info().Msgf("CreateSnapshot: Found volume ID %s for device %s", jobVolumeID, devicePath)
 
 	// 2. Operations on jobVolumeID
 	s.logger.Info().Msgf("CreateSnapshot: Stopping docker service...")
@@ -374,7 +400,7 @@ func (s *AWSSnapshotter) CreateSnapshot(ctx context.Context, mountPoint string) 
 		s.logger.Warn().Msgf("Warning: failed to stop docker (may not be running or installed): %v", err)
 	}
 
-	s.logger.Info().Msgf("CreateSnapshot: Unmounting %s (from device %s, volume %s)...", mountPoint, devicePath, jobVolumeID)
+	s.logger.Info().Msgf("CreateSnapshot: Unmounting %s (from device %s, volume %s)...", mountPoint, volumeInfo.DeviceName, volumeInfo.VolumeID)
 	if _, err := s.runCommand(ctx, "sudo", "umount", mountPoint); err != nil {
 		dfOutput, checkErr := s.runCommand(ctx, "df", mountPoint)
 		if checkErr == nil && strings.Contains(string(dfOutput), mountPoint) { // If still mounted, then error
@@ -385,38 +411,28 @@ func (s *AWSSnapshotter) CreateSnapshot(ctx context.Context, mountPoint string) 
 		s.logger.Info().Msgf("CreateSnapshot: Successfully unmounted %s.", mountPoint)
 	}
 
-	s.logger.Info().Msgf("CreateSnapshot: Detaching volume %s...", jobVolumeID)
+	s.logger.Info().Msgf("CreateSnapshot: Detaching volume %s...", volumeInfo.VolumeID)
 	_, err = s.ec2Client.DetachVolume(ctx, &ec2.DetachVolumeInput{
-		VolumeId:   aws.String(jobVolumeID),
+		VolumeId:   aws.String(volumeInfo.VolumeID),
 		InstanceId: aws.String(s.config.InstanceID),
 	})
 	if err != nil {
-		descVol, descErr := s.ec2Client.DescribeVolumes(ctx, &ec2.DescribeVolumesInput{VolumeIds: []string{jobVolumeID}})
-		if descErr == nil && len(descVol.Volumes) > 0 {
-			vol := descVol.Volumes[0]
-			if vol.State == types.VolumeStateAvailable {
-				s.logger.Info().Msgf("CreateSnapshot: DetachVolume call failed for %s, but volume is already %s. Proceeding.", jobVolumeID, vol.State)
-			} else {
-				return nil, fmt.Errorf("failed to initiate detach for volume %s (current state %s): %w", jobVolumeID, vol.State, err)
-			}
-		} else {
-			return nil, fmt.Errorf("failed to initiate detach for volume %s: %w", jobVolumeID, err)
-		}
+		return nil, fmt.Errorf("failed to initiate detach for volume %s: %w", volumeInfo.VolumeID, err)
 	}
 
 	volumeDetachedWaiter := ec2.NewVolumeAvailableWaiter(s.ec2Client) // Available state implies detached
-	s.logger.Info().Msgf("CreateSnapshot: Waiting for volume %s to become available (detached)...", jobVolumeID)
-	if err := volumeDetachedWaiter.Wait(ctx, &ec2.DescribeVolumesInput{VolumeIds: []string{jobVolumeID}}, 5*time.Minute); err != nil {
-		return nil, fmt.Errorf("volume %s did not become available (detach) in time: %w", jobVolumeID, err)
+	s.logger.Info().Msgf("CreateSnapshot: Waiting for volume %s to become available (detached)...", volumeInfo.VolumeID)
+	if err := volumeDetachedWaiter.Wait(ctx, &ec2.DescribeVolumesInput{VolumeIds: []string{volumeInfo.VolumeID}}, 2*time.Minute); err != nil {
+		return nil, fmt.Errorf("volume %s did not become available (detach) in time: %w", volumeInfo.VolumeID, err)
 	}
-	s.logger.Info().Msgf("CreateSnapshot: Volume %s is detached.", jobVolumeID)
+	s.logger.Info().Msgf("CreateSnapshot: Volume %s is detached.", volumeInfo.VolumeID)
 
 	// 3. Create new snapshot
 	currentTime := time.Now()
 	snapshotName := fmt.Sprintf("snapshot-%s-%s", s.config.GithubRef, currentTime.Format("20060102-150405"))
-	s.logger.Info().Msgf("CreateSnapshot: Creating snapshot '%s' from volume %s for branch %s...", snapshotName, jobVolumeID, s.config.GithubRef)
+	s.logger.Info().Msgf("CreateSnapshot: Creating snapshot '%s' from volume %s for branch %s...", snapshotName, volumeInfo.VolumeID, s.config.GithubRef)
 	createSnapshotOutput, err := s.ec2Client.CreateSnapshot(ctx, &ec2.CreateSnapshotInput{
-		VolumeId: aws.String(jobVolumeID),
+		VolumeId: aws.String(volumeInfo.VolumeID),
 		TagSpecifications: []types.TagSpecification{
 			{
 				ResourceType: types.ResourceTypeSnapshot,
@@ -431,13 +447,13 @@ func (s *AWSSnapshotter) CreateSnapshot(ctx context.Context, mountPoint string) 
 		Description: aws.String(fmt.Sprintf("Snapshot for branch %s taken at %s", s.config.GithubRef, currentTime.Format(time.RFC3339))),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to create snapshot from volume %s: %w", jobVolumeID, err)
+		return nil, fmt.Errorf("failed to create snapshot from volume %s: %w", volumeInfo.VolumeID, err)
 	}
 	newSnapshotID := *createSnapshotOutput.SnapshotId
 	s.logger.Info().Msgf("CreateSnapshot: Snapshot %s creation initiated. Waiting for completion...", newSnapshotID)
 
 	snapshotCompletedWaiter := ec2.NewSnapshotCompletedWaiter(s.ec2Client)
-	if err := snapshotCompletedWaiter.Wait(ctx, &ec2.DescribeSnapshotsInput{SnapshotIds: []string{newSnapshotID}}, 30*time.Minute); err != nil {
+	if err := snapshotCompletedWaiter.Wait(ctx, &ec2.DescribeSnapshotsInput{SnapshotIds: []string{newSnapshotID}}, 2*time.Minute); err != nil {
 		return nil, fmt.Errorf("snapshot %s did not complete in time: %w", newSnapshotID, err)
 	}
 	s.logger.Info().Msgf("CreateSnapshot: Snapshot %s completed.", newSnapshotID)
@@ -469,12 +485,12 @@ func (s *AWSSnapshotter) CreateSnapshot(ctx context.Context, mountPoint string) 
 	}
 
 	// 5. Delete the jobVolumeID (the volume that was just snapshotted)
-	s.logger.Info().Msgf("CreateSnapshot: Deleting original volume %s as its state is now in snapshot %s...", jobVolumeID, newSnapshotID)
-	_, err = s.ec2Client.DeleteVolume(ctx, &ec2.DeleteVolumeInput{VolumeId: aws.String(jobVolumeID)})
+	s.logger.Info().Msgf("CreateSnapshot: Deleting original volume %s as its state is now in snapshot %s...", volumeInfo.VolumeID, newSnapshotID)
+	_, err = s.ec2Client.DeleteVolume(ctx, &ec2.DeleteVolumeInput{VolumeId: aws.String(volumeInfo.VolumeID)})
 	if err != nil {
-		s.logger.Warn().Msgf("Warning: Failed to delete volume %s: %v. Manual cleanup may be required.", jobVolumeID, err)
+		s.logger.Warn().Msgf("Warning: Failed to delete volume %s: %v. Manual cleanup may be required.", volumeInfo.VolumeID, err)
 	} else {
-		s.logger.Info().Msgf("CreateSnapshot: Volume %s successfully deleted.", jobVolumeID)
+		s.logger.Info().Msgf("CreateSnapshot: Volume %s successfully deleted.", volumeInfo.VolumeID)
 	}
 
 	return &CreateSnapshotOutput{SnapshotID: newSnapshotID}, nil
@@ -498,46 +514,3 @@ func (s *AWSSnapshotter) runCommand(ctx context.Context, name string, arg ...str
 	s.logger.Info().Msgf("Command successful. Output (first 200 chars or less):\n%s", logOutput)
 	return output, nil
 }
-
-/*
-func main() {
-	// Setup logging to include timestamps and file/line information
-	log.SetFlags(log.LstdFlags | log.Lshortfile)
-
-	ctx := context.Background()
-	snap, err := NewAWSSnapshotter(ctx)
-	if err != nil {
-		log.Fatalf("Failed to create AWSSnapshotter: %v", err)
-	}
-
-	// Example: Set GITHUB_REF_NAME for testing
-	// os.Setenv("GITHUB_REF_NAME", "feature/test-branch")
-
-	mountPoint := "/mnt/docker_data" // Using a test mount point
-
-	// Test RestoreSnapshot
-	log.Println("---- TESTING RESTORE SNAPSHOT ----")
-	restoreOutput, err := snap.RestoreSnapshot(ctx, mountPoint)
-	if err != nil {
-		log.Fatalf("Failed to restore snapshot: %v", err)
-	}
-	log.Printf("Snapshot restored. VolumeID: %s, DeviceName: %s mounted to %s", restoreOutput.VolumeID, restoreOutput.DeviceName, mountPoint)
-
-	// Simulate some work being done
-	log.Printf("Simulating work on %s... creating a test file.", mountPoint)
-	// _, err = runCommand(ctx, "sudo", "touch", filepath.Join(mountPoint, "test_file_from_job.txt"))
-	// if err != nil {
-	// 	log.Printf("Failed to create test file: %v", err)
-	// }
-
-	// Test CreateSnapshot
-	log.Println("---- TESTING CREATE SNAPSHOT ----")
-	createOutput, err := snap.CreateSnapshot(ctx, mountPoint)
-	if err != nil {
-		log.Fatalf("Failed to create snapshot: %v", err)
-	}
-	log.Printf("Snapshot created: %s", createOutput.SnapshotID)
-
-	log.Println("---- TEST COMPLETE ----")
-}
-*/

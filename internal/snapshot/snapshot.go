@@ -206,7 +206,7 @@ func (s *AWSSnapshotter) RestoreSnapshot(ctx context.Context, mountPoint string)
 		s.logger.Info().Msgf("RestoreSnapshot: Creating volume from snapshot %s", *latestSnapshot.SnapshotId)
 		createVolumeOutput, err := s.ec2Client.CreateVolume(ctx, &ec2.CreateVolumeInput{
 			SnapshotId:       latestSnapshot.SnapshotId,
-			AvailabilityZone: latestSnapshot.AvailabilityZone,
+			AvailabilityZone: aws.String(s.config.Az),
 			VolumeType:       defaultVolumeType,
 			// Size is determined by snapshot, but can be increased. Ensure it meets min throughput if increasing.
 			// Size:             aws.Int32(defaultVolumeSizeGiB),

@@ -14,6 +14,14 @@ import (
 	"github.com/sethvargo/go-githubactions"
 )
 
+var snapshotterConfig = snapshot.SnapshotterConfig{
+	GithubRef:  os.Getenv("GITHUB_REF"),
+	InstanceID: os.Getenv("RUNS_ON_INSTANCE_ID"),
+	Az:         os.Getenv("RUNS_ON_AWS_AZ"),
+	MainTagKey: os.Getenv("RUNS_ON_COST_ALLOCATION_TAG"),
+	MainTagVal: os.Getenv("RUNS_ON_STACK_NAME"),
+}
+
 // handleMainExecution contains the original main logic.
 func handleMainExecution(action *githubactions.Action, ctx context.Context, logger *zerolog.Logger) {
 	cfg, err := config.NewConfigFromInputs(action)
@@ -33,11 +41,7 @@ func handleMainExecution(action *githubactions.Action, ctx context.Context, logg
 	}
 
 	if len(cfg.SnapshotDirs) > 0 {
-		snapshotter, err := snapshot.NewAWSSnapshotter(ctx, logger, snapshot.SnapshotterConfig{
-			GithubRef:  os.Getenv("GITHUB_REF"),
-			InstanceID: os.Getenv("RUNS_ON_INSTANCE_ID"),
-			Az:         os.Getenv("RUNS_ON_AWS_AZ"),
-		})
+		snapshotter, err := snapshot.NewAWSSnapshotter(ctx, logger, snapshotterConfig)
 		if err != nil {
 			action.Errorf("Failed to create snapshotter: %v", err)
 		} else {
@@ -69,13 +73,7 @@ func handlePostExecution(action *githubactions.Action, ctx context.Context, logg
 
 	if len(cfg.SnapshotDirs) > 0 {
 		action.Infof("Snapshotting volumes...")
-		snapshotter, err := snapshot.NewAWSSnapshotter(ctx, logger, snapshot.SnapshotterConfig{
-			GithubRef:  os.Getenv("GITHUB_REF"),
-			InstanceID: os.Getenv("RUNS_ON_INSTANCE_ID"),
-			Az:         os.Getenv("RUNS_ON_AWS_AZ"),
-			MainTagKey: os.Getenv("RUNS_ON_COST_ALLOCATION_TAG"),
-			MainTagVal: os.Getenv("RUNS_ON_STACK_NAME"),
-		})
+		snapshotter, err := snapshot.NewAWSSnapshotter(ctx, logger, snapshotterConfig)
 		if err != nil {
 			action.Errorf("Failed to create snapshotter: %v", err)
 		} else {

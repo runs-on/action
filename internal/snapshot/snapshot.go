@@ -93,6 +93,14 @@ func NewAWSSnapshotter(ctx context.Context, logger *zerolog.Logger, cfg Snapshot
 		return nil, fmt.Errorf("githubRef is required")
 	}
 
+	if cfg.MainTagKey == "" {
+		return nil, fmt.Errorf("mainTagKey is required")
+	}
+
+	if cfg.MainTagVal == "" {
+		return nil, fmt.Errorf("mainTagVal is required")
+	}
+
 	return &AWSSnapshotter{
 		logger:    logger,
 		config:    cfg,

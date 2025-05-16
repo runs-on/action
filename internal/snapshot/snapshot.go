@@ -392,6 +392,11 @@ func (s *AWSSnapshotter) CreateSnapshot(ctx context.Context, mountPoint string) 
 	}
 
 	// 2. Operations on jobVolumeID
+	s.logger.Info().Msgf("CreateSnapshot: Cleaning up useless files...")
+	if _, err := s.runCommand(ctx, "sudo", "docker", "builder", "prune", "-f"); err != nil {
+		s.logger.Warn().Msgf("Warning: failed to prune docker builder: %v", err)
+	}
+
 	s.logger.Info().Msgf("CreateSnapshot: Stopping docker service...")
 	if _, err := s.runCommand(ctx, "sudo", "systemctl", "stop", "docker"); err != nil {
 		s.logger.Warn().Msgf("Warning: failed to stop docker (may not be running or installed): %v", err)
@@ -513,7 +518,7 @@ func (s *AWSSnapshotter) runCommand(ctx context.Context, name string, arg ...str
 	}
 	// Limit log output size for potentially verbose commands
 	logOutput := string(output)
-	if len(logOutput) > 200 {
+	if len(logOutput) > 400 {
 		logOutput = logOutput[:200] + "... (output truncated)"
 	}
 	s.logger.Info().Msgf("Command successful. Output (first 200 chars or less):\n%s", logOutput)

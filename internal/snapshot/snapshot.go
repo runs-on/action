@@ -29,7 +29,7 @@ const (
 	defaultVolumeSizeGiB        int32 = 20
 	defaultVolumeType                 = types.VolumeTypeGp3
 	defaultVolumeIops           int32 = 3000
-	defaultVolumeThroughputMBps int32 = 125        // As per user's README
+	defaultVolumeThroughputMBps int32 = 750
 	suggestedDeviceName               = "/dev/sdf" // AWS might assign /dev/xvdf etc.
 
 )

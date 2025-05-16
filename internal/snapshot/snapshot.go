@@ -26,11 +26,12 @@ const (
 	timestampTagKey      = "runs-on-timestamp"
 
 	// Default Volume Specifications
-	defaultVolumeSizeGiB        int32 = 20
-	defaultVolumeType                 = types.VolumeTypeGp3
-	defaultVolumeIops           int32 = 3000
-	defaultVolumeThroughputMBps int32 = 750
-	suggestedDeviceName               = "/dev/sdf" // AWS might assign /dev/xvdf etc.
+	defaultVolumeSizeGiB            int32 = 40
+	defaultVolumeType                     = types.VolumeTypeGp3
+	defaultVolumeIops               int32 = 3000
+	defaultVolumeThroughputMBps     int32 = 750
+	defaultVolumeInitializationRate int32 = 300
+	suggestedDeviceName                   = "/dev/sdf" // AWS might assign /dev/xvdf etc.
 
 	defaultVolumeInUseMaxWaitTime       = 5 * time.Minute
 	defaultVolumeAvailableMaxWaitTime   = 5 * time.Minute
@@ -205,8 +206,13 @@ func (s *AWSSnapshotter) RestoreSnapshot(ctx context.Context, mountPoint string)
 
 	var latestSnapshot *types.Snapshot
 	if len(snapshotsOutput.Snapshots) > 0 {
-		// Assuming only one snapshot should have latestSnapshotTagKey=true for a branch
+		// Find most recent snapshot by comparing timestamps
 		latestSnapshot = &snapshotsOutput.Snapshots[0]
+		for _, snap := range snapshotsOutput.Snapshots {
+			if snapTime := snap.StartTime; snapTime.After(*latestSnapshot.StartTime) {
+				latestSnapshot = &snap
+			}
+		}
 		s.logger.Info().Msgf("RestoreSnapshot: Found latest snapshot %s for branch %s", *latestSnapshot.SnapshotId, gitBranch)
 	} else {
 		s.logger.Info().Msgf("RestoreSnapshot: No existing snapshot found for branch %s. A new volume will be created.", gitBranch)
@@ -229,8 +235,9 @@ func (s *AWSSnapshotter) RestoreSnapshot(ctx context.Context, mountPoint string)
 			VolumeType:       defaultVolumeType,
 			// Size is determined by snapshot, but can be increased. Ensure it meets min throughput if increasing.
 			// Size:             aws.Int32(defaultVolumeSizeGiB),
-			Iops:       aws.Int32(defaultVolumeIops),
-			Throughput: aws.Int32(defaultVolumeThroughputMBps),
+			Iops:                     aws.Int32(defaultVolumeIops),
+			VolumeInitializationRate: aws.Int32(defaultVolumeInitializationRate),
+			Throughput:               aws.Int32(defaultVolumeThroughputMBps),
 			TagSpecifications: []types.TagSpecification{
 				{ResourceType: types.ResourceTypeVolume, Tags: commonVolumeTags},
 			},

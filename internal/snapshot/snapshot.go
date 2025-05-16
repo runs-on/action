@@ -31,7 +31,23 @@ const (
 	defaultVolumeIops           int32 = 3000
 	defaultVolumeThroughputMBps int32 = 125        // As per user's README
 	suggestedDeviceName               = "/dev/sdf" // AWS might assign /dev/xvdf etc.
+
 )
+
+var defaultSnapshotCompletedWaiterOptions = func(o *ec2.SnapshotCompletedWaiterOptions) {
+	o.MaxDelay = 10 * time.Second
+	o.MinDelay = 5 * time.Second
+}
+
+var defaultVolumeInUseWaiterOptions = func(o *ec2.VolumeInUseWaiterOptions) {
+	o.MaxDelay = 6 * time.Second
+	o.MinDelay = 3 * time.Second
+}
+
+var defaultVolumeAvailableWaiterOptions = func(o *ec2.VolumeAvailableWaiterOptions) {
+	o.MaxDelay = 6 * time.Second
+	o.MinDelay = 3 * time.Second
+}
 
 // Snapshot struct from the original file - kept for reference, but not directly used by new funcs
 type Snapshot struct {
@@ -259,10 +275,7 @@ func (s *AWSSnapshotter) RestoreSnapshot(ctx context.Context, mountPoint string)
 
 	// 4. Wait for volume to be 'available'
 	s.logger.Info().Msgf("RestoreSnapshot: Waiting for volume %s to become available...", *newVolume.VolumeId)
-	volumeAvailableWaiter := ec2.NewVolumeAvailableWaiter(s.ec2Client, func(o *ec2.VolumeAvailableWaiterOptions) {
-		o.MaxDelay = 10 * time.Second
-		o.MinDelay = 5 * time.Second
-	})
+	volumeAvailableWaiter := ec2.NewVolumeAvailableWaiter(s.ec2Client, defaultVolumeAvailableWaiterOptions)
 	if err := volumeAvailableWaiter.Wait(ctx, &ec2.DescribeVolumesInput{VolumeIds: []string{*newVolume.VolumeId}}, 5*time.Minute); err != nil {
 		return nil, fmt.Errorf("volume %s did not become available in time: %w", *newVolume.VolumeId, err)
 	}
@@ -281,7 +294,7 @@ func (s *AWSSnapshotter) RestoreSnapshot(ctx context.Context, mountPoint string)
 	actualDeviceName := *attachOutput.Device
 	s.logger.Info().Msgf("RestoreSnapshot: Volume %s attach initiated, device hint: %s. Waiting for attachment...", *newVolume.VolumeId, actualDeviceName)
 
-	volumeInUseWaiter := ec2.NewVolumeInUseWaiter(s.ec2Client)
+	volumeInUseWaiter := ec2.NewVolumeInUseWaiter(s.ec2Client, defaultVolumeInUseWaiterOptions)
 	err = volumeInUseWaiter.Wait(ctx, &ec2.DescribeVolumesInput{
 		VolumeIds: []string{*newVolume.VolumeId},
 		Filters: []types.Filter{
@@ -422,10 +435,7 @@ func (s *AWSSnapshotter) CreateSnapshot(ctx context.Context, mountPoint string) 
 		return nil, fmt.Errorf("failed to initiate detach for volume %s: %w", volumeInfo.VolumeID, err)
 	}
 
-	volumeDetachedWaiter := ec2.NewVolumeAvailableWaiter(s.ec2Client, func(o *ec2.VolumeAvailableWaiterOptions) {
-		o.MaxDelay = 10 * time.Second
-		o.MinDelay = 5 * time.Second
-	}) // Available state implies detached
+	volumeDetachedWaiter := ec2.NewVolumeAvailableWaiter(s.ec2Client, defaultVolumeAvailableWaiterOptions) // Available state implies detached
 	s.logger.Info().Msgf("CreateSnapshot: Waiting for volume %s to become available (detached)...", volumeInfo.VolumeID)
 	if err := volumeDetachedWaiter.Wait(ctx, &ec2.DescribeVolumesInput{VolumeIds: []string{volumeInfo.VolumeID}}, 5*time.Minute); err != nil {
 		return nil, fmt.Errorf("volume %s did not become available (detach) in time: %w", volumeInfo.VolumeID, err)
@@ -458,10 +468,7 @@ func (s *AWSSnapshotter) CreateSnapshot(ctx context.Context, mountPoint string) 
 	newSnapshotID := *createSnapshotOutput.SnapshotId
 	s.logger.Info().Msgf("CreateSnapshot: Snapshot %s creation initiated. Waiting for completion...", newSnapshotID)
 
-	snapshotCompletedWaiter := ec2.NewSnapshotCompletedWaiter(s.ec2Client, func(o *ec2.SnapshotCompletedWaiterOptions) {
-		o.MaxDelay = 10 * time.Second
-		o.MinDelay = 5 * time.Second
-	})
+	snapshotCompletedWaiter := ec2.NewSnapshotCompletedWaiter(s.ec2Client, defaultSnapshotCompletedWaiterOptions)
 	if err := snapshotCompletedWaiter.Wait(ctx, &ec2.DescribeSnapshotsInput{SnapshotIds: []string{newSnapshotID}}, 2*time.Minute); err != nil {
 		return nil, fmt.Errorf("snapshot %s did not complete in time: %w", newSnapshotID, err)
 	}

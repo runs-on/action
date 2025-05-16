@@ -15,11 +15,12 @@ import (
 )
 
 var snapshotterConfig = snapshot.SnapshotterConfig{
-	GithubRef:  os.Getenv("GITHUB_REF"),
-	InstanceID: os.Getenv("RUNS_ON_INSTANCE_ID"),
-	Az:         os.Getenv("RUNS_ON_AWS_AZ"),
-	MainTagKey: os.Getenv("RUNS_ON_COST_ALLOCATION_TAG"),
-	MainTagVal: os.Getenv("RUNS_ON_STACK_NAME"),
+	GithubRef:                 os.Getenv("GITHUB_REF"),
+	InstanceID:                os.Getenv("RUNS_ON_INSTANCE_ID"),
+	Az:                        os.Getenv("RUNS_ON_AWS_AZ"),
+	MainTagKey:                os.Getenv("RUNS_ON_COST_ALLOCATION_TAG"),
+	MainTagVal:                os.Getenv("RUNS_ON_STACK_NAME"),
+	WaitForSnapshotCompletion: false,
 }
 
 // handleMainExecution contains the original main logic.

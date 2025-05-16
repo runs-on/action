@@ -83,11 +83,12 @@ type AWSSnapshotter struct {
 }
 
 type SnapshotterConfig struct {
-	GithubRef  string
-	InstanceID string
-	Az         string
-	MainTagKey string
-	MainTagVal string
+	GithubRef                 string
+	InstanceID                string
+	Az                        string
+	MainTagKey                string
+	MainTagVal                string
+	WaitForSnapshotCompletion bool
 }
 
 // NewAWSSnapshotter creates a new AWSSnapshotter instance.
@@ -477,40 +478,46 @@ func (s *AWSSnapshotter) CreateSnapshot(ctx context.Context, mountPoint string) 
 		return nil, fmt.Errorf("failed to create snapshot from volume %s: %w", volumeInfo.VolumeID, err)
 	}
 	newSnapshotID := *createSnapshotOutput.SnapshotId
-	s.logger.Info().Msgf("CreateSnapshot: Snapshot %s creation initiated. Waiting for completion...", newSnapshotID)
+	s.logger.Info().Msgf("CreateSnapshot: Snapshot %s creation initiated.", newSnapshotID)
 
+	if !s.config.WaitForSnapshotCompletion {
+		s.logger.Info().Msgf("CreateSnapshot: not waiting for snapshot completion, returning immediately.")
+		return &CreateSnapshotOutput{SnapshotID: newSnapshotID}, nil
+	}
+
+	s.logger.Info().Msgf("CreateSnapshot: Waiting for snapshot %s completion...", newSnapshotID)
 	snapshotCompletedWaiter := ec2.NewSnapshotCompletedWaiter(s.ec2Client, defaultSnapshotCompletedWaiterOptions)
 	if err := snapshotCompletedWaiter.Wait(ctx, &ec2.DescribeSnapshotsInput{SnapshotIds: []string{newSnapshotID}}, defaultSnapshotCompletedMaxWaitTime); err != nil {
 		return nil, fmt.Errorf("snapshot %s did not complete in time: %w", newSnapshotID, err)
 	}
 	s.logger.Info().Msgf("CreateSnapshot: Snapshot %s completed.", newSnapshotID)
 
-	// 4. Manage old 'latest' snapshots for this branch
-	s.logger.Info().Msgf("CreateSnapshot: Finding old 'latest' snapshots for branch %s to untag...", gitBranch)
-	oldSnapshotsOutput, err := s.ec2Client.DescribeSnapshots(ctx, &ec2.DescribeSnapshotsInput{
-		Filters: []types.Filter{
-			{Name: aws.String("tag:" + s.config.MainTagKey), Values: []string{s.config.MainTagVal}},
-			{Name: aws.String("tag:" + snapshotBranchTagKey), Values: []string{gitBranch}},
-			{Name: aws.String("tag:" + latestSnapshotTagKey), Values: []string{"true"}},
-		},
-		OwnerIds: []string{"self"},
-	})
-	if err != nil {
-		s.logger.Warn().Msgf("Warning: Failed to describe old snapshots for untagging: %v. Manual cleanup might be needed.", err)
-	} else {
-		for _, oldSnap := range oldSnapshotsOutput.Snapshots {
-			if *oldSnap.SnapshotId != newSnapshotID {
-				s.logger.Info().Msgf("CreateSnapshot: Deleting old snapshot %s", *oldSnap.SnapshotId)
-				_, err := s.ec2Client.DeleteSnapshot(ctx, &ec2.DeleteSnapshotInput{
-					SnapshotId: oldSnap.SnapshotId,
-				})
-				if err != nil {
-					s.logger.Warn().Msgf("Warning: Failed to delete old snapshot %s: %v", *oldSnap.SnapshotId, err)
-					continue
-				}
-			}
-		}
-	}
+	// // 4. Manage old 'latest' snapshots for this branch
+	// s.logger.Info().Msgf("CreateSnapshot: Finding old 'latest' snapshots for branch %s to untag...", gitBranch)
+	// oldSnapshotsOutput, err := s.ec2Client.DescribeSnapshots(ctx, &ec2.DescribeSnapshotsInput{
+	// 	Filters: []types.Filter{
+	// 		{Name: aws.String("tag:" + s.config.MainTagKey), Values: []string{s.config.MainTagVal}},
+	// 		{Name: aws.String("tag:" + snapshotBranchTagKey), Values: []string{gitBranch}},
+	// 		{Name: aws.String("tag:" + latestSnapshotTagKey), Values: []string{"true"}},
+	// 	},
+	// 	OwnerIds: []string{"self"},
+	// })
+	// if err != nil {
+	// 	s.logger.Warn().Msgf("Warning: Failed to describe old snapshots for untagging: %v. Manual cleanup might be needed.", err)
+	// } else {
+	// 	for _, oldSnap := range oldSnapshotsOutput.Snapshots {
+	// 		if *oldSnap.SnapshotId != newSnapshotID {
+	// 			s.logger.Info().Msgf("CreateSnapshot: Deleting old snapshot %s", *oldSnap.SnapshotId)
+	// 			_, err := s.ec2Client.DeleteSnapshot(ctx, &ec2.DeleteSnapshotInput{
+	// 				SnapshotId: oldSnap.SnapshotId,
+	// 			})
+	// 			if err != nil {
+	// 				s.logger.Warn().Msgf("Warning: Failed to delete old snapshot %s: %v", *oldSnap.SnapshotId, err)
+	// 				continue
+	// 			}
+	// 		}
+	// 	}
+	// }
 
 	// 5. Delete the jobVolumeID (the volume that was just snapshotted)
 	s.logger.Info().Msgf("CreateSnapshot: Deleting original volume %s as its state is now in snapshot %s...", volumeInfo.VolumeID, newSnapshotID)

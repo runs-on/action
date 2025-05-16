@@ -73,6 +73,8 @@ func handlePostExecution(action *githubactions.Action, ctx context.Context, logg
 			GithubRef:  os.Getenv("GITHUB_REF"),
 			InstanceID: os.Getenv("RUNS_ON_INSTANCE_ID"),
 			Az:         os.Getenv("RUNS_ON_AWS_AZ"),
+			MainTagKey: os.Getenv("RUNS_ON_COST_ALLOCATION_TAG"),
+			MainTagVal: os.Getenv("RUNS_ON_STACK_NAME"),
 		})
 		if err != nil {
 			action.Errorf("Failed to create snapshotter: %v", err)

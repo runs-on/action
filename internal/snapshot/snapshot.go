@@ -69,6 +69,8 @@ type SnapshotterConfig struct {
 	GithubRef  string
 	InstanceID string
 	Az         string
+	MainTagKey string
+	MainTagVal string
 }
 
 // NewAWSSnapshotter creates a new AWSSnapshotter instance.
@@ -166,6 +168,7 @@ func (s *AWSSnapshotter) RestoreSnapshot(ctx context.Context, mountPoint string)
 	s.logger.Info().Msgf("RestoreSnapshot: Searching for the latest snapshot for branch: %s", gitBranch)
 	snapshotsOutput, err := s.ec2Client.DescribeSnapshots(ctx, &ec2.DescribeSnapshotsInput{
 		Filters: []types.Filter{
+			{Name: aws.String("tag:" + s.config.MainTagKey), Values: []string{s.config.MainTagVal}},
 			{Name: aws.String("tag:" + snapshotBranchTagKey), Values: []string{gitBranch}},
 			{Name: aws.String("tag:" + latestSnapshotTagKey), Values: []string{"true"}},
 			{Name: aws.String("status"), Values: []string{string(types.SnapshotStateCompleted)}},
@@ -186,6 +189,7 @@ func (s *AWSSnapshotter) RestoreSnapshot(ctx context.Context, mountPoint string)
 	}
 
 	commonVolumeTags := []types.Tag{
+		{Key: aws.String(s.config.MainTagKey), Value: aws.String(s.config.MainTagVal)},
 		{Key: aws.String(jobVolumeTagKey), Value: aws.String(jobIdentifier)},
 		{Key: aws.String(snapshotBranchTagKey), Value: aws.String(gitBranch)}, // Tag volume with branch for easier manual lookup
 		{Key: aws.String(nameTagKey), Value: aws.String(fmt.Sprintf("job-volume-%s-%s", gitBranch, jobIdentifier))},
@@ -283,33 +287,18 @@ func (s *AWSSnapshotter) RestoreSnapshot(ctx context.Context, mountPoint string)
 		},
 	}, 2*time.Minute)
 	if err != nil {
-		s.logger.Error().Msgf("RestoreSnapshot: Volume %s did not attach successfully and current state unknown: %v", *newVolume.VolumeId, err)
-
-		// Check actual attachment state if waiter fails
-		descVol, descErr := s.ec2Client.DescribeVolumes(ctx, &ec2.DescribeVolumesInput{VolumeIds: []string{*newVolume.VolumeId}})
-		if descErr == nil && len(descVol.Volumes) > 0 && len(descVol.Volumes[0].Attachments) > 0 {
-			att := descVol.Volumes[0].Attachments[0]
-			if att.State == types.VolumeAttachmentStateAttached {
-				actualDeviceName = *att.Device // Ensure we have the correct device name
-				s.logger.Info().Msgf("RestoreSnapshot: Volume %s successfully attached as %s (waiter timed out but status confirmed).", *newVolume.VolumeId, actualDeviceName)
-			} else {
-				return nil, fmt.Errorf("volume %s did not attach successfully (state: %s): %w", *newVolume.VolumeId, att.State, err)
-			}
-		} else {
-			return nil, fmt.Errorf("volume %s did not attach successfully and current state unknown: %w", *newVolume.VolumeId, err)
-		}
-	} else {
-		// Fetch volume details again to confirm device name, as the attachOutput.Device might be a suggestion
-		// and the waiter confirms attachment, not necessarily the final device name if it changed.
-		descVolOutput, descErr := s.ec2Client.DescribeVolumes(ctx, &ec2.DescribeVolumesInput{VolumeIds: []string{*newVolume.VolumeId}})
-		s.logger.Info().Msgf("RestoreSnapshot: Volume %s attachments: %v", *newVolume.VolumeId, descVolOutput.Volumes[0].Attachments)
-		if descErr == nil && len(descVolOutput.Volumes) > 0 && len(descVolOutput.Volumes[0].Attachments) > 0 {
-			actualDeviceName = *descVolOutput.Volumes[0].Attachments[0].Device
-		} else {
-			return nil, fmt.Errorf("volume %s did not attach successfully and current state unknown: %w", *newVolume.VolumeId, err)
-		}
-		s.logger.Info().Msgf("RestoreSnapshot: Volume %s attached as %s.", *newVolume.VolumeId, actualDeviceName)
+		return nil, fmt.Errorf("volume %s did not attach successfully and current state unknown: %w", *newVolume.VolumeId, err)
 	}
+	// Fetch volume details again to confirm device name, as the attachOutput.Device might be a suggestion
+	// and the waiter confirms attachment, not necessarily the final device name if it changed.
+	descVolOutput, descErr := s.ec2Client.DescribeVolumes(ctx, &ec2.DescribeVolumesInput{VolumeIds: []string{*newVolume.VolumeId}})
+	s.logger.Info().Msgf("RestoreSnapshot: Volume %s attachments: %v", *newVolume.VolumeId, descVolOutput.Volumes[0].Attachments)
+	if descErr == nil && len(descVolOutput.Volumes) > 0 && len(descVolOutput.Volumes[0].Attachments) > 0 {
+		actualDeviceName = *descVolOutput.Volumes[0].Attachments[0].Device
+	} else {
+		return nil, fmt.Errorf("volume %s did not attach successfully and current state unknown: %w", *newVolume.VolumeId, err)
+	}
+	s.logger.Info().Msgf("RestoreSnapshot: Volume %s attached as %s.", *newVolume.VolumeId, actualDeviceName)
 
 	// 6. Mounting & Docker
 	s.logger.Info().Msgf("RestoreSnapshot: Stopping docker service...")
@@ -443,6 +432,7 @@ func (s *AWSSnapshotter) CreateSnapshot(ctx context.Context, mountPoint string) 
 			{
 				ResourceType: types.ResourceTypeSnapshot,
 				Tags: []types.Tag{
+					{Key: aws.String(s.config.MainTagKey), Value: aws.String(s.config.MainTagVal)},
 					{Key: aws.String(snapshotBranchTagKey), Value: aws.String(s.config.GithubRef)},
 					{Key: aws.String(latestSnapshotTagKey), Value: aws.String("true")},
 					{Key: aws.String(nameTagKey), Value: aws.String(snapshotName)},
@@ -468,6 +458,7 @@ func (s *AWSSnapshotter) CreateSnapshot(ctx context.Context, mountPoint string) 
 	s.logger.Info().Msgf("CreateSnapshot: Finding old 'latest' snapshots for branch %s to untag...", gitBranch)
 	oldSnapshotsOutput, err := s.ec2Client.DescribeSnapshots(ctx, &ec2.DescribeSnapshotsInput{
 		Filters: []types.Filter{
+			{Name: aws.String("tag:" + s.config.MainTagKey), Values: []string{s.config.MainTagVal}},
 			{Name: aws.String("tag:" + snapshotBranchTagKey), Values: []string{gitBranch}},
 			{Name: aws.String("tag:" + latestSnapshotTagKey), Values: []string{"true"}},
 		},
@@ -478,13 +469,13 @@ func (s *AWSSnapshotter) CreateSnapshot(ctx context.Context, mountPoint string) 
 	} else {
 		for _, oldSnap := range oldSnapshotsOutput.Snapshots {
 			if *oldSnap.SnapshotId != newSnapshotID {
-				s.logger.Info().Msgf("CreateSnapshot: Removing '%s=true' tag from old snapshot %s", latestSnapshotTagKey, *oldSnap.SnapshotId)
-				_, err := s.ec2Client.DeleteTags(ctx, &ec2.DeleteTagsInput{
-					Resources: []string{*oldSnap.SnapshotId},
-					Tags:      []types.Tag{{Key: aws.String(latestSnapshotTagKey), Value: aws.String("true")}},
+				s.logger.Info().Msgf("CreateSnapshot: Deleting old snapshot %s", *oldSnap.SnapshotId)
+				_, err := s.ec2Client.DeleteSnapshot(ctx, &ec2.DeleteSnapshotInput{
+					SnapshotId: oldSnap.SnapshotId,
 				})
 				if err != nil {
-					s.logger.Warn().Msgf("Warning: Failed to remove '%s' tag from old snapshot %s: %v", latestSnapshotTagKey, *oldSnap.SnapshotId, err)
+					s.logger.Warn().Msgf("Warning: Failed to delete old snapshot %s: %v", *oldSnap.SnapshotId, err)
+					continue
 				}
 			}
 		}

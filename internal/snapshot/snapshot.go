@@ -18,9 +18,6 @@ import (
 )
 
 const (
-	// Environment variable to get the current git branch
-	gitBranchEnvVar = "GITHUB_REF_NAME" // Or appropriate env var for your CI
-
 	// Tags used for resource identification
 	snapshotBranchTagKey = "runs-on-snapshot-branch"
 	latestSnapshotTagKey = "runs-on-latest-snapshot-for-branch"
@@ -456,7 +453,10 @@ func (s *AWSSnapshotter) CreateSnapshot(ctx context.Context, mountPoint string) 
 	newSnapshotID := *createSnapshotOutput.SnapshotId
 	s.logger.Info().Msgf("CreateSnapshot: Snapshot %s creation initiated. Waiting for completion...", newSnapshotID)
 
-	snapshotCompletedWaiter := ec2.NewSnapshotCompletedWaiter(s.ec2Client)
+	snapshotCompletedWaiter := ec2.NewSnapshotCompletedWaiter(s.ec2Client, func(o *ec2.SnapshotCompletedWaiterOptions) {
+		o.MaxDelay = 10 * time.Second
+		o.MinDelay = 5 * time.Second
+	})
 	if err := snapshotCompletedWaiter.Wait(ctx, &ec2.DescribeSnapshotsInput{SnapshotIds: []string{newSnapshotID}}, 2*time.Minute); err != nil {
 		return nil, fmt.Errorf("snapshot %s did not complete in time: %w", newSnapshotID, err)
 	}

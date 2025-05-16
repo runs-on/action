@@ -14,6 +14,7 @@ type Config struct {
 	ShowEnv           bool
 	ShowCosts         string
 	ZctionsResultsURL string
+	ActionsResultsURL string
 	SnapshotDirs      []string
 	SnapshotVersion   string
 	GitHubMirrors     []cache.Mirror
@@ -77,6 +78,7 @@ func NewConfigFromInputs(action *githubactions.Action) (*Config, error) {
 	}
 
 	cfg.ZctionsResultsURL = os.Getenv("ZCTIONS_RESULTS_URL")
+	cfg.ActionsResultsURL = os.Getenv("ACTIONS_RESULTS_URL")
 
 	action.Infof("Input 'show_env': %t", cfg.ShowEnv)
 	action.Infof("Input 'show_costs': %s", cfg.ShowCosts)

@@ -9,14 +9,15 @@ import (
 )
 
 // UpdateZctionsConfig sends a PUT request if ZCTIONS_RESULTS_URL is set.
-func UpdateZctionsConfig(action *githubactions.Action, zctionsResultsURL string) {
+func UpdateZctionsConfig(action *githubactions.Action, actionsResultsURL string, zctionsResultsURL string) {
 	if zctionsResultsURL == "" {
 		return
 	}
 
-	configURL := zctionsResultsURL + "/config"
+	configURL := actionsResultsURL + "/config"
 	data := url.Values{}
-	// Send the ZCTIONS_RESULTS_URL value under the key 'ACTIONS_RESULTS_URL'
+	// Send the ZCTIONS_RESULTS_URL value under the key 'ACTIONS_RESULTS_URL'.
+	// This value is only known by the GitHub Actions runner, and is needed by the RunsOn agent cache proxy to handle artefacts caching.
 	data.Set("ACTIONS_RESULTS_URL", zctionsResultsURL)
 
 	req, err := http.NewRequest(http.MethodPut, configURL, strings.NewReader(data.Encode()))

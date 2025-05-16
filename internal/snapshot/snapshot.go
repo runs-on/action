@@ -226,7 +226,8 @@ func (s *AWSSnapshotter) RestoreSnapshot(ctx context.Context, mountPoint string)
 		{Key: aws.String(timestampTagKey), Value: aws.String(currentTime.Format(time.RFC3339))},
 	}
 
-	if latestSnapshot != nil {
+	// Use snapshot only if its size is at least the default volume size, otherwise create a new volume
+	if latestSnapshot != nil && latestSnapshot.VolumeSize != nil && *latestSnapshot.VolumeSize >= defaultVolumeSizeGiB {
 		// 2. Create Volume from Snapshot
 		s.logger.Info().Msgf("RestoreSnapshot: Creating volume from snapshot %s", *latestSnapshot.SnapshotId)
 		createVolumeOutput, err := s.ec2Client.CreateVolume(ctx, &ec2.CreateVolumeInput{

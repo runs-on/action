@@ -117,10 +117,6 @@ func NewAWSSnapshotter(ctx context.Context, logger *zerolog.Logger, cfg Snapshot
 		return nil, fmt.Errorf("githubRef is required")
 	}
 
-	if cfg.DefaultBranch == "" {
-		return nil, fmt.Errorf("defaultBranch is required")
-	}
-
 	if cfg.CustomTags == nil {
 		cfg.CustomTags = []runsOnConfig.Tag{}
 	}
@@ -243,7 +239,7 @@ func (s *AWSSnapshotter) RestoreSnapshot(ctx context.Context, mountPoint string)
 			}
 		}
 		s.logger.Info().Msgf("RestoreSnapshot: Found latest snapshot %s for branch %s", *latestSnapshot.SnapshotId, gitBranch)
-	} else {
+	} else if s.config.DefaultBranch != "" {
 		// Try finding snapshot from default branch
 		filters[0] = types.Filter{Name: aws.String("tag:" + snapshotBranchTagKey), Values: []string{s.getSnapshotTagValueDefaultBranch()}}
 		s.logger.Info().Msgf("RestoreSnapshot: No snapshot found for branch %s, trying default branch %s with tags: %v", gitBranch, s.config.DefaultBranch, filters)

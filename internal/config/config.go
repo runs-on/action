@@ -48,6 +48,7 @@ func NewConfigFromInputs(action *githubactions.Action) (*Config, error) {
 			action.Warningf("Error parsing RunsOn config file: %v", err)
 		} else {
 			cfg.RunnerConfig = &runnerConfig
+			action.Infof("Runner config: %v", cfg.RunnerConfig)
 		}
 	}
 

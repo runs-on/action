@@ -20,9 +20,10 @@ import (
 
 const (
 	// Tags used for resource identification
-	snapshotBranchTagKey = "runs-on-snapshot-branch"
-	nameTagKey           = "Name"
-	timestampTagKey      = "runs-on-timestamp"
+	snapshotBranchTagKey     = "runs-on-snapshot-branch"
+	snapshotRepositoryTagKey = "runs-on-snapshot-repository"
+	nameTagKey               = "Name"
+	timestampTagKey          = "runs-on-timestamp"
 
 	// Default Volume Specifications
 	defaultVolumeSizeGiB            int32 = 40
@@ -84,6 +85,7 @@ type AWSSnapshotter struct {
 type SnapshotterConfig struct {
 	Version                   string
 	GithubRef                 string
+	GithubRepository          string
 	InstanceID                string
 	Az                        string
 	WaitForSnapshotCompletion bool
@@ -111,6 +113,10 @@ func NewAWSSnapshotter(ctx context.Context, logger *zerolog.Logger, cfg Snapshot
 
 	if cfg.Az == "" {
 		return nil, fmt.Errorf("az is required")
+	}
+
+	if cfg.GithubRepository == "" {
+		return nil, fmt.Errorf("githubRepository is required")
 	}
 
 	if cfg.GithubRef == "" {
@@ -215,6 +221,7 @@ func (s *AWSSnapshotter) RestoreSnapshot(ctx context.Context, mountPoint string)
 	// 1. Find latest snapshot for branch
 	filters := []types.Filter{
 		{Name: aws.String("tag:" + snapshotBranchTagKey), Values: []string{s.getSnapshotTagValue()}},
+		{Name: aws.String("tag:" + snapshotRepositoryTagKey), Values: []string{s.config.GithubRepository}},
 		{Name: aws.String("status"), Values: []string{string(types.SnapshotStateCompleted)}},
 	}
 	for _, tag := range s.config.CustomTags {
@@ -267,6 +274,7 @@ func (s *AWSSnapshotter) RestoreSnapshot(ctx context.Context, mountPoint string)
 
 	commonVolumeTags := []types.Tag{
 		{Key: aws.String(snapshotBranchTagKey), Value: aws.String(s.getSnapshotTagValue())},
+		{Key: aws.String(snapshotRepositoryTagKey), Value: aws.String(s.config.GithubRepository)},
 		{Key: aws.String(nameTagKey), Value: aws.String(s.config.VolumeName)},
 	}
 	for _, tag := range s.config.CustomTags {
@@ -516,6 +524,7 @@ func (s *AWSSnapshotter) CreateSnapshot(ctx context.Context, mountPoint string) 
 	s.logger.Info().Msgf("CreateSnapshot: Creating snapshot '%s' from volume %s for branch %s...", s.config.SnapshotName, volumeInfo.VolumeID, s.config.GithubRef)
 	snapshotTags := []types.Tag{
 		{Key: aws.String(snapshotBranchTagKey), Value: aws.String(s.getSnapshotTagValue())},
+		{Key: aws.String(snapshotRepositoryTagKey), Value: aws.String(s.config.GithubRepository)},
 		{Key: aws.String(nameTagKey), Value: aws.String(s.config.SnapshotName)},
 	}
 	for _, tag := range s.config.CustomTags {

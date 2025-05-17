@@ -296,11 +296,9 @@ func (s *AWSSnapshotter) RestoreSnapshot(ctx context.Context, mountPoint string)
 			SnapshotId:       latestSnapshot.SnapshotId,
 			AvailabilityZone: aws.String(s.config.Az),
 			VolumeType:       defaultVolumeType,
-			// Size is determined by snapshot, but can be increased. Ensure it meets min throughput if increasing.
-			// Size:             aws.Int32(defaultVolumeSizeGiB),
-			Iops:                     aws.Int32(defaultVolumeIops),
-			VolumeInitializationRate: aws.Int32(defaultVolumeInitializationRate),
-			Throughput:               aws.Int32(defaultVolumeThroughputMBps),
+			Iops:             aws.Int32(defaultVolumeIops),
+			// VolumeInitializationRate: aws.Int32(defaultVolumeInitializationRate),
+			Throughput: aws.Int32(defaultVolumeThroughputMBps),
 			TagSpecifications: []types.TagSpecification{
 				{ResourceType: types.ResourceTypeVolume, Tags: commonVolumeTags},
 			},

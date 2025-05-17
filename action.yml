@@ -17,7 +17,7 @@ inputs:
     required: false
     default: 'inline'
   snapshot_dirs:
-    description: 'Newline separated list of directories to snapshot across job execution'
+    description: 'Newline separated list of directories (absolute paths) to snapshot across job execution.'
     required: false
     default: ''
   snapshot_version:

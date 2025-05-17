@@ -43,6 +43,7 @@ func handleMainExecution(action *githubactions.Action, ctx context.Context, logg
 		if cfg.RunnerConfig == nil {
 			action.Warningf("No runner config provided (you need to upgrade your RunsOn installation). Snapshotting will not be performed.")
 		} else {
+			action.Infof("Restoring volumes...")
 			snapshotterConfig.DefaultBranch = cfg.RunnerConfig.DefaultBranch
 			snapshotterConfig.CustomTags = cfg.RunnerConfig.CustomTags
 			snapshotter, err := snapshot.NewAWSSnapshotter(ctx, logger, snapshotterConfig)
@@ -81,6 +82,8 @@ func handlePostExecution(action *githubactions.Action, ctx context.Context, logg
 			action.Warningf("No runner config provided (you need to upgrade your RunsOn installation). Snapshotting will not be performed.")
 		} else {
 			action.Infof("Snapshotting volumes...")
+			snapshotterConfig.DefaultBranch = cfg.RunnerConfig.DefaultBranch
+			snapshotterConfig.CustomTags = cfg.RunnerConfig.CustomTags
 			snapshotter, err := snapshot.NewAWSSnapshotter(ctx, logger, snapshotterConfig)
 			if err != nil {
 				action.Errorf("Failed to create snapshotter: %v", err)

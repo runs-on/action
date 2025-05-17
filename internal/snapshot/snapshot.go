@@ -24,11 +24,13 @@ const (
 	snapshotRepositoryTagKey = "runs-on-snapshot-repository"
 	nameTagKey               = "Name"
 	timestampTagKey          = "runs-on-timestamp"
+	lifeDurationTagKey       = "runs-on-delete-after"
 
 	// Default Volume Specifications
-	defaultVolumeSizeGiB int32 = 40
-	defaultVolumeType          = types.VolumeTypeGp3
-	defaultVolumeIops    int32 = 3000
+	defaultVolumeLifeDurationMinutes int32 = 20
+	defaultVolumeSizeGiB             int32 = 40
+	defaultVolumeType                      = types.VolumeTypeGp3
+	defaultVolumeIops                int32 = 3000
 	// Only paid for the life duration of the volume (i.e. job duration + cleanup after 10 minutes)
 	defaultVolumeThroughputMBps int32 = 750
 	// Volume Initialization Rate Price - https://aws.amazon.com/ebs/pricing/
@@ -280,6 +282,7 @@ func (s *AWSSnapshotter) RestoreSnapshot(ctx context.Context, mountPoint string)
 		{Key: aws.String(snapshotBranchTagKey), Value: aws.String(s.getSnapshotTagValue())},
 		{Key: aws.String(snapshotRepositoryTagKey), Value: aws.String(s.config.GithubRepository)},
 		{Key: aws.String(nameTagKey), Value: aws.String(s.config.VolumeName)},
+		{Key: aws.String(lifeDurationTagKey), Value: aws.String(fmt.Sprintf("%d", time.Now().Add(time.Duration(defaultVolumeLifeDurationMinutes)*time.Minute).Unix()))},
 	}
 	for _, tag := range s.config.CustomTags {
 		commonVolumeTags = append(commonVolumeTags, types.Tag{Key: aws.String(tag.Key), Value: aws.String(tag.Value)})

@@ -384,10 +384,13 @@ func (s *AWSSnapshotter) RestoreSnapshot(ctx context.Context, mountPoint string)
 	}
 	s.logger.Info().Msgf("RestoreSnapshot: Volume %s attached as %s.", *newVolume.VolumeId, actualDeviceName)
 
-	// 6. Mounting & Docker
-	s.logger.Info().Msgf("RestoreSnapshot: Stopping docker service...")
-	if _, err := s.runCommand(ctx, "sudo", "systemctl", "stop", "docker"); err != nil {
-		s.logger.Warn().Msgf("RestoreSnapshot: failed to stop docker (may not be running or installed): %v", err)
+	if strings.HasPrefix(mountPoint, "/var/lib/docker") {
+		// 6. Mounting & Docker
+		s.logger.Info().Msgf("RestoreSnapshot: Stopping docker service...")
+		if _, err := s.runCommand(ctx, "sudo", "systemctl", "stop", "docker"); err != nil {
+			s.logger.Warn().Msgf("RestoreSnapshot: failed to stop docker (may not be running or installed): %v", err)
+
+		}
 	}
 
 	s.logger.Info().Msgf("RestoreSnapshot: Attempting to unmount %s (defensive)", mountPoint)
@@ -395,7 +398,7 @@ func (s *AWSSnapshotter) RestoreSnapshot(ctx context.Context, mountPoint string)
 		s.logger.Warn().Msgf("RestoreSnapshot: Defensive unmount of %s failed (likely not mounted): %v", mountPoint, err)
 	}
 
-	// display disk cofniguration
+	// display disk configuration
 	s.logger.Info().Msgf("RestoreSnapshot: Displaying disk configuration...")
 
 	// actual device name is the last entry from `lsblk -d -n -o PATH,MODEL` that has a MODEL = 'Amazon Elastic Block Store'
@@ -444,22 +447,24 @@ func (s *AWSSnapshotter) RestoreSnapshot(ctx context.Context, mountPoint string)
 	}
 	s.logger.Info().Msgf("RestoreSnapshot: Device %s mounted to %s.", actualDeviceName, mountPoint)
 
-	s.logger.Info().Msgf("RestoreSnapshot: Starting docker service...")
-	if _, err := s.runCommand(ctx, "sudo", "systemctl", "start", "docker"); err != nil {
-		return nil, fmt.Errorf("failed to start docker after mounting: %w", err)
-	}
-	s.logger.Info().Msgf("RestoreSnapshot: Docker service started.")
-
-	s.logger.Info().Msgf("RestoreSnapshot: Displaying docker disk usage...")
-	if _, err := s.runCommand(ctx, "sudo", "docker", "system", "df"); err != nil {
-		s.logger.Warn().Msgf("RestoreSnapshot: failed to display docker disk usage: %v. Docker snapshot may not be working so unmounting docker folder.", err)
-		// Try to unmount docker folder on error
-		if _, err := s.runCommand(ctx, "sudo", "umount", "/var/lib/docker"); err != nil {
-			s.logger.Warn().Msgf("RestoreSnapshot: failed to unmount docker folder: %v", err)
+	if strings.HasPrefix(mountPoint, "/var/lib/docker") {
+		s.logger.Info().Msgf("RestoreSnapshot: Starting docker service...")
+		if _, err := s.runCommand(ctx, "sudo", "systemctl", "start", "docker"); err != nil {
+			return nil, fmt.Errorf("failed to start docker after mounting: %w", err)
 		}
-		return nil, fmt.Errorf("failed to display docker disk usage: %w", err)
+		s.logger.Info().Msgf("RestoreSnapshot: Docker service started.")
+
+		s.logger.Info().Msgf("RestoreSnapshot: Displaying docker disk usage...")
+		if _, err := s.runCommand(ctx, "sudo", "docker", "system", "df"); err != nil {
+			s.logger.Warn().Msgf("RestoreSnapshot: failed to display docker disk usage: %v. Docker snapshot may not be working so unmounting docker folder.", err)
+			// Try to unmount docker folder on error
+			if _, err := s.runCommand(ctx, "sudo", "umount", mountPoint); err != nil {
+				s.logger.Warn().Msgf("RestoreSnapshot: failed to unmount docker folder: %v", err)
+			}
+			return nil, fmt.Errorf("failed to display docker disk usage: %w", err)
+		}
+		s.logger.Info().Msgf("RestoreSnapshot: Docker disk usage displayed.")
 	}
-	s.logger.Info().Msgf("RestoreSnapshot: Docker disk usage displayed.")
 
 	return &RestoreSnapshotOutput{VolumeID: *newVolume.VolumeId, DeviceName: actualDeviceName}, nil
 }
@@ -482,14 +487,16 @@ func (s *AWSSnapshotter) CreateSnapshot(ctx context.Context, mountPoint string) 
 	}
 
 	// 2. Operations on jobVolumeID
-	s.logger.Info().Msgf("CreateSnapshot: Cleaning up useless files...")
-	if _, err := s.runCommand(ctx, "sudo", "docker", "builder", "prune", "-f"); err != nil {
-		s.logger.Warn().Msgf("Warning: failed to prune docker builder: %v", err)
-	}
+	if strings.HasPrefix(mountPoint, "/var/lib/docker") {
+		s.logger.Info().Msgf("CreateSnapshot: Cleaning up useless files...")
+		if _, err := s.runCommand(ctx, "sudo", "docker", "builder", "prune", "-f"); err != nil {
+			s.logger.Warn().Msgf("Warning: failed to prune docker builder: %v", err)
+		}
 
-	s.logger.Info().Msgf("CreateSnapshot: Stopping docker service...")
-	if _, err := s.runCommand(ctx, "sudo", "systemctl", "stop", "docker"); err != nil {
-		s.logger.Warn().Msgf("Warning: failed to stop docker (may not be running or installed): %v", err)
+		s.logger.Info().Msgf("CreateSnapshot: Stopping docker service...")
+		if _, err := s.runCommand(ctx, "sudo", "systemctl", "stop", "docker"); err != nil {
+			s.logger.Warn().Msgf("Warning: failed to stop docker (may not be running or installed): %v", err)
+		}
 	}
 
 	s.logger.Info().Msgf("CreateSnapshot: Unmounting %s (from device %s, volume %s)...", mountPoint, volumeInfo.DeviceName, volumeInfo.VolumeID)

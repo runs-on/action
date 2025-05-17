@@ -197,7 +197,6 @@ func (s *AWSSnapshotter) RestoreSnapshot(ctx context.Context, mountPoint string)
 	var volumeIsNewAndUnformatted bool
 	currentTime := time.Now()
 	jobIdentifier := currentTime.Format("20060102-150405")
-
 	// 1. Find latest snapshot for branch
 	s.logger.Info().Msgf("RestoreSnapshot: Searching for the latest snapshot for branch: %s", gitBranch)
 	filters := []types.Filter{
@@ -226,7 +225,30 @@ func (s *AWSSnapshotter) RestoreSnapshot(ctx context.Context, mountPoint string)
 		}
 		s.logger.Info().Msgf("RestoreSnapshot: Found latest snapshot %s for branch %s", *latestSnapshot.SnapshotId, gitBranch)
 	} else {
-		s.logger.Info().Msgf("RestoreSnapshot: No existing snapshot found for branch %s. A new volume will be created.", gitBranch)
+		// Try finding snapshot from default branch
+		s.logger.Info().Msgf("RestoreSnapshot: No snapshot found for branch %s, trying default branch %s", gitBranch, s.config.DefaultBranch)
+		defaultBranchTagValue := fmt.Sprintf("%s-%s", s.config.Version, s.config.DefaultBranch)
+		filters[0] = types.Filter{Name: aws.String("tag:" + snapshotBranchTagKey), Values: []string{defaultBranchTagValue}}
+
+		defaultBranchSnapshotsOutput, err := s.ec2Client.DescribeSnapshots(ctx, &ec2.DescribeSnapshotsInput{
+			Filters:  filters,
+			OwnerIds: []string{"self"},
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to describe snapshots for default branch %s: %w", s.config.DefaultBranch, err)
+		}
+
+		if len(defaultBranchSnapshotsOutput.Snapshots) > 0 {
+			latestSnapshot = &defaultBranchSnapshotsOutput.Snapshots[0]
+			for _, snap := range defaultBranchSnapshotsOutput.Snapshots {
+				if snapTime := snap.StartTime; snapTime.After(*latestSnapshot.StartTime) {
+					latestSnapshot = &snap
+				}
+			}
+			s.logger.Info().Msgf("RestoreSnapshot: Found latest snapshot %s from default branch %s", *latestSnapshot.SnapshotId, s.config.DefaultBranch)
+		} else {
+			s.logger.Info().Msgf("RestoreSnapshot: No existing snapshot found for branch %s or default branch %s. A new volume will be created.", gitBranch, s.config.DefaultBranch)
+		}
 	}
 
 	commonVolumeTags := []types.Tag{

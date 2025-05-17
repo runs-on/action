@@ -184,6 +184,10 @@ func (s *AWSSnapshotter) getSnapshotTagValue() string {
 	return fmt.Sprintf("%s-%s", s.config.Version, s.config.GithubRef)
 }
 
+func (s *AWSSnapshotter) getSnapshotTagValueDefaultBranch() string {
+	return fmt.Sprintf("%s-%s", s.config.Version, s.config.DefaultBranch)
+}
+
 // RestoreSnapshot finds the latest snapshot for the current git branch,
 // creates a volume from it (or a new volume if no snapshot exists),
 // attaches it to the instance, and mounts it to the specified mountPoint.
@@ -198,7 +202,6 @@ func (s *AWSSnapshotter) RestoreSnapshot(ctx context.Context, mountPoint string)
 	currentTime := time.Now()
 	jobIdentifier := currentTime.Format("20060102-150405")
 	// 1. Find latest snapshot for branch
-	s.logger.Info().Msgf("RestoreSnapshot: Searching for the latest snapshot for branch: %s", gitBranch)
 	filters := []types.Filter{
 		{Name: aws.String("tag:" + snapshotBranchTagKey), Values: []string{s.getSnapshotTagValue()}},
 		{Name: aws.String("status"), Values: []string{string(types.SnapshotStateCompleted)}},
@@ -206,6 +209,7 @@ func (s *AWSSnapshotter) RestoreSnapshot(ctx context.Context, mountPoint string)
 	for _, tag := range s.config.CustomTags {
 		filters = append(filters, types.Filter{Name: aws.String(fmt.Sprintf("tag:%s", tag.Key)), Values: []string{tag.Value}})
 	}
+	s.logger.Info().Msgf("RestoreSnapshot: Searching for the latest snapshot for branch: %s and tags: %v", gitBranch, filters)
 	snapshotsOutput, err := s.ec2Client.DescribeSnapshots(ctx, &ec2.DescribeSnapshotsInput{
 		Filters:  filters,
 		OwnerIds: []string{"self"}, // Or specific account ID if needed
@@ -226,9 +230,8 @@ func (s *AWSSnapshotter) RestoreSnapshot(ctx context.Context, mountPoint string)
 		s.logger.Info().Msgf("RestoreSnapshot: Found latest snapshot %s for branch %s", *latestSnapshot.SnapshotId, gitBranch)
 	} else {
 		// Try finding snapshot from default branch
-		s.logger.Info().Msgf("RestoreSnapshot: No snapshot found for branch %s, trying default branch %s", gitBranch, s.config.DefaultBranch)
-		defaultBranchTagValue := fmt.Sprintf("%s-%s", s.config.Version, s.config.DefaultBranch)
-		filters[0] = types.Filter{Name: aws.String("tag:" + snapshotBranchTagKey), Values: []string{defaultBranchTagValue}}
+		filters[0] = types.Filter{Name: aws.String("tag:" + snapshotBranchTagKey), Values: []string{s.getSnapshotTagValueDefaultBranch()}}
+		s.logger.Info().Msgf("RestoreSnapshot: No snapshot found for branch %s, trying default branch %s with tags: %v", gitBranch, s.config.DefaultBranch, filters)
 
 		defaultBranchSnapshotsOutput, err := s.ec2Client.DescribeSnapshots(ctx, &ec2.DescribeSnapshotsInput{
 			Filters:  filters,

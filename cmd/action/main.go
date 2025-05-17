@@ -77,18 +77,22 @@ func handlePostExecution(action *githubactions.Action, ctx context.Context, logg
 	}
 
 	if len(cfg.SnapshotDirs) > 0 {
-		action.Infof("Snapshotting volumes...")
-		snapshotter, err := snapshot.NewAWSSnapshotter(ctx, logger, snapshotterConfig)
-		if err != nil {
-			action.Errorf("Failed to create snapshotter: %v", err)
+		if cfg.RunnerConfig == nil {
+			action.Warningf("No runner config provided (you need to upgrade your RunsOn installation). Snapshotting will not be performed.")
 		} else {
-			for _, dir := range cfg.SnapshotDirs {
-				snapshot, err := snapshotter.CreateSnapshot(ctx, dir)
-				if err != nil {
-					action.Errorf("Failed to snapshot volumes: %v", err)
-					continue
+			action.Infof("Snapshotting volumes...")
+			snapshotter, err := snapshot.NewAWSSnapshotter(ctx, logger, snapshotterConfig)
+			if err != nil {
+				action.Errorf("Failed to create snapshotter: %v", err)
+			} else {
+				for _, dir := range cfg.SnapshotDirs {
+					snapshot, err := snapshotter.CreateSnapshot(ctx, dir)
+					if err != nil {
+						action.Errorf("Failed to snapshot volumes: %v", err)
+						continue
+					}
+					action.Infof("Snapshot created: %s. Note that it might take a few minutes to be available for use.", snapshot.SnapshotID)
 				}
-				action.Infof("Snapshot created: %s", snapshot.SnapshotID)
 			}
 		}
 	}

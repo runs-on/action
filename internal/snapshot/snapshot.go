@@ -15,13 +15,12 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/rs/zerolog"
+	runsOnConfig "github.com/runs-on/action/internal/config"
 )
 
 const (
 	// Tags used for resource identification
 	snapshotBranchTagKey = "runs-on-snapshot-branch"
-	latestSnapshotTagKey = "runs-on-latest-snapshot-for-branch"
-	jobVolumeTagKey      = "runs-on-job-volume"
 	nameTagKey           = "Name"
 	timestampTagKey      = "runs-on-timestamp"
 
@@ -83,12 +82,13 @@ type AWSSnapshotter struct {
 }
 
 type SnapshotterConfig struct {
+	Version                   string
 	GithubRef                 string
 	InstanceID                string
 	Az                        string
-	MainTagKey                string
-	MainTagVal                string
 	WaitForSnapshotCompletion bool
+	DefaultBranch             string
+	CustomTags                []runsOnConfig.Tag
 }
 
 // NewAWSSnapshotter creates a new AWSSnapshotter instance.
@@ -97,6 +97,10 @@ func NewAWSSnapshotter(ctx context.Context, logger *zerolog.Logger, cfg Snapshot
 	awsConfig, err := config.LoadDefaultConfig(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load AWS SDK config: %w", err)
+	}
+
+	if cfg.Version == "" {
+		cfg.Version = "v1"
 	}
 
 	if cfg.InstanceID == "" {
@@ -111,12 +115,12 @@ func NewAWSSnapshotter(ctx context.Context, logger *zerolog.Logger, cfg Snapshot
 		return nil, fmt.Errorf("githubRef is required")
 	}
 
-	if cfg.MainTagKey == "" {
-		return nil, fmt.Errorf("mainTagKey is required")
+	if cfg.DefaultBranch == "" {
+		return nil, fmt.Errorf("defaultBranch is required")
 	}
 
-	if cfg.MainTagVal == "" {
-		return nil, fmt.Errorf("mainTagVal is required")
+	if cfg.CustomTags == nil {
+		cfg.CustomTags = []runsOnConfig.Tag{}
 	}
 
 	return &AWSSnapshotter{
@@ -176,6 +180,10 @@ func (s *AWSSnapshotter) loadVolumeInfo(mountPoint string) (*VolumeInfo, error) 
 	return &volumeInfo, nil
 }
 
+func (s *AWSSnapshotter) getSnapshotTagValue() string {
+	return fmt.Sprintf("%s-%s", s.config.Version, s.config.GithubRef)
+}
+
 // RestoreSnapshot finds the latest snapshot for the current git branch,
 // creates a volume from it (or a new volume if no snapshot exists),
 // attaches it to the instance, and mounts it to the specified mountPoint.
@@ -192,13 +200,15 @@ func (s *AWSSnapshotter) RestoreSnapshot(ctx context.Context, mountPoint string)
 
 	// 1. Find latest snapshot for branch
 	s.logger.Info().Msgf("RestoreSnapshot: Searching for the latest snapshot for branch: %s", gitBranch)
+	filters := []types.Filter{
+		{Name: aws.String("tag:" + snapshotBranchTagKey), Values: []string{s.getSnapshotTagValue()}},
+		{Name: aws.String("status"), Values: []string{string(types.SnapshotStateCompleted)}},
+	}
+	for _, tag := range s.config.CustomTags {
+		filters = append(filters, types.Filter{Name: aws.String(fmt.Sprintf("tag:%s", tag.Key)), Values: []string{tag.Value}})
+	}
 	snapshotsOutput, err := s.ec2Client.DescribeSnapshots(ctx, &ec2.DescribeSnapshotsInput{
-		Filters: []types.Filter{
-			{Name: aws.String("tag:" + s.config.MainTagKey), Values: []string{s.config.MainTagVal}},
-			{Name: aws.String("tag:" + snapshotBranchTagKey), Values: []string{gitBranch}},
-			{Name: aws.String("tag:" + latestSnapshotTagKey), Values: []string{"true"}},
-			{Name: aws.String("status"), Values: []string{string(types.SnapshotStateCompleted)}},
-		},
+		Filters:  filters,
 		OwnerIds: []string{"self"}, // Or specific account ID if needed
 	})
 	if err != nil {
@@ -220,11 +230,11 @@ func (s *AWSSnapshotter) RestoreSnapshot(ctx context.Context, mountPoint string)
 	}
 
 	commonVolumeTags := []types.Tag{
-		{Key: aws.String(s.config.MainTagKey), Value: aws.String(s.config.MainTagVal)},
-		{Key: aws.String(jobVolumeTagKey), Value: aws.String(jobIdentifier)},
-		{Key: aws.String(snapshotBranchTagKey), Value: aws.String(gitBranch)}, // Tag volume with branch for easier manual lookup
-		{Key: aws.String(nameTagKey), Value: aws.String(fmt.Sprintf("job-volume-%s-%s", gitBranch, jobIdentifier))},
-		{Key: aws.String(timestampTagKey), Value: aws.String(currentTime.Format(time.RFC3339))},
+		{Key: aws.String(snapshotBranchTagKey), Value: aws.String(s.getSnapshotTagValue())},
+		{Key: aws.String(nameTagKey), Value: aws.String(fmt.Sprintf("runs-on-volume-%s-%s", gitBranch, jobIdentifier))},
+	}
+	for _, tag := range s.config.CustomTags {
+		commonVolumeTags = append(commonVolumeTags, types.Tag{Key: aws.String(tag.Key), Value: aws.String(tag.Value)})
 	}
 
 	// Use snapshot only if its size is at least the default volume size, otherwise create a new volume
@@ -458,18 +468,19 @@ func (s *AWSSnapshotter) CreateSnapshot(ctx context.Context, mountPoint string) 
 	currentTime := time.Now()
 	snapshotName := fmt.Sprintf("snapshot-%s-%s", s.config.GithubRef, currentTime.Format("20060102-150405"))
 	s.logger.Info().Msgf("CreateSnapshot: Creating snapshot '%s' from volume %s for branch %s...", snapshotName, volumeInfo.VolumeID, s.config.GithubRef)
+	snapshotTags := []types.Tag{
+		{Key: aws.String(snapshotBranchTagKey), Value: aws.String(s.getSnapshotTagValue())},
+		{Key: aws.String(nameTagKey), Value: aws.String(snapshotName)},
+	}
+	for _, tag := range s.config.CustomTags {
+		snapshotTags = append(snapshotTags, types.Tag{Key: aws.String(tag.Key), Value: aws.String(tag.Value)})
+	}
 	createSnapshotOutput, err := s.ec2Client.CreateSnapshot(ctx, &ec2.CreateSnapshotInput{
 		VolumeId: aws.String(volumeInfo.VolumeID),
 		TagSpecifications: []types.TagSpecification{
 			{
 				ResourceType: types.ResourceTypeSnapshot,
-				Tags: []types.Tag{
-					{Key: aws.String(s.config.MainTagKey), Value: aws.String(s.config.MainTagVal)},
-					{Key: aws.String(snapshotBranchTagKey), Value: aws.String(s.config.GithubRef)},
-					{Key: aws.String(latestSnapshotTagKey), Value: aws.String("true")},
-					{Key: aws.String(nameTagKey), Value: aws.String(snapshotName)},
-					{Key: aws.String(timestampTagKey), Value: aws.String(currentTime.Format(time.RFC3339))},
-				},
+				Tags:         snapshotTags,
 			},
 		},
 		Description: aws.String(fmt.Sprintf("Snapshot for branch %s taken at %s", s.config.GithubRef, currentTime.Format(time.RFC3339))),

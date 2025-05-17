@@ -18,8 +18,6 @@ var snapshotterConfig = snapshot.SnapshotterConfig{
 	GithubRef:                 os.Getenv("GITHUB_REF"),
 	InstanceID:                os.Getenv("RUNS_ON_INSTANCE_ID"),
 	Az:                        os.Getenv("RUNS_ON_AWS_AZ"),
-	MainTagKey:                os.Getenv("RUNS_ON_COST_ALLOCATION_TAG"),
-	MainTagVal:                os.Getenv("RUNS_ON_STACK_NAME"),
 	WaitForSnapshotCompletion: false,
 }
 
@@ -42,15 +40,21 @@ func handleMainExecution(action *githubactions.Action, ctx context.Context, logg
 	}
 
 	if len(cfg.SnapshotDirs) > 0 {
-		snapshotter, err := snapshot.NewAWSSnapshotter(ctx, logger, snapshotterConfig)
-		if err != nil {
-			action.Errorf("Failed to create snapshotter: %v", err)
+		if cfg.RunnerConfig == nil {
+			action.Warningf("No runner config provided (you need to upgrade your RunsOn installation). Snapshotting will not be performed.")
 		} else {
-			for _, dir := range cfg.SnapshotDirs {
-				action.Infof("Creating snapshot for %s", dir)
-				_, err := snapshotter.RestoreSnapshot(ctx, dir)
-				if err != nil {
-					action.Errorf("Failed to restore snapshot for %s: %v", dir, err)
+			snapshotterConfig.DefaultBranch = cfg.RunnerConfig.DefaultBranch
+			snapshotterConfig.CustomTags = cfg.RunnerConfig.CustomTags
+			snapshotter, err := snapshot.NewAWSSnapshotter(ctx, logger, snapshotterConfig)
+			if err != nil {
+				action.Errorf("Failed to create snapshotter: %v", err)
+			} else {
+				for _, dir := range cfg.SnapshotDirs {
+					action.Infof("Creating snapshot for %s", dir)
+					_, err := snapshotter.RestoreSnapshot(ctx, dir)
+					if err != nil {
+						action.Errorf("Failed to restore snapshot for %s: %v", dir, err)
+					}
 				}
 			}
 		}

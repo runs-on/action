@@ -16,6 +16,7 @@ import (
 
 var snapshotterConfig = snapshot.SnapshotterConfig{
 	GithubRef:                 os.Getenv("GITHUB_REF"),
+	GithubRepository:          os.Getenv("GITHUB_REPOSITORY"),
 	InstanceID:                os.Getenv("RUNS_ON_INSTANCE_ID"),
 	Az:                        os.Getenv("RUNS_ON_AWS_AZ"),
 	WaitForSnapshotCompletion: false,

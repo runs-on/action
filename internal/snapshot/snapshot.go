@@ -26,11 +26,15 @@ const (
 	timestampTagKey          = "runs-on-timestamp"
 
 	// Default Volume Specifications
-	defaultVolumeSizeGiB            int32 = 40
-	defaultVolumeType                     = types.VolumeTypeGp3
-	defaultVolumeIops               int32 = 3000
-	defaultVolumeThroughputMBps     int32 = 125
-	defaultVolumeInitializationRate int32 = 300
+	defaultVolumeSizeGiB int32 = 40
+	defaultVolumeType          = types.VolumeTypeGp3
+	defaultVolumeIops    int32 = 3000
+	// Only paid for the life duration of the volume (i.e. job duration + cleanup after 10 minutes)
+	defaultVolumeThroughputMBps int32 = 750
+	// Volume Initialization Rate Price - https://aws.amazon.com/ebs/pricing/
+	// 100 MB/s - 200 MB/s	$0.00240/GB
+	// 201 MB/s - 300 MB/s	$0.00360/GB
+	defaultVolumeInitializationRate int32 = 200
 	suggestedDeviceName                   = "/dev/sdf" // AWS might assign /dev/xvdf etc.
 
 	defaultVolumeInUseMaxWaitTime       = 5 * time.Minute

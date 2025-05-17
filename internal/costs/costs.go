@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jedib0t/go-pretty/v6/table"
 	"github.com/runs-on/action/internal/config"
 	"github.com/sethvargo/go-githubactions"
 )
@@ -131,8 +130,8 @@ func ComputeAndDisplayCosts(action *githubactions.Action, cfg *config.Config) er
 	githubCostStr := fmt.Sprintf("$%.4f", costData.Github.TotalCost)
 	savingsStr := fmt.Sprintf("$%.4f (%.1f%%)", costData.Savings.Amount, costData.Savings.Percentage)
 
-	// Prepare table rows
-	tableRows := []table.Row{
+	headers := []string{"metric", "value"}
+	rows := [][]string{
 		{"Instance Type", costData.InstanceType},
 		{"Region", costData.Region},
 		{"Duration", durationStr},
@@ -140,19 +139,8 @@ func ComputeAndDisplayCosts(action *githubactions.Action, cfg *config.Config) er
 		{"GitHub equivalent cost", githubCostStr},
 		{"Savings", savingsStr},
 	}
+	markdownTableString := renderMarkdownTable(headers, rows)
 
-	// Function to render markdown table to avoid repetition
-	renderMarkdownTable := func(rows []table.Row) string {
-		tableOutput := &strings.Builder{}
-		t := table.NewWriter()
-		t.SetOutputMirror(tableOutput)
-		t.AppendHeader(table.Row{"Metric", "Value"})
-		t.AppendRows(rows)
-		t.Render()
-		return tableOutput.String()
-	}
-
-	markdownTableString := renderMarkdownTable(tableRows)
 	summaryBuilder := &strings.Builder{}
 	summaryBuilder.WriteString("## Execution Cost Summary\n\n")
 	summaryBuilder.WriteString(markdownTableString)
@@ -166,4 +154,43 @@ func ComputeAndDisplayCosts(action *githubactions.Action, cfg *config.Config) er
 	}
 
 	return nil
+}
+
+// not using a proper markdown library (yet)
+func renderMarkdownTable(headers []string, rows [][]string) string {
+	// Find max width for each column
+	colWidths := make([]int, len(headers))
+	for i, h := range headers {
+		colWidths[i] = len(h)
+	}
+	for _, row := range rows {
+		for i, cell := range row {
+			if len(cell) > colWidths[i] {
+				colWidths[i] = len(cell)
+			}
+		}
+	}
+
+	// Helper to pad a row
+	padRow := func(row []string) string {
+		out := "|"
+		for i, cell := range row {
+			out += " " + cell + strings.Repeat(" ", colWidths[i]-len(cell)) + " |"
+		}
+		return out
+	}
+
+	// Build separator
+	sep := "|"
+	for _, w := range colWidths {
+		sep += " " + strings.Repeat("-", w) + " |"
+	}
+
+	var b strings.Builder
+	b.WriteString(padRow(headers) + "\n")
+	b.WriteString(sep + "\n")
+	for _, row := range rows {
+		b.WriteString(padRow(row) + "\n")
+	}
+	return b.String()
 }

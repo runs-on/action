@@ -47,17 +47,17 @@ const (
 )
 
 var defaultSnapshotCompletedWaiterOptions = func(o *ec2.SnapshotCompletedWaiterOptions) {
-	o.MaxDelay = 10 * time.Second
-	o.MinDelay = 5 * time.Second
+	o.MaxDelay = 3 * time.Second
+	o.MinDelay = 3 * time.Second
 }
 
 var defaultVolumeInUseWaiterOptions = func(o *ec2.VolumeInUseWaiterOptions) {
-	o.MaxDelay = 6 * time.Second
+	o.MaxDelay = 3 * time.Second
 	o.MinDelay = 3 * time.Second
 }
 
 var defaultVolumeAvailableWaiterOptions = func(o *ec2.VolumeAvailableWaiterOptions) {
-	o.MaxDelay = 6 * time.Second
+	o.MaxDelay = 3 * time.Second
 	o.MinDelay = 3 * time.Second
 }
 

@@ -97,7 +97,7 @@ type SnapshotterConfig struct {
 	GithubRepository          string
 	InstanceID                string
 	Az                        string
-	WaitForSnapshotCompletion bool
+	SnapshotWaitForCompletion bool
 	DefaultBranch             string
 	CustomTags                []runsOnConfig.Tag
 	SnapshotName              string
@@ -579,7 +579,9 @@ func (s *AWSSnapshotter) CreateSnapshot(ctx context.Context, mountPoint string) 
 
 	if volumeInfo.NewVolume {
 		s.logger.Info().Msgf("CreateSnapshot: creating from a new volume, so waiting for initial snapshot completion. This may take a few minutes.")
-	} else if !s.config.WaitForSnapshotCompletion {
+	} else if s.config.SnapshotWaitForCompletion {
+		s.logger.Info().Msgf("CreateSnapshot: waiting for snapshot completion before returning.")
+	} else {
 		s.logger.Info().Msgf("CreateSnapshot: not waiting for snapshot completion, returning immediately.")
 		return &CreateSnapshotOutput{SnapshotID: newSnapshotID}, nil
 	}

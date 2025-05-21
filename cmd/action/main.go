@@ -19,7 +19,7 @@ var snapshotterConfig = snapshot.SnapshotterConfig{
 	GithubRepository:          os.Getenv("GITHUB_REPOSITORY"),
 	InstanceID:                os.Getenv("RUNS_ON_INSTANCE_ID"),
 	Az:                        os.Getenv("RUNS_ON_AWS_AZ"),
-	WaitForSnapshotCompletion: false,
+	SnapshotWaitForCompletion: false,
 }
 
 // handleMainExecution contains the original main logic.
@@ -87,6 +87,7 @@ func handlePostExecution(action *githubactions.Action, ctx context.Context, logg
 			action.Infof("Snapshotting volumes...")
 			snapshotterConfig.DefaultBranch = cfg.RunnerConfig.DefaultBranch
 			snapshotterConfig.CustomTags = cfg.RunnerConfig.CustomTags
+			snapshotterConfig.SnapshotWaitForCompletion = cfg.SnapshotWaitForCompletion
 			snapshotter, err := snapshot.NewAWSSnapshotter(ctx, logger, snapshotterConfig)
 			if err != nil {
 				action.Errorf("Failed to create snapshotter: %v", err)

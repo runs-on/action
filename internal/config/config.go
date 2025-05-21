@@ -13,15 +13,16 @@ import (
 
 // Config holds the action's configuration values derived from inputs and environment.
 type Config struct {
-	ShowEnv           bool
-	ShowCosts         string
-	ZctionsResultsURL string
-	ActionsResultsURL string
-	SnapshotDirs      []string
-	SnapshotVersion   string
-	GitHubMirrors     []cache.Mirror
-	GitHubToken       string
-	RunnerConfig      *RunnerConfig
+	ShowEnv                   bool
+	ShowCosts                 string
+	ZctionsResultsURL         string
+	ActionsResultsURL         string
+	SnapshotDirs              []string
+	SnapshotVersion           string
+	SnapshotWaitForCompletion bool
+	GitHubMirrors             []cache.Mirror
+	GitHubToken               string
+	RunnerConfig              *RunnerConfig
 }
 
 type Tag struct {
@@ -103,6 +104,8 @@ func NewConfigFromInputs(action *githubactions.Action) (*Config, error) {
 	if cfg.SnapshotVersion == "" {
 		cfg.SnapshotVersion = "v1"
 	}
+
+	cfg.SnapshotWaitForCompletion = action.GetInput("snapshot_wait_for_completion") != "false"
 
 	cfg.ZctionsResultsURL = os.Getenv("ZCTIONS_RESULTS_URL")
 	cfg.ActionsResultsURL = os.Getenv("ACTIONS_RESULTS_URL")

@@ -22,8 +22,9 @@ const (
 	// Tags used for resource identification
 	snapshotTagKeyArch       = "runs-on-snapshot-arch"
 	snapshotTagKeyPlatform   = "runs-on-snapshot-platform"
-	snapshotBranchTagKey     = "runs-on-snapshot-branch"
-	snapshotRepositoryTagKey = "runs-on-snapshot-repository"
+	snapshotTagKeyBranch     = "runs-on-snapshot-branch"
+	snapshotTagKeyRepository = "runs-on-snapshot-repository"
+	snapshotTagKeyVersion    = "runs-on-snapshot-version"
 	nameTagKey               = "Name"
 	timestampTagKey          = "runs-on-timestamp"
 	ttlTagKey                = "runs-on-delete-after"
@@ -176,8 +177,9 @@ func getVolumeInfoPath(mountPoint string) string {
 
 func (s *AWSSnapshotter) defaultTags() []types.Tag {
 	tags := []types.Tag{
-		{Key: aws.String(snapshotBranchTagKey), Value: aws.String(s.getSnapshotTagValue())},
-		{Key: aws.String(snapshotRepositoryTagKey), Value: aws.String(s.config.GithubRepository)},
+		{Key: aws.String(snapshotTagKeyVersion), Value: aws.String(s.config.Version)},
+		{Key: aws.String(snapshotTagKeyRepository), Value: aws.String(s.config.GithubRepository)},
+		{Key: aws.String(snapshotTagKeyBranch), Value: aws.String(s.getSnapshotTagValue())},
 		{Key: aws.String(snapshotTagKeyArch), Value: aws.String(s.Arch())},
 		{Key: aws.String(snapshotTagKeyPlatform), Value: aws.String(s.Platform())},
 	}
@@ -225,11 +227,11 @@ func (s *AWSSnapshotter) loadVolumeInfo(mountPoint string) (*VolumeInfo, error) 
 }
 
 func (s *AWSSnapshotter) getSnapshotTagValue() string {
-	return fmt.Sprintf("%s-%s", s.config.Version, s.config.GithubRef)
+	return fmt.Sprintf("%s", s.config.GithubRef)
 }
 
 func (s *AWSSnapshotter) getSnapshotTagValueDefaultBranch() string {
-	return fmt.Sprintf("%s-%s", s.config.Version, s.config.DefaultBranch)
+	return fmt.Sprintf("%s", s.config.DefaultBranch)
 }
 
 // RestoreSnapshot finds the latest snapshot for the current git branch,
@@ -271,7 +273,7 @@ func (s *AWSSnapshotter) RestoreSnapshot(ctx context.Context, mountPoint string)
 		s.logger.Info().Msgf("RestoreSnapshot: Found latest snapshot %s for branch %s", *latestSnapshot.SnapshotId, gitBranch)
 	} else if s.config.DefaultBranch != "" {
 		// Try finding snapshot from default branch
-		filters[0] = types.Filter{Name: aws.String("tag:" + snapshotBranchTagKey), Values: []string{s.getSnapshotTagValueDefaultBranch()}}
+		filters[0] = types.Filter{Name: aws.String("tag:" + snapshotTagKeyBranch), Values: []string{s.getSnapshotTagValueDefaultBranch()}}
 		s.logger.Info().Msgf("RestoreSnapshot: No snapshot found for branch %s, trying default branch %s with tags: %v", gitBranch, s.config.DefaultBranch, filters)
 
 		defaultBranchSnapshotsOutput, err := s.ec2Client.DescribeSnapshots(ctx, &ec2.DescribeSnapshotsInput{

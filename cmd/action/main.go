@@ -53,9 +53,11 @@ func handleMainExecution(action *githubactions.Action, ctx context.Context, logg
 			} else {
 				for _, dir := range cfg.SnapshotDirs {
 					action.Infof("Creating snapshot for %s", dir)
-					_, err := snapshotter.RestoreSnapshot(ctx, dir)
+					snapshotOutput, err := snapshotter.RestoreSnapshot(ctx, dir)
 					if err != nil {
 						action.Errorf("Failed to restore snapshot for %s: %v", dir, err)
+					} else {
+						action.Infof("Snapshot restored into volume %s", snapshotOutput.VolumeID)
 					}
 				}
 			}

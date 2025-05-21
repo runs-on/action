@@ -81,6 +81,7 @@ type VolumeInfo struct {
 	DeviceName   string `json:"device_name"`
 	MountPoint   string `json:"mount_point"`
 	AttachmentID string `json:"attachment_id,omitempty"`
+	NewVolume    bool   `json:"new_volume,omitempty"`
 }
 
 // AWSSnapshotter provides methods to manage EBS snapshots and volumes.
@@ -163,6 +164,7 @@ func NewAWSSnapshotter(ctx context.Context, logger *zerolog.Logger, cfg Snapshot
 type RestoreSnapshotOutput struct {
 	VolumeID   string
 	DeviceName string
+	NewVolume  bool
 }
 
 // getVolumeInfoPath returns the path to the volume info JSON file for a given mount point
@@ -438,6 +440,7 @@ func (s *AWSSnapshotter) RestoreSnapshot(ctx context.Context, mountPoint string)
 		VolumeID:   *newVolume.VolumeId,
 		DeviceName: actualDeviceName,
 		MountPoint: mountPoint,
+		NewVolume:  volumeIsNewAndUnformatted,
 	}
 	if err := s.saveVolumeInfo(volumeInfo); err != nil {
 		s.logger.Warn().Msgf("RestoreSnapshot: Failed to save volume info: %v", err)
@@ -481,7 +484,7 @@ func (s *AWSSnapshotter) RestoreSnapshot(ctx context.Context, mountPoint string)
 		s.logger.Info().Msgf("RestoreSnapshot: Docker disk usage displayed.")
 	}
 
-	return &RestoreSnapshotOutput{VolumeID: *newVolume.VolumeId, DeviceName: actualDeviceName}, nil
+	return &RestoreSnapshotOutput{VolumeID: *newVolume.VolumeId, DeviceName: actualDeviceName, NewVolume: volumeIsNewAndUnformatted}, nil
 }
 
 // CreateSnapshotOutput holds the results of CreateSnapshot.
@@ -525,6 +528,17 @@ func (s *AWSSnapshotter) CreateSnapshot(ctx context.Context, mountPoint string) 
 		s.logger.Info().Msgf("CreateSnapshot: Successfully unmounted %s.", mountPoint)
 	}
 
+	// Update TTL tag on volume to extend until 10min from now
+	_, err = s.ec2Client.CreateTags(ctx, &ec2.CreateTagsInput{
+		Resources: []string{volumeInfo.VolumeID},
+		Tags: []types.Tag{
+			{Key: aws.String(ttlTagKey), Value: aws.String(fmt.Sprintf("%d", time.Now().Add(10*time.Minute).Unix()))},
+		},
+	})
+	if err != nil {
+		s.logger.Warn().Msgf("Failed to update TTL tag on volume %s: %v", volumeInfo.VolumeID, err)
+	}
+
 	s.logger.Info().Msgf("CreateSnapshot: Detaching volume %s...", volumeInfo.VolumeID)
 	_, err = s.ec2Client.DetachVolume(ctx, &ec2.DetachVolumeInput{
 		VolumeId:   aws.String(volumeInfo.VolumeID),
@@ -563,7 +577,9 @@ func (s *AWSSnapshotter) CreateSnapshot(ctx context.Context, mountPoint string) 
 	newSnapshotID := *createSnapshotOutput.SnapshotId
 	s.logger.Info().Msgf("CreateSnapshot: Snapshot %s creation initiated.", newSnapshotID)
 
-	if !s.config.WaitForSnapshotCompletion {
+	if volumeInfo.NewVolume {
+		s.logger.Info().Msgf("CreateSnapshot: creating from a new volume, so waiting for initial snapshot completion. This may take a few minutes.")
+	} else if !s.config.WaitForSnapshotCompletion {
 		s.logger.Info().Msgf("CreateSnapshot: not waiting for snapshot completion, returning immediately.")
 		return &CreateSnapshotOutput{SnapshotID: newSnapshotID}, nil
 	}

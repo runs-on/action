@@ -24,11 +24,3 @@ inputs:
     description: 'Version of the snapshot to use'
     required: false
     default: 'v1'
-  github_mirrors:
-    description: 'Newline separated list of github repositories to mirror and locally checkout into `./mirrors`. E.g. setting `https://github.com/owner/repo@ref` will clone the repo into `./mirrors/owner/repo` and checkout the `ref` branch'
-    required: false
-    default: ''
-  github_token:
-    description: 'GitHub token to use for mirroring. Only useful if github_mirrors is enabled.'
-    required: false
-    default: ''

@@ -20,6 +20,8 @@ import (
 
 const (
 	// Tags used for resource identification
+	snapshotTagKeyArch       = "runs-on-snapshot-arch"
+	snapshotTagKeyPlatform   = "runs-on-snapshot-platform"
 	snapshotBranchTagKey     = "runs-on-snapshot-branch"
 	snapshotRepositoryTagKey = "runs-on-snapshot-repository"
 	nameTagKey               = "Name"
@@ -133,7 +135,9 @@ func NewAWSSnapshotter(ctx context.Context, logger *zerolog.Logger, cfg Snapshot
 		cfg.CustomTags = []runsOnConfig.Tag{}
 	}
 
-	sanitizedGithubRef := strings.TrimPrefix(cfg.GithubRef, "refs/heads/")
+	// we're currently using GITHUB_REF_NAME, so refs/ is not present, but just in case
+	// https://docs.github.com/en/actions/writing-workflows/choosing-what-your-workflow-does/accessing-contextual-information-about-workflow-runs
+	sanitizedGithubRef := strings.TrimPrefix(cfg.GithubRef, "refs/")
 	sanitizedGithubRef = strings.ReplaceAll(sanitizedGithubRef, "/", "-")
 	if len(sanitizedGithubRef) > 40 {
 		sanitizedGithubRef = sanitizedGithubRef[:40]
@@ -228,6 +232,8 @@ func (s *AWSSnapshotter) RestoreSnapshot(ctx context.Context, mountPoint string)
 	filters := []types.Filter{
 		{Name: aws.String("tag:" + snapshotBranchTagKey), Values: []string{s.getSnapshotTagValue()}},
 		{Name: aws.String("tag:" + snapshotRepositoryTagKey), Values: []string{s.config.GithubRepository}},
+		{Name: aws.String("tag:" + snapshotTagKeyArch), Values: []string{s.Arch()}},
+		{Name: aws.String("tag:" + snapshotTagKeyPlatform), Values: []string{s.Platform()}},
 		{Name: aws.String("status"), Values: []string{string(types.SnapshotStateCompleted)}},
 	}
 	for _, tag := range s.config.CustomTags {

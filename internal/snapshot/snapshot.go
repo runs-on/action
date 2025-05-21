@@ -26,7 +26,7 @@ const (
 	snapshotRepositoryTagKey = "runs-on-snapshot-repository"
 	nameTagKey               = "Name"
 	timestampTagKey          = "runs-on-timestamp"
-	lifeDurationTagKey       = "runs-on-delete-after"
+	ttlTagKey                = "runs-on-delete-after"
 
 	// Default Volume Specifications
 	defaultVolumeLifeDurationMinutes int32 = 20
@@ -172,6 +172,19 @@ func getVolumeInfoPath(mountPoint string) string {
 	return filepath.Join("/runs-on", fmt.Sprintf("snapshot-%s.json", sanitizedPath))
 }
 
+func (s *AWSSnapshotter) defaultTags() []types.Tag {
+	tags := []types.Tag{
+		{Key: aws.String(snapshotBranchTagKey), Value: aws.String(s.getSnapshotTagValue())},
+		{Key: aws.String(snapshotRepositoryTagKey), Value: aws.String(s.config.GithubRepository)},
+		{Key: aws.String(snapshotTagKeyArch), Value: aws.String(s.Arch())},
+		{Key: aws.String(snapshotTagKeyPlatform), Value: aws.String(s.Platform())},
+	}
+	for _, tag := range s.config.CustomTags {
+		tags = append(tags, types.Tag{Key: aws.String(tag.Key), Value: aws.String(tag.Value)})
+	}
+	return tags
+}
+
 // saveVolumeInfo writes volume information to a JSON file
 func (s *AWSSnapshotter) saveVolumeInfo(volumeInfo *VolumeInfo) error {
 	infoPath := getVolumeInfoPath(volumeInfo.MountPoint)
@@ -230,14 +243,10 @@ func (s *AWSSnapshotter) RestoreSnapshot(ctx context.Context, mountPoint string)
 	var volumeIsNewAndUnformatted bool
 	// 1. Find latest snapshot for branch
 	filters := []types.Filter{
-		{Name: aws.String("tag:" + snapshotBranchTagKey), Values: []string{s.getSnapshotTagValue()}},
-		{Name: aws.String("tag:" + snapshotRepositoryTagKey), Values: []string{s.config.GithubRepository}},
-		{Name: aws.String("tag:" + snapshotTagKeyArch), Values: []string{s.Arch()}},
-		{Name: aws.String("tag:" + snapshotTagKeyPlatform), Values: []string{s.Platform()}},
 		{Name: aws.String("status"), Values: []string{string(types.SnapshotStateCompleted)}},
 	}
-	for _, tag := range s.config.CustomTags {
-		filters = append(filters, types.Filter{Name: aws.String(fmt.Sprintf("tag:%s", tag.Key)), Values: []string{tag.Value}})
+	for _, tag := range s.defaultTags() {
+		filters = append(filters, types.Filter{Name: aws.String(fmt.Sprintf("tag:%s", *tag.Key)), Values: []string{*tag.Value}})
 	}
 	s.logger.Info().Msgf("RestoreSnapshot: Searching for the latest snapshot for branch: %s and tags: %v", gitBranch, filters)
 	snapshotsOutput, err := s.ec2Client.DescribeSnapshots(ctx, &ec2.DescribeSnapshotsInput{
@@ -284,15 +293,10 @@ func (s *AWSSnapshotter) RestoreSnapshot(ctx context.Context, mountPoint string)
 		}
 	}
 
-	commonVolumeTags := []types.Tag{
-		{Key: aws.String(snapshotBranchTagKey), Value: aws.String(s.getSnapshotTagValue())},
-		{Key: aws.String(snapshotRepositoryTagKey), Value: aws.String(s.config.GithubRepository)},
+	commonVolumeTags := append(s.defaultTags(), []types.Tag{
 		{Key: aws.String(nameTagKey), Value: aws.String(s.config.VolumeName)},
-		{Key: aws.String(lifeDurationTagKey), Value: aws.String(fmt.Sprintf("%d", time.Now().Add(time.Duration(defaultVolumeLifeDurationMinutes)*time.Minute).Unix()))},
-	}
-	for _, tag := range s.config.CustomTags {
-		commonVolumeTags = append(commonVolumeTags, types.Tag{Key: aws.String(tag.Key), Value: aws.String(tag.Value)})
-	}
+		{Key: aws.String(ttlTagKey), Value: aws.String(fmt.Sprintf("%d", time.Now().Add(time.Duration(defaultVolumeLifeDurationMinutes)*time.Minute).Unix()))},
+	}...)
 
 	// Use snapshot only if its size is at least the default volume size, otherwise create a new volume
 	if latestSnapshot != nil && latestSnapshot.VolumeSize != nil && *latestSnapshot.VolumeSize >= defaultVolumeSizeGiB {
@@ -540,14 +544,9 @@ func (s *AWSSnapshotter) CreateSnapshot(ctx context.Context, mountPoint string) 
 	// 3. Create new snapshot
 	currentTime := time.Now()
 	s.logger.Info().Msgf("CreateSnapshot: Creating snapshot '%s' from volume %s for branch %s...", s.config.SnapshotName, volumeInfo.VolumeID, s.config.GithubRef)
-	snapshotTags := []types.Tag{
-		{Key: aws.String(snapshotBranchTagKey), Value: aws.String(s.getSnapshotTagValue())},
-		{Key: aws.String(snapshotRepositoryTagKey), Value: aws.String(s.config.GithubRepository)},
+	snapshotTags := append(s.defaultTags(), []types.Tag{
 		{Key: aws.String(nameTagKey), Value: aws.String(s.config.SnapshotName)},
-	}
-	for _, tag := range s.config.CustomTags {
-		snapshotTags = append(snapshotTags, types.Tag{Key: aws.String(tag.Key), Value: aws.String(tag.Value)})
-	}
+	}...)
 	createSnapshotOutput, err := s.ec2Client.CreateSnapshot(ctx, &ec2.CreateSnapshotInput{
 		VolumeId: aws.String(volumeInfo.VolumeID),
 		TagSpecifications: []types.TagSpecification{

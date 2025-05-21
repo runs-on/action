@@ -473,8 +473,8 @@ func (s *AWSSnapshotter) RestoreSnapshot(ctx context.Context, mountPoint string)
 		s.logger.Info().Msgf("RestoreSnapshot: Docker service started.")
 
 		s.logger.Info().Msgf("RestoreSnapshot: Displaying docker disk usage...")
-		if _, err := s.runCommand(ctx, "sudo", "docker", "system", "df"); err != nil {
-			s.logger.Warn().Msgf("RestoreSnapshot: failed to display docker disk usage: %v. Docker snapshot may not be working so unmounting docker folder.", err)
+		if _, err := s.runCommand(ctx, "sudo", "docker", "system", "info"); err != nil {
+			s.logger.Warn().Msgf("RestoreSnapshot: failed to display docker info: %v. Docker snapshot may not be working so unmounting docker folder.", err)
 			// Try to unmount docker folder on error
 			if _, err := s.runCommand(ctx, "sudo", "umount", mountPoint); err != nil {
 				s.logger.Warn().Msgf("RestoreSnapshot: failed to unmount docker folder: %v", err)

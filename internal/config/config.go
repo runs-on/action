@@ -1,9 +1,7 @@
 package config
 
 import (
-	"encoding/json"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -17,7 +15,6 @@ type Config struct {
 	Metrics           []string
 	ZctionsResultsURL string
 	ActionsResultsURL string
-	RunnerConfig      *RunnerConfig
 }
 
 type Tag struct {
@@ -25,28 +22,9 @@ type Tag struct {
 	Value string `json:"value"`
 }
 
-type RunnerConfig struct {
-	DefaultBranch string `json:"defaultBranch"`
-	CustomTags    []Tag  `json:"customTags"`
-}
-
 // NewConfigFromInputs parses action inputs and environment variables to build the Config struct.
 func NewConfigFromInputs(action *githubactions.Action) (*Config, error) {
 	cfg := &Config{}
-
-	configBytes, err := os.ReadFile(filepath.Join(os.Getenv("RUNS_ON_HOME"), "config.json"))
-	if err != nil {
-		action.Warningf("Error reading RunsOn config file: %v", err)
-		return cfg, nil
-	} else {
-		var runnerConfig RunnerConfig
-		if err := json.Unmarshal(configBytes, &runnerConfig); err != nil {
-			action.Warningf("Error parsing RunsOn config file: %v", err)
-		} else {
-			cfg.RunnerConfig = &runnerConfig
-			action.Infof("Runner config: %v", cfg.RunnerConfig)
-		}
-	}
 
 	showEnvStr := action.GetInput("show_env")
 	if showEnvStr != "" {

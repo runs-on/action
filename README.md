@@ -46,10 +46,12 @@ jobs:
     steps:
       - uses: runs-on/action@v1
         with:
-          metrics: ["memory", "disk", "io"]
+          metrics: memory,disk,io
 ```
 
 **Note:** AWS provides CPU, network, and basic EBS metrics by default. Memory and detailed disk usage require the CloudWatch agent.
+
+The action will display live metrics with sparklines and charts in the post-execution summary, showing data from the last 6 hours.
 
 ## Future work
 

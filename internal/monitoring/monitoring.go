@@ -84,6 +84,36 @@ func GenerateCloudWatchConfig(action *githubactions.Action, metrics []string) er
 	// Configure metrics based on input with more frequent collection for detailed monitoring
 	for _, metric := range metrics {
 		switch strings.ToLower(metric) {
+		case "cpu":
+			config.Metrics.MetricsCollected["cpu"] = map[string]interface{}{
+				"drop_original_metrics": true,
+				"measurement": []string{
+					"usage_idle",
+					"usage_iowait",
+					"usage_user",
+					"usage_system",
+					"usage_steal",
+					"usage_nice",
+					"usage_softirq",
+					"usage_irq",
+				},
+				"totalcpu": false,
+			}
+		case "network":
+			config.Metrics.MetricsCollected["net"] = map[string]interface{}{
+				"drop_original_metrics": true,
+				"measurement": []string{
+					"bytes_sent",
+					"bytes_recv",
+					"packets_sent",
+					"packets_recv",
+					"err_in",
+					"err_out",
+					"drop_in",
+					"drop_out",
+				},
+				"resources": []string{"*"},
+			}
 		case "memory":
 			config.Metrics.MetricsCollected["mem"] = map[string]interface{}{
 				"drop_original_metrics": true,
@@ -252,6 +282,34 @@ func GenerateMetricsSummary(action *githubactions.Action, metrics []string, form
 	// Display custom metrics if enabled
 	for _, metricType := range metrics {
 		switch strings.ToLower(metricType) {
+		case "cpu":
+			// Display detailed CPU metrics from agent
+			for _, cpuMetric := range []string{"usage_user", "usage_system", "usage_iowait"} {
+				summary := collector.GetMetricSummary("cpu_"+cpuMetric, NAMESPACE, []types.Dimension{
+					{
+						Name:  aws.String("cpu"),
+						Value: aws.String("cpu-total"),
+					},
+				}, launchTime)
+				displayMetric(action, fmt.Sprintf("CPU %s", strings.Replace(cpuMetric, "usage_", "", 1)), summary, "%", formatter)
+			}
+		case "network":
+			// Display network metrics from agent
+			summary := collector.GetMetricSummary("net_bytes_sent", NAMESPACE, []types.Dimension{
+				{
+					Name:  aws.String("interface"),
+					Value: aws.String("eth0"),
+				},
+			}, launchTime)
+			displayMetric(action, "Network bytes sent (eth0)", summary, "bytes/s", formatter)
+
+			summary = collector.GetMetricSummary("net_bytes_recv", NAMESPACE, []types.Dimension{
+				{
+					Name:  aws.String("interface"),
+					Value: aws.String("eth0"),
+				},
+			}, launchTime)
+			displayMetric(action, "Network bytes recv (eth0)", summary, "bytes/s", formatter)
 		case "memory":
 			summary := collector.GetMetricSummary("mem_used_percent", NAMESPACE, []types.Dimension{}, launchTime)
 			displayMetric(action, "Memory", summary, "%", formatter)

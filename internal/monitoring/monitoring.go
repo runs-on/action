@@ -106,7 +106,13 @@ func GenerateCloudWatchConfig(action *githubactions.Action, metrics []string) er
 	}
 
 	// Write config file
-	configPath := "/tmp/runs-on-metrics.json"
+	configFile, err := os.CreateTemp("", "runs-on-metrics-*.json")
+	if err != nil {
+		return fmt.Errorf("failed to create temp file: %w", err)
+	}
+	configPath := configFile.Name()
+	defer configFile.Close()
+
 	configJSON, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal config: %w", err)
@@ -117,6 +123,8 @@ func GenerateCloudWatchConfig(action *githubactions.Action, metrics []string) er
 	}
 
 	action.Infof("Generated CloudWatch config with metrics: %v", metrics)
+	action.Infof("Config file: %s", configPath)
+	action.Infof("🔗 CloudWatch link: %s", GetCloudWatchDashboardURL(action))
 
 	// Append the config to the running CloudWatch agent
 	return appendCloudWatchConfig(action, configPath)
@@ -160,7 +168,7 @@ func GetCloudWatchDashboardURL(action *githubactions.Action) string {
 		action.Fatalf("RUNS_ON_INSTANCE_ID is not set")
 	}
 
-	return fmt.Sprintf("https://%s.console.aws.amazon.com/cloudwatch/home?region=%s#metricsV2:graph=~();search=RunsOn~2FAction;namespace=RunsOn~2FRunners;dimensions=InstanceId:%s",
+	return fmt.Sprintf("https://%s.console.aws.amazon.com/cloudwatch/home?region=%s#metricsV2:graph=~();namespace=RunsOn/Runners;dimensions=InstanceId:%s",
 		region, region, instanceID)
 }
 
@@ -190,7 +198,7 @@ func GenerateMetricsSummary(action *githubactions.Action, metrics []string, form
 	action.Infof("## CloudWatch Metrics Summary (format: %s)", formatter)
 	action.Infof("Enabled metrics: cpu, network, %s\n", strings.Join(metrics, ", "))
 	action.Infof("Namespace: %s\n", NAMESPACE)
-	action.Infof("🔗 CloudWatch Dashboard: %s\n", GetCloudWatchDashboardURL(action))
+	action.Infof("🔗 CloudWatch link: %s\n", GetCloudWatchDashboardURL(action))
 
 	// Fetch and display metrics with sparklines
 	collector := NewMetricsCollector(action)

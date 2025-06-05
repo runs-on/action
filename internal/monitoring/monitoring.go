@@ -55,8 +55,7 @@ func GenerateCloudWatchConfig(action *githubactions.Action, metrics []string) er
 			Namespace:        NAMESPACE,
 			MetricsCollected: make(map[string]interface{}),
 			AppendDimensions: map[string]string{
-				"InstanceId":   "${aws:InstanceId}",
-				"InstanceType": "${aws:InstanceType}",
+				"InstanceId": "${aws:InstanceId}",
 			},
 		},
 	}
@@ -66,21 +65,21 @@ func GenerateCloudWatchConfig(action *githubactions.Action, metrics []string) er
 		switch strings.ToLower(metric) {
 		case "memory":
 			config.Metrics.MetricsCollected["mem"] = map[string]interface{}{
+				"drop_original_metrics": true,
 				"measurement": []string{
-					"mem_used_percent",
-					"mem_available_percent",
-					"mem_total",
-					"mem_used",
+					"used_percent",
+					"available_percent",
+					"total",
+					"used",
 				},
 				"metrics_collection_interval": 10,
 			}
 		case "disk":
 			config.Metrics.MetricsCollected["disk"] = map[string]interface{}{
+				"drop_original_metrics": true,
+				"drop_device":           true,
 				"measurement": []string{
-					"disk_used_percent",
-					"disk_free",
-					"disk_total",
-					"disk_used",
+					"used_percent",
 				},
 				"resources": []string{"/", "/tmp", "/var/lib/docker", "/home/runner"},
 				"ignore_file_system_types": []string{
@@ -90,16 +89,17 @@ func GenerateCloudWatchConfig(action *githubactions.Action, metrics []string) er
 			}
 		case "io":
 			config.Metrics.MetricsCollected["diskio"] = map[string]interface{}{
+				"drop_original_metrics": true,
 				"measurement": []string{
-					"diskio_reads",
-					"diskio_writes",
-					"diskio_read_bytes",
-					"diskio_write_bytes",
-					"diskio_read_time",
-					"diskio_write_time",
-					"diskio_io_time",
+					"reads",
+					"writes",
+					"read_bytes",
+					"write_bytes",
+					"read_time",
+					"write_time",
+					"io_time",
 				},
-				"resources":                   []string{"*"},
+				"resources":                   []string{"nvme0n1p1"},
 				"metrics_collection_interval": 10,
 			}
 		}
@@ -164,9 +164,14 @@ func GetCloudWatchDashboardURL(action *githubactions.Action) string {
 		region, region, instanceID)
 }
 
-func GenerateMetricsSummary(action *githubactions.Action, metrics []string) {
+func GenerateMetricsSummary(action *githubactions.Action, metrics []string, formatter string) {
 	if len(metrics) == 0 {
 		return
+	}
+
+	// Default formatter to "chart" if empty
+	if formatter == "" {
+		formatter = "chart"
 	}
 
 	// parsing: 2025-06-05T12:05:32+02:00
@@ -182,10 +187,10 @@ func GenerateMetricsSummary(action *githubactions.Action, metrics []string) {
 		return
 	}
 
-	action.Infof("📊 CloudWatch Metrics Summary")
-	action.Infof("Enabled metrics: %s", strings.Join(metrics, ", "))
-	action.Infof("Namespace: %s", NAMESPACE)
-	action.Infof("🔗 CloudWatch Dashboard: %s", GetCloudWatchDashboardURL(action))
+	action.Infof("## CloudWatch Metrics Summary (format: %s)", formatter)
+	action.Infof("Enabled metrics: cpu, network, %s\n", strings.Join(metrics, ", "))
+	action.Infof("Namespace: %s\n", NAMESPACE)
+	action.Infof("🔗 CloudWatch Dashboard: %s\n", GetCloudWatchDashboardURL(action))
 
 	// Fetch and display metrics with sparklines
 	collector := NewMetricsCollector(action)
@@ -210,69 +215,114 @@ func GenerateMetricsSummary(action *githubactions.Action, metrics []string) {
 
 	// Display AWS metrics
 	for _, metric := range awsMetrics {
-		summary := collector.GetMetricSummary(metric.awsName, metric.namespace, launchTime)
-		if summary != nil {
-			sparkline := createSparkline(summary.Data)
-			action.Infof("  %-12s %s min:%.1f avg:%.1f max:%.1f %s",
-				metric.name, sparkline, summary.Min, summary.Avg, summary.Max, metric.unit)
-		} else {
-			action.Infof("  %-12s ─────────────── (no data)", metric.name)
-		}
+		summary := collector.GetMetricSummary(metric.awsName, metric.namespace, []types.Dimension{}, launchTime)
+		displayMetric(action, metric.name, summary, metric.unit, formatter)
 	}
 
 	// Display custom metrics if enabled
 	for _, metricType := range metrics {
 		switch strings.ToLower(metricType) {
 		case "memory":
-			summary := collector.GetMetricSummary("mem_used_percent", NAMESPACE, launchTime)
-			if summary != nil {
-				sparkline := createSparkline(summary.Data)
-				action.Infof("  %-12s %s min:%.1f avg:%.1f max:%.1f %%",
-					"Memory", sparkline, summary.Min, summary.Avg, summary.Max)
-			}
+			summary := collector.GetMetricSummary("mem_used_percent", NAMESPACE, []types.Dimension{}, launchTime)
+			displayMetric(action, "Memory", summary, "%", formatter)
 		case "disk":
-			summary := collector.GetMetricSummary("used_percent", NAMESPACE, launchTime)
-			if summary != nil {
-				sparkline := createSparkline(summary.Data)
-				action.Infof("  %-12s %s min:%.1f avg:%.1f max:%.1f %%",
-					"Disk", sparkline, summary.Min, summary.Avg, summary.Max)
+			for _, path := range []string{"/", "/tmp", "/var/lib/docker", "/home/runner"} {
+				summary := collector.GetMetricSummary("disk_used_percent", NAMESPACE, []types.Dimension{
+					{
+						Name:  aws.String("path"),
+						Value: aws.String(path),
+					},
+					{
+						Name:  aws.String("fstype"),
+						Value: aws.String("ext4"),
+					},
+				}, launchTime)
+				// some paths might not have mount points
+				if path != "/" && summary == nil {
+					continue
+				}
+				displayMetric(action, fmt.Sprintf("Disk used %% (%s)", path), summary, "%", formatter)
 			}
 		case "io":
-			summaryReads := collector.GetMetricSummary("diskio_reads", NAMESPACE, launchTime)
-			summaryWrites := collector.GetMetricSummary("diskio_writes", NAMESPACE, launchTime)
-			if summaryReads != nil && summaryWrites != nil {
-				// Combine read/write data for I/O sparkline
-				combined := make([]float64, len(summaryReads.Data))
-				for i := range combined {
-					if i < len(summaryWrites.Data) {
-						combined[i] = summaryReads.Data[i] + summaryWrites.Data[i]
-					} else {
-						combined[i] = summaryReads.Data[i]
-					}
-				}
-				sparkline := createSparkline(combined)
-				total := summaryReads.Avg + summaryWrites.Avg
-				action.Infof("  %-12s %s avg:%.0f ops/s",
-					"Disk I/O", sparkline, total)
-			}
+			summaryReads := collector.GetMetricSummary("diskio_reads", NAMESPACE, []types.Dimension{
+				{
+					Name:  aws.String("name"),
+					Value: aws.String("nvme0n1p1"),
+				},
+			}, launchTime)
+			summaryWrites := collector.GetMetricSummary("diskio_writes", NAMESPACE, []types.Dimension{
+				{
+					Name:  aws.String("name"),
+					Value: aws.String("nvme0n1p1"),
+				},
+			}, launchTime)
+			displayMetric(action, fmt.Sprintf("Disk Reads (%s)", "nvme0n1p1"), summaryReads, "ops/s", formatter)
+			displayMetric(action, fmt.Sprintf("Disk Writes (%s)", "nvme0n1p1"), summaryWrites, "ops/s", formatter)
 		}
 	}
+}
 
-	// Show detailed chart for CPU as an example
-	cpuSummary := collector.GetMetricSummary("CPUUtilization", "AWS/EC2", launchTime)
-	if cpuSummary != nil && len(cpuSummary.Data) > 3 {
-		action.Infof("\n📊 Detailed CPU Chart (6h):")
-		graph := asciigraph.Plot(cpuSummary.Data,
+// displayMetric shows a metric in the specified format (sparkline or chart)
+func displayMetric(action *githubactions.Action, name string, summary *MetricSummary, unit string, formatter string) {
+	if summary == nil {
+		action.Infof("  %-12s ─────────────── (no data)", name)
+		return
+	}
+
+	if formatter == "chart" && len(summary.Data) > 3 {
+		action.Infof("\n📊 %s Chart:", name)
+		caption := fmt.Sprintf("%s (%s)", name, unit)
+		graph := asciigraph.Plot(summary.Data,
 			asciigraph.Height(8),
 			asciigraph.Width(60),
-			asciigraph.Caption("CPU Utilization (%)"),
+			asciigraph.Caption(caption),
 			asciigraph.Precision(1),
 		)
 		// Print each line of the graph with proper indentation
 		for _, line := range strings.Split(graph, "\n") {
 			action.Infof("  %s", line)
 		}
+		action.Infof("  Stats: min:%.1f avg:%.1f max:%.1f %s", summary.Min, summary.Avg, summary.Max, unit)
+	} else {
+		// Use sparkline format
+		sparkline := createSparkline(summary.Data)
+		if unit == "ops/s" {
+			action.Infof("  %-12s %s avg:%.0f %s",
+				name, sparkline, summary.Avg, unit)
+		} else {
+			action.Infof("  %-12s %s min:%.1f avg:%.1f max:%.1f %s",
+				name, sparkline, summary.Min, summary.Avg, summary.Max, unit)
+		}
 	}
+	action.Infof("\n")
+}
+
+// calculateMin returns the minimum value in a slice
+func calculateMin(data []float64) float64 {
+	if len(data) == 0 {
+		return 0
+	}
+	min := data[0]
+	for _, v := range data {
+		if v < min {
+			min = v
+		}
+	}
+	return min
+}
+
+// calculateMax returns the maximum value in a slice
+func calculateMax(data []float64) float64 {
+	if len(data) == 0 {
+		return 0
+	}
+	max := data[0]
+	for _, v := range data {
+		if v > max {
+			max = v
+		}
+	}
+	return max
 }
 
 type MetricsCollector struct {
@@ -301,8 +351,8 @@ func NewMetricsCollector(action *githubactions.Action) *MetricsCollector {
 	}
 }
 
-func (mc *MetricsCollector) GetMetricSummary(metricName, namespace string, startTime time.Time) *MetricSummary {
-	data, err := mc.getMetricData(metricName, namespace, startTime)
+func (mc *MetricsCollector) GetMetricSummary(metricName, namespace string, dimensions []types.Dimension, startTime time.Time) *MetricSummary {
+	data, err := mc.getMetricData(metricName, namespace, dimensions, startTime)
 	if err != nil {
 		mc.action.Debugf("Failed to get metric %s: %v", metricName, err)
 		return nil
@@ -329,7 +379,7 @@ func (mc *MetricsCollector) GetMetricSummary(metricName, namespace string, start
 	}
 }
 
-func (mc *MetricsCollector) getMetricData(metricName, namespace string, startTime time.Time) ([]MetricDataPoint, error) {
+func (mc *MetricsCollector) getMetricData(metricName, namespace string, dimensions []types.Dimension, startTime time.Time) ([]MetricDataPoint, error) {
 	endTime := time.Now()
 
 	input := &cloudwatch.GetMetricDataInput{
@@ -340,14 +390,14 @@ func (mc *MetricsCollector) getMetricData(metricName, namespace string, startTim
 					Metric: &types.Metric{
 						Namespace:  aws.String(namespace),
 						MetricName: aws.String(metricName),
-						Dimensions: []types.Dimension{
+						Dimensions: append(dimensions, []types.Dimension{
 							{
 								Name:  aws.String("InstanceId"),
 								Value: aws.String(mc.instanceID),
 							},
-						},
+						}...),
 					},
-					Period: aws.Int32(60), // 1 minute granularity for raw data
+					Period: aws.Int32(10), // 10 seconds granularity for raw data
 					Stat:   aws.String("Average"),
 				},
 				ReturnData: aws.Bool(true),

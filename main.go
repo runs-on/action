@@ -60,7 +60,7 @@ func handlePostExecution(action *githubactions.Action, ctx context.Context) {
 
 	// Display metrics summary
 	if cfg.HasMetrics() {
-		monitoring.GenerateMetricsSummary(action, cfg.Metrics)
+		monitoring.GenerateMetricsSummary(action, cfg.Metrics, "chart")
 	}
 
 	action.Infof("Post-execution phase finished.")

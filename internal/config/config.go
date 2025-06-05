@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 
@@ -70,5 +71,5 @@ func (c *Config) HasShowCosts() bool {
 }
 
 func (c *Config) HasMetrics() bool {
-	return len(c.Metrics) > 0
+	return len(c.Metrics) > 0 && runtime.GOOS != "windows"
 }

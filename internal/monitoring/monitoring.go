@@ -72,35 +72,35 @@ func GenerateCloudWatchConfig(action *githubactions.Action, metrics []string) er
 					"mem_total",
 					"mem_used",
 				},
-				"metrics_collection_interval": 60,
+				"metrics_collection_interval": 10,
 			}
 		case "disk":
 			config.Metrics.MetricsCollected["disk"] = map[string]interface{}{
 				"measurement": []string{
-					"used_percent",
-					"free",
-					"total",
-					"used",
+					"disk_used_percent",
+					"disk_free",
+					"disk_total",
+					"disk_used",
 				},
-				"resources": []string{"*"},
+				"resources": []string{"/", "/tmp", "/var/lib/docker", "/home/runner"},
 				"ignore_file_system_types": []string{
-					"sysfs", "devtmpfs", "tmpfs",
+					"sysfs", "devtmpfs",
 				},
 				"metrics_collection_interval": 60,
 			}
 		case "io":
 			config.Metrics.MetricsCollected["diskio"] = map[string]interface{}{
 				"measurement": []string{
-					"reads",
-					"writes",
-					"read_bytes",
-					"write_bytes",
-					"read_time",
-					"write_time",
-					"io_time",
+					"diskio_reads",
+					"diskio_writes",
+					"diskio_read_bytes",
+					"diskio_write_bytes",
+					"diskio_read_time",
+					"diskio_write_time",
+					"diskio_io_time",
 				},
 				"resources":                   []string{"*"},
-				"metrics_collection_interval": 60,
+				"metrics_collection_interval": 10,
 			}
 		}
 	}
@@ -144,7 +144,7 @@ func appendCloudWatchConfig(action *githubactions.Action, configPath string) err
 	}
 
 	action.Infof("Successfully appended CloudWatch metrics configuration")
-	action.Debugf("CloudWatch agent output: %s", string(output))
+	action.Infof("CloudWatch agent output: %s", string(output))
 
 	return nil
 }
@@ -160,7 +160,7 @@ func GetCloudWatchDashboardURL(action *githubactions.Action) string {
 		action.Fatalf("RUNS_ON_INSTANCE_ID is not set")
 	}
 
-	return fmt.Sprintf("https://%s.console.aws.amazon.com/cloudwatch/home?region=%s#metricsV2:graph=~();search=RunsOn~2FAction;namespace=RunsOn~2FAction;dimensions=InstanceId:%s",
+	return fmt.Sprintf("https://%s.console.aws.amazon.com/cloudwatch/home?region=%s#metricsV2:graph=~();search=RunsOn~2FAction;namespace=RunsOn~2FRunners;dimensions=InstanceId:%s",
 		region, region, instanceID)
 }
 
@@ -238,8 +238,8 @@ func GenerateMetricsSummary(action *githubactions.Action, metrics []string) {
 					"Disk", sparkline, summary.Min, summary.Avg, summary.Max)
 			}
 		case "io":
-			summaryReads := collector.GetMetricSummary("reads", NAMESPACE, launchTime)
-			summaryWrites := collector.GetMetricSummary("writes", NAMESPACE, launchTime)
+			summaryReads := collector.GetMetricSummary("diskio_reads", NAMESPACE, launchTime)
+			summaryWrites := collector.GetMetricSummary("diskio_writes", NAMESPACE, launchTime)
 			if summaryReads != nil && summaryWrites != nil {
 				// Combine read/write data for I/O sparkline
 				combined := make([]float64, len(summaryReads.Data))

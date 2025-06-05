@@ -179,7 +179,8 @@ func GetCloudWatchDashboardURL(action *githubactions.Action) string {
 		action.Fatalf("RUNS_ON_INSTANCE_ID is not set")
 	}
 
-	return fmt.Sprintf("https://%s.console.aws.amazon.com/cloudwatch/home?region=%s#metricsV2:graph=~();namespace=RunsOn/Runners;dimensions=InstanceId:%s",
+	// https://us-east-1.console.aws.amazon.com/ec2/home?region=us-east-1#InstanceDetails:instanceId=i-03ac2c780bf1d5a42
+	return fmt.Sprintf("https://%s.console.aws.amazon.com/ec2/home?region=%s#InstanceDetails:instanceId=%s",
 		region, region, instanceID)
 }
 

@@ -28,12 +28,18 @@ const NAMESPACE = "CWAgent"
 
 type CloudWatchConfig struct {
 	Metrics MetricsConfig `json:"metrics"`
+	Agent   AgentConfig   `json:"agent"`
 }
 
 type MetricsConfig struct {
-	Namespace        string                 `json:"namespace"`
-	MetricsCollected map[string]interface{} `json:"metrics_collected"`
-	AppendDimensions map[string]string      `json:"append_dimensions"`
+	Namespace          string                 `json:"namespace"`
+	MetricsCollected   map[string]interface{} `json:"metrics_collected"`
+	AppendDimensions   map[string]string      `json:"append_dimensions"`
+	ForceFlushInterval int                    `json:"force_flush_interval"`
+}
+
+type AgentConfig struct {
+	MetricsCollectionInterval int `json:"metrics_collection_interval"`
 }
 
 type MetricDataPoint struct {
@@ -68,6 +74,10 @@ func GenerateCloudWatchConfig(action *githubactions.Action, metrics []string) er
 			AppendDimensions: map[string]string{
 				"InstanceId": "${aws:InstanceId}",
 			},
+			ForceFlushInterval: 5, // 5 seconds
+		},
+		Agent: AgentConfig{
+			MetricsCollectionInterval: 10,
 		},
 	}
 
@@ -83,7 +93,7 @@ func GenerateCloudWatchConfig(action *githubactions.Action, metrics []string) er
 					"total",
 					"used",
 				},
-				"metrics_collection_interval": 10, // Keep aggressive collection
+				// "metrics_collection_interval": 10, // Keep aggressive collection
 			}
 		case "disk":
 			config.Metrics.MetricsCollected["disk"] = map[string]interface{}{
@@ -96,7 +106,7 @@ func GenerateCloudWatchConfig(action *githubactions.Action, metrics []string) er
 				"ignore_file_system_types": []string{
 					"sysfs", "devtmpfs",
 				},
-				"metrics_collection_interval": 30, // More frequent for detailed monitoring
+				// "metrics_collection_interval": 30, // More frequent for detailed monitoring
 			}
 		case "io":
 			config.Metrics.MetricsCollected["diskio"] = map[string]interface{}{
@@ -110,8 +120,8 @@ func GenerateCloudWatchConfig(action *githubactions.Action, metrics []string) er
 					"write_time",
 					"io_time",
 				},
-				"resources":                   []string{"nvme0n1p1"},
-				"metrics_collection_interval": 10, // Keep high frequency
+				"resources": []string{"nvme0n1p1"},
+				// "metrics_collection_interval": 10, // Keep high frequency
 			}
 		}
 	}
@@ -285,7 +295,7 @@ func GenerateMetricsSummary(action *githubactions.Action, metrics []string, form
 // displayMetric shows a metric in the specified format (sparkline or chart)
 func displayMetric(action *githubactions.Action, name string, summary *MetricSummary, unit string, formatter string) {
 	if summary == nil {
-		action.Infof("  %-12s ─────────────── (no data)", name)
+		action.Infof("  %-12s ─────────────── (no data yet)", name)
 		return
 	}
 

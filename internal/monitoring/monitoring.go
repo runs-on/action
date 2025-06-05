@@ -18,7 +18,8 @@ import (
 	"github.com/sethvargo/go-githubactions"
 )
 
-const NAMESPACE = "RunsOn/Runners"
+// const NAMESPACE = "RunsOn/Runners"
+const NAMESPACE = "CWAgent"
 
 type CloudWatchConfig struct {
 	Metrics MetricsConfig `json:"metrics"`

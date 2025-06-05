@@ -16,15 +16,7 @@ inputs:
     description: 'Control how execution costs are displayed: "inline" for log output, "summary" for GitHub job summary, any other value disables the feature'
     required: false
     default: 'inline'
-  snapshot_dirs:
-    description: 'Newline separated list of directories (absolute paths) to snapshot across job execution.'
+  metrics:
+    description: 'Comma separated list of additional metrics to send to CloudWatch (memory, disk, io)'
     required: false
     default: ''
-  snapshot_version:
-    description: 'Version of the snapshot to use'
-    required: false
-    default: 'v1'
-  snapshot_wait_for_completion:
-    description: 'Wait for snapshot completion before returning. Note that the first snapshot will always be waited for.'
-    required: false
-    default: 'false'

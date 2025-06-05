@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/sethvargo/go-githubactions"
 )
@@ -13,6 +14,7 @@ import (
 type Config struct {
 	ShowEnv           bool
 	ShowCosts         string
+	Metrics           []string
 	ZctionsResultsURL string
 	ActionsResultsURL string
 	RunnerConfig      *RunnerConfig
@@ -60,11 +62,17 @@ func NewConfigFromInputs(action *githubactions.Action) (*Config, error) {
 		cfg.ShowCosts = "inline"
 	}
 
+	metricsInput := action.GetInput("metrics")
+	if metricsInput != "" {
+		cfg.Metrics = strings.Split(strings.ReplaceAll(metricsInput, " ", ""), ",")
+	}
+
 	cfg.ZctionsResultsURL = os.Getenv("ZCTIONS_RESULTS_URL")
 	cfg.ActionsResultsURL = os.Getenv("ACTIONS_RESULTS_URL")
 
 	action.Infof("Input 'show_env': %t", cfg.ShowEnv)
 	action.Infof("Input 'show_costs': %s", cfg.ShowCosts)
+	action.Infof("Input 'metrics': %v", cfg.Metrics)
 
 	if cfg.ZctionsResultsURL != "" {
 		action.Infof("ZCTIONS_RESULTS_URL is set: %s", cfg.ZctionsResultsURL)
@@ -81,4 +89,8 @@ func (c *Config) HasShowEnv() bool {
 
 func (c *Config) HasShowCosts() bool {
 	return c.ShowCosts != "inline"
+}
+
+func (c *Config) HasMetrics() bool {
+	return len(c.Metrics) > 0
 }

@@ -3,18 +3,17 @@ package main
 import (
 	"context"
 	"flag"
-	"os"
 
-	"github.com/rs/zerolog"
 	"github.com/runs-on/action/internal/cache"
 	"github.com/runs-on/action/internal/config"
 	"github.com/runs-on/action/internal/costs"
 	"github.com/runs-on/action/internal/env"
+	"github.com/runs-on/action/internal/monitoring"
 	"github.com/sethvargo/go-githubactions"
 )
 
 // handleMainExecution contains the original main logic.
-func handleMainExecution(action *githubactions.Action, ctx context.Context, logger *zerolog.Logger) {
+func handleMainExecution(action *githubactions.Action, ctx context.Context) {
 	cfg, err := config.NewConfigFromInputs(action)
 	if err != nil {
 		action.Fatalf("Failed to load configuration: %v", err)
@@ -31,11 +30,18 @@ func handleMainExecution(action *githubactions.Action, ctx context.Context, logg
 		action.Infof("show_costs is enabled. You will find cost details in the post-execution step of this action.")
 	}
 
+	// Configure CloudWatch metrics if requested
+	if cfg.HasMetrics() {
+		if err := monitoring.GenerateCloudWatchConfig(action, cfg.Metrics); err != nil {
+			action.Errorf("Failed to configure CloudWatch metrics: %v", err)
+		}
+	}
+
 	action.Infof("Action finished.")
 }
 
 // handlePostExecution contains the logic for the post-execution phase.
-func handlePostExecution(action *githubactions.Action, ctx context.Context, logger *zerolog.Logger) {
+func handlePostExecution(action *githubactions.Action, ctx context.Context) {
 	action.Infof("Running post-execution phase...")
 	cfg, err := config.NewConfigFromInputs(action)
 	if err != nil {
@@ -51,20 +57,25 @@ func handlePostExecution(action *githubactions.Action, ctx context.Context, logg
 	if err != nil {
 		action.Errorf("Failed to compute or display costs: %v", err)
 	}
+
+	// Display metrics summary
+	if cfg.HasMetrics() {
+		monitoring.GenerateMetricsSummary(action, cfg.Metrics)
+	}
+
 	action.Infof("Post-execution phase finished.")
 }
 
 func main() {
 	ctx := context.Background()
-	logger := zerolog.New(os.Stdout).With().Timestamp().Logger()
 	postFlag := flag.Bool("post", false, "Indicates the post-execution phase")
 	flag.Parse()
 
 	action := githubactions.New()
 
 	if *postFlag {
-		handlePostExecution(action, ctx, &logger)
+		handlePostExecution(action, ctx)
 	} else {
-		handleMainExecution(action, ctx, &logger)
+		handleMainExecution(action, ctx)
 	}
 }

@@ -15,7 +15,9 @@ jobs:
 
 ## Options
 
-- `show-env`: Show all environment variables available to actions (used for debugging purposes).
+### show-env
+
+Show all environment variables available to actions (used for debugging purposes).
 
 ```yaml
 jobs:
@@ -26,6 +28,28 @@ jobs:
         with:
           show-env: true
 ```
+
+### metrics
+
+Send additional metrics using CloudWatch agent.
+
+Supported metrics:
+
+- `memory` (mem_used_percent, mem_available_percent, mem_total, mem_used)
+- `disk` (used_percent, free, total, used for all filesystems, excluding sysfs/devtmpfs)  
+- `io` (reads, writes, read_bytes, write_bytes, read_time, write_time, io_time)
+
+```yaml
+jobs:
+  build:
+    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/extras=s3-cache
+    steps:
+      - uses: runs-on/action@v1
+        with:
+          metrics: ["memory", "disk", "io"]
+```
+
+**Note:** AWS provides CPU, network, and basic EBS metrics by default. Memory and detailed disk usage require the CloudWatch agent.
 
 ## Future work
 

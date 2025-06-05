@@ -30,19 +30,15 @@ function chooseBinary() {
 function main() {
     const binary = chooseBinary()
     const mainScript = path.join(__dirname, binary)
-    
-    const spawnSyncReturns = childProcess.spawnSync(mainScript, ARGS, { 
-        stdio: 'inherit' 
-    })
-    
-    // Handle spawn errors
-    if (spawnSyncReturns.error) {
-        console.error(`Failed to execute ${binary}:`, spawnSyncReturns.error.message)
-        process.exit(1)
+    if (os.platform() === WINDOWS) {
+        childProcess.execFileSync('powershell', [
+            '-Command',
+            `Start-Process -FilePath "${mainScript}" -ArgumentList "${ARGS.join(' ')}" -Verb RunAs -WindowStyle Hidden -Wait`
+        ], { stdio: 'inherit' })
+    } else {
+        childProcess.execFileSync('sudo', ['-n', '-E', mainScript, ...ARGS], { stdio: 'inherit' })
     }
-    
-    // Exit with child process status, defaulting to 1 if null/undefined
-    process.exit(spawnSyncReturns.status ?? 1)
+    process.exit(0)
 }
 
 if (require.main === module) {

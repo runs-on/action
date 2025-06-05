@@ -14,6 +14,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatch"
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatch/types"
+	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/guptarohit/asciigraph"
 	"github.com/sethvargo/go-githubactions"
 )
@@ -22,7 +23,8 @@ import (
 
 const NAMESPACE = "CWAgent"
 
-// https://us-east-1.console.aws.amazon.com/ec2/home?region=us-east-1#InstanceDetails:instanceId=i-0971dcd7de67697c9
+// https://us-east-1.console.aws.amazon.com/ec2/home?region=us-east-1#InstanceDetails:instanceId=i-03ac2c780bf1d5a42
+// https://us-east-1.console.aws.amazon.com/cloudwatch/home?region=us-east-1#metricsV2?graph=~()&namespace=~'CWAgent&query=~'InstanceId*3d*22i-03ac2c780bf1d5a42*22
 
 type CloudWatchConfig struct {
 	Metrics MetricsConfig `json:"metrics"`
@@ -54,6 +56,11 @@ func GenerateCloudWatchConfig(action *githubactions.Action, metrics []string) er
 		return nil
 	}
 
+	// Enable detailed monitoring for the instance
+	if err := enableDetailedMonitoring(action); err != nil {
+		action.Warningf("Failed to enable detailed monitoring: %v", err)
+	}
+
 	config := CloudWatchConfig{
 		Metrics: MetricsConfig{
 			Namespace:        NAMESPACE,
@@ -64,7 +71,7 @@ func GenerateCloudWatchConfig(action *githubactions.Action, metrics []string) er
 		},
 	}
 
-	// Configure metrics based on input
+	// Configure metrics based on input with more frequent collection for detailed monitoring
 	for _, metric := range metrics {
 		switch strings.ToLower(metric) {
 		case "memory":
@@ -76,7 +83,7 @@ func GenerateCloudWatchConfig(action *githubactions.Action, metrics []string) er
 					"total",
 					"used",
 				},
-				"metrics_collection_interval": 10,
+				"metrics_collection_interval": 10, // Keep aggressive collection
 			}
 		case "disk":
 			config.Metrics.MetricsCollected["disk"] = map[string]interface{}{
@@ -89,7 +96,7 @@ func GenerateCloudWatchConfig(action *githubactions.Action, metrics []string) er
 				"ignore_file_system_types": []string{
 					"sysfs", "devtmpfs",
 				},
-				"metrics_collection_interval": 60,
+				"metrics_collection_interval": 30, // More frequent for detailed monitoring
 			}
 		case "io":
 			config.Metrics.MetricsCollected["diskio"] = map[string]interface{}{
@@ -104,7 +111,7 @@ func GenerateCloudWatchConfig(action *githubactions.Action, metrics []string) er
 					"io_time",
 				},
 				"resources":                   []string{"nvme0n1p1"},
-				"metrics_collection_interval": 10,
+				"metrics_collection_interval": 10, // Keep high frequency
 			}
 		}
 	}
@@ -519,4 +526,36 @@ func calculateStats(data []float64) (min, max, avg float64) {
 
 	avg = sum / float64(len(data))
 	return
+}
+
+func enableDetailedMonitoring(action *githubactions.Action) error {
+	instanceID := os.Getenv("RUNS_ON_INSTANCE_ID")
+	if instanceID == "" {
+		return fmt.Errorf("RUNS_ON_INSTANCE_ID not set")
+	}
+
+	cfg, err := config.LoadDefaultConfig(context.Background())
+	if err != nil {
+		return fmt.Errorf("failed to load AWS config: %w", err)
+	}
+
+	ec2Client := ec2.NewFromConfig(cfg)
+
+	// Enable detailed monitoring
+	input := &ec2.MonitorInstancesInput{
+		InstanceIds: []string{instanceID},
+	}
+
+	result, err := ec2Client.MonitorInstances(context.Background(), input)
+	if err != nil {
+		return fmt.Errorf("failed to enable detailed monitoring: %w", err)
+	}
+
+	if len(result.InstanceMonitorings) > 0 {
+		monitoring := result.InstanceMonitorings[0]
+		action.Infof("✅ Detailed monitoring enabled for instance %s (state: %s)",
+			*monitoring.InstanceId, monitoring.Monitoring.State)
+	}
+
+	return nil
 }

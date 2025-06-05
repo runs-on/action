@@ -19,7 +19,10 @@ import (
 )
 
 // const NAMESPACE = "RunsOn/Runners"
+
 const NAMESPACE = "CWAgent"
+
+// https://us-east-1.console.aws.amazon.com/ec2/home?region=us-east-1#InstanceDetails:instanceId=i-0971dcd7de67697c9
 
 type CloudWatchConfig struct {
 	Metrics MetricsConfig `json:"metrics"`
@@ -278,7 +281,7 @@ func displayMetric(action *githubactions.Action, name string, summary *MetricSum
 		return
 	}
 
-	if formatter == "chart" && len(summary.Data) > 3 {
+	if formatter == "chart" {
 		action.Infof("\n📊 %s Chart:", name)
 		caption := fmt.Sprintf("%s (%s)", name, unit)
 		graph := asciigraph.Plot(summary.Data,
@@ -363,7 +366,7 @@ func NewMetricsCollector(action *githubactions.Action) *MetricsCollector {
 func (mc *MetricsCollector) GetMetricSummary(metricName, namespace string, dimensions []types.Dimension, startTime time.Time) *MetricSummary {
 	data, err := mc.getMetricData(metricName, namespace, dimensions, startTime)
 	if err != nil {
-		mc.action.Debugf("Failed to get metric %s: %v", metricName, err)
+		mc.action.Infof("Failed to get metric %s: %v", metricName, err)
 		return nil
 	}
 

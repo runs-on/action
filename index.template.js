@@ -1,6 +1,7 @@
 const childProcess = require('child_process')
 const os = require('os')
 const process = require('process')
+const path = require('path')
 
 const ARGS = '{{ .Args }}'.split(',')
 const WINDOWS = 'win32'
@@ -28,18 +29,20 @@ function chooseBinary() {
 
 function main() {
     const binary = chooseBinary()
-    const mainScript = `${__dirname}/${binary}`
-    console.log('Current user:', childProcess.execSync('whoami').toString().trim())
+    const mainScript = path.join(__dirname, binary)
     
-    if (os.platform() === WINDOWS) {
-        childProcess.execFileSync('powershell', [
-            '-Command',
-            `Start-Process -FilePath "${mainScript}" -ArgumentList "${ARGS.join(' ')}" -Verb RunAs -WindowStyle Hidden -Wait`
-        ], { stdio: 'inherit' })
-    } else {
-        childProcess.execFileSync('sudo', ['-n', '-E', mainScript, ...ARGS], { stdio: 'inherit' })
+    const spawnSyncReturns = childProcess.spawnSync(mainScript, ARGS, { 
+        stdio: 'inherit' 
+    })
+    
+    // Handle spawn errors
+    if (spawnSyncReturns.error) {
+        console.error(`Failed to execute ${binary}:`, spawnSyncReturns.error.message)
+        process.exit(1)
     }
-    process.exit(0)
+    
+    // Exit with child process status, defaulting to 1 if null/undefined
+    process.exit(spawnSyncReturns.status ?? 1)
 }
 
 if (require.main === module) {

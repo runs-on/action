@@ -5,24 +5,17 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 
-	"github.com/runs-on/action/internal/cache"
 	"github.com/sethvargo/go-githubactions"
 )
 
 // Config holds the action's configuration values derived from inputs and environment.
 type Config struct {
-	ShowEnv                   bool
-	ShowCosts                 string
-	ZctionsResultsURL         string
-	ActionsResultsURL         string
-	SnapshotDirs              []string
-	SnapshotVersion           string
-	SnapshotWaitForCompletion bool
-	GitHubMirrors             []cache.Mirror
-	GitHubToken               string
-	RunnerConfig              *RunnerConfig
+	ShowEnv           bool
+	ShowCosts         string
+	ZctionsResultsURL string
+	ActionsResultsURL string
+	RunnerConfig      *RunnerConfig
 }
 
 type Tag struct {
@@ -67,54 +60,11 @@ func NewConfigFromInputs(action *githubactions.Action) (*Config, error) {
 		cfg.ShowCosts = "inline"
 	}
 
-	gitMirrors := strings.Split(action.GetInput("github_mirrors"), "\n")
-	cfg.GitHubMirrors = make([]cache.Mirror, 0)
-	for _, mirror := range gitMirrors {
-		mirror = strings.TrimSpace(mirror)
-		if mirror == "" {
-			continue
-		}
-		if strings.HasPrefix(mirror, "https://github.com/") {
-			mirror = strings.TrimPrefix(mirror, "https://github.com/")
-		}
-		mirror = strings.TrimSuffix(mirror, ".git")
-		mirror, err := cache.NewMirror(mirror, cfg.GitHubToken)
-		if err != nil {
-			action.Errorf("Error creating mirror: %v", err)
-		}
-		cfg.GitHubMirrors = append(cfg.GitHubMirrors, *mirror)
-	}
-
-	dirs := strings.Split(action.GetInput("snapshot_dirs"), "\n")
-	action.Infof("dirs: %v", dirs)
-	cfg.SnapshotDirs = make([]string, 0)
-	for _, dir := range dirs {
-		dir = strings.TrimSpace(dir)
-		if dir == "" {
-			continue
-		}
-		if strings.HasPrefix(dir, "/") {
-			cfg.SnapshotDirs = append(cfg.SnapshotDirs, dir)
-		} else {
-			action.Warningf("Skipping snapshot_dir '%s' because it does not start with '/'.", dir)
-		}
-	}
-
-	cfg.SnapshotVersion = action.GetInput("snapshot_version")
-	if cfg.SnapshotVersion == "" {
-		cfg.SnapshotVersion = "v1"
-	}
-
-	cfg.SnapshotWaitForCompletion = action.GetInput("snapshot_wait_for_completion") != "false"
-
 	cfg.ZctionsResultsURL = os.Getenv("ZCTIONS_RESULTS_URL")
 	cfg.ActionsResultsURL = os.Getenv("ACTIONS_RESULTS_URL")
 
 	action.Infof("Input 'show_env': %t", cfg.ShowEnv)
 	action.Infof("Input 'show_costs': %s", cfg.ShowCosts)
-	action.Infof("Input 'snapshot_dirs': %v", cfg.SnapshotDirs)
-	action.Infof("Input 'snapshot_version': %s", cfg.SnapshotVersion)
-	action.Infof("Input 'github_mirrors': %v", cfg.GitHubMirrors)
 
 	if cfg.ZctionsResultsURL != "" {
 		action.Infof("ZCTIONS_RESULTS_URL is set: %s", cfg.ZctionsResultsURL)

@@ -14,6 +14,8 @@ type Config struct {
 	ShowEnv           bool
 	ShowCosts         string
 	Metrics           []string
+	NetworkInterface  string
+	DiskDevice        string
 	ZctionsResultsURL string
 	ActionsResultsURL string
 }
@@ -46,12 +48,24 @@ func NewConfigFromInputs(action *githubactions.Action) (*Config, error) {
 		cfg.Metrics = strings.Split(strings.ReplaceAll(metricsInput, " ", ""), ",")
 	}
 
+	cfg.NetworkInterface = action.GetInput("network_interface")
+	if cfg.NetworkInterface == "" {
+		cfg.NetworkInterface = "auto"
+	}
+
+	cfg.DiskDevice = action.GetInput("disk_device")
+	if cfg.DiskDevice == "" {
+		cfg.DiskDevice = "auto"
+	}
+
 	cfg.ZctionsResultsURL = os.Getenv("ZCTIONS_RESULTS_URL")
 	cfg.ActionsResultsURL = os.Getenv("ACTIONS_RESULTS_URL")
 
 	action.Infof("Input 'show_env': %t", cfg.ShowEnv)
 	action.Infof("Input 'show_costs': %s", cfg.ShowCosts)
 	action.Infof("Input 'metrics': %v", cfg.Metrics)
+	action.Infof("Input 'network_interface': %s", cfg.NetworkInterface)
+	action.Infof("Input 'disk_device': %s", cfg.DiskDevice)
 
 	if cfg.ZctionsResultsURL != "" {
 		action.Infof("ZCTIONS_RESULTS_URL is set: %s", cfg.ZctionsResultsURL)

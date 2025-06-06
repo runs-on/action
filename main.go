@@ -32,7 +32,7 @@ func handleMainExecution(action *githubactions.Action, ctx context.Context) {
 
 	// Configure CloudWatch metrics if requested
 	if cfg.HasMetrics() {
-		if err := monitoring.GenerateCloudWatchConfig(action, cfg.Metrics); err != nil {
+		if err := monitoring.GenerateCloudWatchConfig(action, cfg.Metrics, cfg.NetworkInterface, cfg.DiskDevice); err != nil {
 			action.Errorf("Failed to configure CloudWatch metrics: %v", err)
 		}
 	}
@@ -60,7 +60,7 @@ func handlePostExecution(action *githubactions.Action, ctx context.Context) {
 
 	// Display metrics summary
 	if cfg.HasMetrics() {
-		monitoring.GenerateMetricsSummary(action, cfg.Metrics, "chart")
+		monitoring.GenerateMetricsSummary(action, cfg.Metrics, "chart", cfg.NetworkInterface, cfg.DiskDevice)
 	}
 
 	action.Infof("Post-execution phase finished.")

@@ -1,6 +1,7 @@
 package monitoring
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -57,7 +58,106 @@ type MetricSummary struct {
 	Source string // "AWS" or "Custom"
 }
 
-func GenerateCloudWatchConfig(action *githubactions.Action, metrics []string) error {
+// detectPrimaryNetworkInterface finds the primary network interface (excluding loopback and docker)
+func detectPrimaryNetworkInterface() string {
+	// Try to get the interface used for the default route
+	cmd := exec.Command("ip", "route", "show", "default")
+	output, err := cmd.Output()
+	if err == nil {
+		lines := strings.Split(string(output), "\n")
+		for _, line := range lines {
+			if strings.Contains(line, "dev ") {
+				parts := strings.Fields(line)
+				for i, part := range parts {
+					if part == "dev" && i+1 < len(parts) {
+						iface := parts[i+1]
+						// Skip docker and loopback interfaces
+						if !strings.HasPrefix(iface, "docker") && !strings.HasPrefix(iface, "br-") && iface != "lo" {
+							return iface
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Fallback: list network interfaces and pick the first non-loopback, non-docker one
+	cmd = exec.Command("ls", "/sys/class/net")
+	output, err = cmd.Output()
+	if err != nil {
+		return "eth0" // ultimate fallback
+	}
+
+	interfaces := strings.Fields(string(output))
+	for _, iface := range interfaces {
+		if iface != "lo" && !strings.HasPrefix(iface, "docker") && !strings.HasPrefix(iface, "br-") {
+			return iface
+		}
+	}
+
+	return "eth0" // ultimate fallback
+}
+
+// detectRootDiskDevice finds the disk device that contains the root filesystem
+func detectRootDiskDevice() string {
+	// Read /proc/mounts to find what device / is mounted on
+	file, err := os.Open("/proc/mounts")
+	if err != nil {
+		return "nvme0n1p1" // fallback
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := scanner.Text()
+		fields := strings.Fields(line)
+		if len(fields) >= 2 && fields[1] == "/" {
+			device := fields[0]
+			// Extract just the device name from /dev/xxx
+			if strings.HasPrefix(device, "/dev/") {
+				deviceName := strings.TrimPrefix(device, "/dev/")
+				return deviceName
+			}
+		}
+	}
+
+	// Alternative: try to get the device from df command
+	cmd := exec.Command("df", "/")
+	output, err := cmd.Output()
+	if err == nil {
+		lines := strings.Split(string(output), "\n")
+		if len(lines) > 1 {
+			fields := strings.Fields(lines[1])
+			if len(fields) > 0 {
+				device := fields[0]
+				if strings.HasPrefix(device, "/dev/") {
+					deviceName := strings.TrimPrefix(device, "/dev/")
+					return deviceName
+				}
+			}
+		}
+	}
+
+	return "nvme0n1p1" // ultimate fallback
+}
+
+// getNetworkInterface returns the network interface to use based on config
+func getNetworkInterface(networkInterface string) string {
+	if networkInterface == "auto" {
+		return detectPrimaryNetworkInterface()
+	}
+	return networkInterface
+}
+
+// getDiskDevice returns the disk device to use based on config
+func getDiskDevice(diskDevice string) string {
+	if diskDevice == "auto" {
+		return detectRootDiskDevice()
+	}
+	return diskDevice
+}
+
+func GenerateCloudWatchConfig(action *githubactions.Action, metrics []string, networkInterface, diskDevice string) error {
 	if len(metrics) == 0 {
 		return nil
 	}
@@ -66,6 +166,13 @@ func GenerateCloudWatchConfig(action *githubactions.Action, metrics []string) er
 	if err := enableDetailedMonitoring(action); err != nil {
 		action.Warningf("Failed to enable detailed monitoring: %v", err)
 	}
+
+	// Get network interface and disk device based on config
+	primaryInterface := getNetworkInterface(networkInterface)
+	rootDisk := getDiskDevice(diskDevice)
+
+	action.Infof("Using network interface: %s", primaryInterface)
+	action.Infof("Using disk device: %s", rootDisk)
 
 	config := CloudWatchConfig{
 		Metrics: MetricsConfig{
@@ -94,8 +201,6 @@ func GenerateCloudWatchConfig(action *githubactions.Action, metrics []string) er
 					"usage_system",
 					"usage_steal",
 					"usage_nice",
-					"usage_softirq",
-					"usage_irq",
 				},
 				"totalcpu": false,
 			}
@@ -105,14 +210,8 @@ func GenerateCloudWatchConfig(action *githubactions.Action, metrics []string) er
 				"measurement": []string{
 					"bytes_sent",
 					"bytes_recv",
-					"packets_sent",
-					"packets_recv",
-					"err_in",
-					"err_out",
-					"drop_in",
-					"drop_out",
 				},
-				"resources": []string{"*"},
+				"resources": []string{primaryInterface},
 			}
 		case "memory":
 			config.Metrics.MetricsCollected["mem"] = map[string]interface{}{
@@ -123,7 +222,6 @@ func GenerateCloudWatchConfig(action *githubactions.Action, metrics []string) er
 					"total",
 					"used",
 				},
-				// "metrics_collection_interval": 10, // Keep aggressive collection
 			}
 		case "disk":
 			config.Metrics.MetricsCollected["disk"] = map[string]interface{}{
@@ -136,7 +234,6 @@ func GenerateCloudWatchConfig(action *githubactions.Action, metrics []string) er
 				"ignore_file_system_types": []string{
 					"sysfs", "devtmpfs",
 				},
-				// "metrics_collection_interval": 30, // More frequent for detailed monitoring
 			}
 		case "io":
 			config.Metrics.MetricsCollected["diskio"] = map[string]interface{}{
@@ -150,8 +247,7 @@ func GenerateCloudWatchConfig(action *githubactions.Action, metrics []string) er
 					"write_time",
 					"io_time",
 				},
-				"resources": []string{"nvme0n1p1"},
-				// "metrics_collection_interval": 10, // Keep high frequency
+				"resources": []string{rootDisk},
 			}
 		}
 	}
@@ -224,7 +320,7 @@ func GetCloudWatchDashboardURL(action *githubactions.Action) string {
 		region, region, instanceID)
 }
 
-func GenerateMetricsSummary(action *githubactions.Action, metrics []string, formatter string) {
+func GenerateMetricsSummary(action *githubactions.Action, metrics []string, formatter, networkInterface, diskDevice string) {
 	if len(metrics) == 0 {
 		return
 	}
@@ -247,6 +343,10 @@ func GenerateMetricsSummary(action *githubactions.Action, metrics []string, form
 		return
 	}
 
+	// Get network interface and disk device based on config
+	primaryInterface := getNetworkInterface(networkInterface)
+	rootDisk := getDiskDevice(diskDevice)
+
 	action.Infof("## CloudWatch Metrics Summary (format: %s)", formatter)
 	action.Infof("Enabled metrics: cpu, network, %s\n", strings.Join(metrics, ", "))
 	action.Infof("Namespace: %s\n", NAMESPACE)
@@ -260,24 +360,6 @@ func GenerateMetricsSummary(action *githubactions.Action, metrics []string, form
 	}
 
 	action.Infof("📈 Metrics (since %s):", launchTime.Format(time.RFC3339))
-
-	// AWS default metrics (always available)
-	awsMetrics := []struct {
-		name      string
-		awsName   string
-		unit      string
-		namespace string
-	}{
-		{"CPU", "CPUUtilization", "%", "AWS/EC2"},
-		{"NetworkIn", "NetworkIn", "bytes", "AWS/EC2"},
-		{"NetworkOut", "NetworkOut", "bytes", "AWS/EC2"},
-	}
-
-	// Display AWS metrics
-	for _, metric := range awsMetrics {
-		summary := collector.GetMetricSummary(metric.awsName, metric.namespace, []types.Dimension{}, launchTime)
-		displayMetric(action, metric.name, summary, metric.unit, formatter)
-	}
 
 	// Display custom metrics if enabled
 	for _, metricType := range metrics {
@@ -298,18 +380,18 @@ func GenerateMetricsSummary(action *githubactions.Action, metrics []string, form
 			summary := collector.GetMetricSummary("net_bytes_sent", NAMESPACE, []types.Dimension{
 				{
 					Name:  aws.String("interface"),
-					Value: aws.String("eth0"),
+					Value: aws.String(primaryInterface),
 				},
 			}, launchTime)
-			displayMetric(action, "Network bytes sent (eth0)", summary, "bytes/s", formatter)
+			displayMetric(action, fmt.Sprintf("Network bytes sent (%s)", primaryInterface), summary, "bytes/s", formatter)
 
 			summary = collector.GetMetricSummary("net_bytes_recv", NAMESPACE, []types.Dimension{
 				{
 					Name:  aws.String("interface"),
-					Value: aws.String("eth0"),
+					Value: aws.String(primaryInterface),
 				},
 			}, launchTime)
-			displayMetric(action, "Network bytes recv (eth0)", summary, "bytes/s", formatter)
+			displayMetric(action, fmt.Sprintf("Network bytes recv (%s)", primaryInterface), summary, "bytes/s", formatter)
 		case "memory":
 			summary := collector.GetMetricSummary("mem_used_percent", NAMESPACE, []types.Dimension{}, launchTime)
 			displayMetric(action, "Memory", summary, "%", formatter)
@@ -335,17 +417,17 @@ func GenerateMetricsSummary(action *githubactions.Action, metrics []string, form
 			summaryReads := collector.GetMetricSummary("diskio_reads", NAMESPACE, []types.Dimension{
 				{
 					Name:  aws.String("name"),
-					Value: aws.String("nvme0n1p1"),
+					Value: aws.String(rootDisk),
 				},
 			}, launchTime)
 			summaryWrites := collector.GetMetricSummary("diskio_writes", NAMESPACE, []types.Dimension{
 				{
 					Name:  aws.String("name"),
-					Value: aws.String("nvme0n1p1"),
+					Value: aws.String(rootDisk),
 				},
 			}, launchTime)
-			displayMetric(action, fmt.Sprintf("Disk Reads (%s)", "nvme0n1p1"), summaryReads, "ops/s", formatter)
-			displayMetric(action, fmt.Sprintf("Disk Writes (%s)", "nvme0n1p1"), summaryWrites, "ops/s", formatter)
+			displayMetric(action, fmt.Sprintf("Disk Reads (%s)", rootDisk), summaryReads, "ops/s", formatter)
+			displayMetric(action, fmt.Sprintf("Disk Writes (%s)", rootDisk), summaryWrites, "ops/s", formatter)
 		}
 	}
 }

@@ -361,73 +361,75 @@ func GenerateMetricsSummary(action *githubactions.Action, metrics []string, form
 
 	action.Infof("📈 Metrics (since %s):", launchTime.Format(time.RFC3339))
 
-	// Display custom metrics if enabled
-	for _, metricType := range metrics {
-		switch strings.ToLower(metricType) {
-		case "cpu":
-			// Display detailed CPU metrics from agent
-			for _, cpuMetric := range []string{"usage_user", "usage_system", "usage_iowait"} {
-				summary := collector.GetMetricSummary("cpu_"+cpuMetric, NAMESPACE, []types.Dimension{
-					{
-						Name:  aws.String("cpu"),
-						Value: aws.String("cpu-total"),
-					},
-				}, launchTime)
-				displayMetric(action, fmt.Sprintf("CPU %s", strings.Replace(cpuMetric, "usage_", "", 1)), summary, "%", formatter)
-			}
-		case "network":
-			// Display network metrics from agent
-			summary := collector.GetMetricSummary("net_bytes_sent", NAMESPACE, []types.Dimension{
-				{
-					Name:  aws.String("interface"),
-					Value: aws.String(primaryInterface),
-				},
-			}, launchTime)
-			displayMetric(action, fmt.Sprintf("Network bytes sent (%s)", primaryInterface), summary, "bytes/s", formatter)
-
-			summary = collector.GetMetricSummary("net_bytes_recv", NAMESPACE, []types.Dimension{
-				{
-					Name:  aws.String("interface"),
-					Value: aws.String(primaryInterface),
-				},
-			}, launchTime)
-			displayMetric(action, fmt.Sprintf("Network bytes recv (%s)", primaryInterface), summary, "bytes/s", formatter)
-		case "memory":
-			summary := collector.GetMetricSummary("mem_used_percent", NAMESPACE, []types.Dimension{}, launchTime)
-			displayMetric(action, "Memory", summary, "%", formatter)
-		case "disk":
-			for _, path := range []string{"/", "/tmp", "/var/lib/docker", "/home/runner"} {
-				summary := collector.GetMetricSummary("disk_used_percent", NAMESPACE, []types.Dimension{
-					{
-						Name:  aws.String("path"),
-						Value: aws.String(path),
-					},
-					{
-						Name:  aws.String("fstype"),
-						Value: aws.String("ext4"),
-					},
-				}, launchTime)
-				// some paths might not have mount points
-				if path != "/" && summary == nil {
-					continue
+	for _, formatter := range []string{"sparkline", "chart"} {
+		// Display custom metrics if enabled
+		for _, metricType := range metrics {
+			switch strings.ToLower(metricType) {
+			case "cpu":
+				// Display detailed CPU metrics from agent
+				for _, cpuMetric := range []string{"usage_user", "usage_system", "usage_iowait"} {
+					summary := collector.GetMetricSummary("cpu_"+cpuMetric, NAMESPACE, []types.Dimension{
+						{
+							Name:  aws.String("cpu"),
+							Value: aws.String("cpu-total"),
+						},
+					}, launchTime)
+					displayMetric(action, fmt.Sprintf("CPU %s", strings.Replace(cpuMetric, "usage_", "", 1)), summary, "%", formatter)
 				}
-				displayMetric(action, fmt.Sprintf("Disk used %% (%s)", path), summary, "%", formatter)
+			case "network":
+				// Display network metrics from agent
+				summary := collector.GetMetricSummary("net_bytes_sent", NAMESPACE, []types.Dimension{
+					{
+						Name:  aws.String("interface"),
+						Value: aws.String(primaryInterface),
+					},
+				}, launchTime)
+				displayMetric(action, fmt.Sprintf("Network bytes sent (%s)", primaryInterface), summary, "bytes/s", formatter)
+
+				summary = collector.GetMetricSummary("net_bytes_recv", NAMESPACE, []types.Dimension{
+					{
+						Name:  aws.String("interface"),
+						Value: aws.String(primaryInterface),
+					},
+				}, launchTime)
+				displayMetric(action, fmt.Sprintf("Network bytes recv (%s)", primaryInterface), summary, "bytes/s", formatter)
+			case "memory":
+				summary := collector.GetMetricSummary("mem_used_percent", NAMESPACE, []types.Dimension{}, launchTime)
+				displayMetric(action, "Memory", summary, "%", formatter)
+			case "disk":
+				for _, path := range []string{"/", "/tmp", "/var/lib/docker", "/home/runner"} {
+					summary := collector.GetMetricSummary("disk_used_percent", NAMESPACE, []types.Dimension{
+						{
+							Name:  aws.String("path"),
+							Value: aws.String(path),
+						},
+						{
+							Name:  aws.String("fstype"),
+							Value: aws.String("ext4"),
+						},
+					}, launchTime)
+					// some paths might not have mount points
+					if path != "/" && summary == nil {
+						continue
+					}
+					displayMetric(action, fmt.Sprintf("Disk used %% (%s)", path), summary, "%", formatter)
+				}
+			case "io":
+				summaryReads := collector.GetMetricSummary("diskio_reads", NAMESPACE, []types.Dimension{
+					{
+						Name:  aws.String("name"),
+						Value: aws.String(rootDisk),
+					},
+				}, launchTime)
+				summaryWrites := collector.GetMetricSummary("diskio_writes", NAMESPACE, []types.Dimension{
+					{
+						Name:  aws.String("name"),
+						Value: aws.String(rootDisk),
+					},
+				}, launchTime)
+				displayMetric(action, fmt.Sprintf("Disk Reads (%s)", rootDisk), summaryReads, "ops/s", formatter)
+				displayMetric(action, fmt.Sprintf("Disk Writes (%s)", rootDisk), summaryWrites, "ops/s", formatter)
 			}
-		case "io":
-			summaryReads := collector.GetMetricSummary("diskio_reads", NAMESPACE, []types.Dimension{
-				{
-					Name:  aws.String("name"),
-					Value: aws.String(rootDisk),
-				},
-			}, launchTime)
-			summaryWrites := collector.GetMetricSummary("diskio_writes", NAMESPACE, []types.Dimension{
-				{
-					Name:  aws.String("name"),
-					Value: aws.String(rootDisk),
-				},
-			}, launchTime)
-			displayMetric(action, fmt.Sprintf("Disk Reads (%s)", rootDisk), summaryReads, "ops/s", formatter)
-			displayMetric(action, fmt.Sprintf("Disk Writes (%s)", rootDisk), summaryWrites, "ops/s", formatter)
 		}
 	}
 }
@@ -438,34 +440,32 @@ func displayMetric(action *githubactions.Action, name string, summary *MetricSum
 		action.Infof("  %-12s ─────────────── (no data yet)", name)
 		return
 	}
-	for _, formatter := range []string{"sparkline", "chart"} {
-		if formatter == "chart" {
-			action.Infof("\n📊 %s:", name)
-			caption := fmt.Sprintf("%s (%s)", name, unit)
-			graph := asciigraph.Plot(summary.Data,
-				asciigraph.Height(8),
-				asciigraph.Width(60),
-				asciigraph.Caption(caption),
-				asciigraph.Precision(1),
-			)
-			// Print each line of the graph with proper indentation
-			for _, line := range strings.Split(graph, "\n") {
-				action.Infof("  %s", line)
-			}
-			action.Infof("  Stats: min:%.1f avg:%.1f max:%.1f %s", summary.Min, summary.Avg, summary.Max, unit)
-		} else {
-			// Use sparkline format
-			sparkline := createSparkline(summary.Data)
-			if unit == "ops/s" {
-				action.Infof("  %-12s %s avg:%.0f %s",
-					name, sparkline, summary.Avg, unit)
-			} else {
-				action.Infof("  %-12s %s min:%.1f avg:%.1f max:%.1f %s",
-					name, sparkline, summary.Min, summary.Avg, summary.Max, unit)
-			}
+	if formatter == "chart" {
+		action.Infof("\n📊 %s:", name)
+		caption := fmt.Sprintf("%s (%s)", name, unit)
+		graph := asciigraph.Plot(summary.Data,
+			asciigraph.Height(8),
+			asciigraph.Width(60),
+			asciigraph.Caption(caption),
+			asciigraph.Precision(1),
+		)
+		// Print each line of the graph with proper indentation
+		for _, line := range strings.Split(graph, "\n") {
+			action.Infof("  %s", line)
 		}
-		action.Infof("\n")
+		action.Infof("  Stats: min:%.1f avg:%.1f max:%.1f %s", summary.Min, summary.Avg, summary.Max, unit)
+	} else {
+		// Use sparkline format
+		sparkline := createSparkline(summary.Data)
+		if unit == "ops/s" {
+			action.Infof("  %-12s %s avg:%.0f %s",
+				name, sparkline, summary.Avg, unit)
+		} else {
+			action.Infof("  %-12s %s min:%.1f avg:%.1f max:%.1f %s",
+				name, sparkline, summary.Min, summary.Avg, summary.Max, unit)
+		}
 	}
+	action.Infof("\n")
 }
 
 // calculateMin returns the minimum value in a slice
@@ -500,6 +500,7 @@ type MetricsCollector struct {
 	cwClient   *cloudwatch.Client
 	instanceID string
 	action     *githubactions.Action
+	cache      map[string]*MetricSummary // Add cache for memoization
 }
 
 func NewMetricsCollector(action *githubactions.Action) *MetricsCollector {
@@ -519,17 +520,29 @@ func NewMetricsCollector(action *githubactions.Action) *MetricsCollector {
 		cwClient:   cloudwatch.NewFromConfig(cfg),
 		instanceID: instanceID,
 		action:     action,
+		cache:      make(map[string]*MetricSummary), // Initialize cache
 	}
 }
 
 func (mc *MetricsCollector) GetMetricSummary(metricName, namespace string, dimensions []types.Dimension, startTime time.Time) *MetricSummary {
+	// Create cache key from parameters
+	cacheKey := mc.createCacheKey(metricName, namespace, dimensions, startTime)
+
+	// Check cache first
+	if cached, exists := mc.cache[cacheKey]; exists {
+		return cached
+	}
+
+	// Not in cache, fetch the data
 	data, err := mc.getMetricData(metricName, namespace, dimensions, startTime)
 	if err != nil {
 		mc.action.Infof("Failed to get metric %s: %v", metricName, err)
+		mc.cache[cacheKey] = nil // Cache nil result to avoid retries
 		return nil
 	}
 
 	if len(data) == 0 {
+		mc.cache[cacheKey] = nil // Cache nil result
 		return nil
 	}
 
@@ -541,13 +554,33 @@ func (mc *MetricsCollector) GetMetricSummary(metricName, namespace string, dimen
 
 	min, max, avg := calculateStats(values)
 
-	return &MetricSummary{
+	summary := &MetricSummary{
 		Name: metricName,
 		Data: values,
 		Min:  min,
 		Max:  max,
 		Avg:  avg,
 	}
+
+	// Cache the result
+	mc.cache[cacheKey] = summary
+	return summary
+}
+
+// createCacheKey generates a unique cache key from the metric parameters
+func (mc *MetricsCollector) createCacheKey(metricName, namespace string, dimensions []types.Dimension, startTime time.Time) string {
+	var keyParts []string
+	keyParts = append(keyParts, metricName, namespace, startTime.Format(time.RFC3339))
+
+	// Sort dimensions for consistent cache key
+	dimStrs := make([]string, len(dimensions))
+	for i, dim := range dimensions {
+		dimStrs[i] = fmt.Sprintf("%s=%s", aws.ToString(dim.Name), aws.ToString(dim.Value))
+	}
+	sort.Strings(dimStrs)
+	keyParts = append(keyParts, dimStrs...)
+
+	return strings.Join(keyParts, "|")
 }
 
 func (mc *MetricsCollector) getMetricData(metricName, namespace string, dimensions []types.Dimension, startTime time.Time) ([]MetricDataPoint, error) {

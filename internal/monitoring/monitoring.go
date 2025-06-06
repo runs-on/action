@@ -681,6 +681,7 @@ func calculateStats(data []float64) (min, max, avg float64) {
 }
 
 func enableDetailedMonitoring(action *githubactions.Action) error {
+	return nil
 	instanceID := os.Getenv("RUNS_ON_INSTANCE_ID")
 	if instanceID == "" {
 		return fmt.Errorf("RUNS_ON_INSTANCE_ID not set")

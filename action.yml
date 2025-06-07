@@ -17,6 +17,14 @@ inputs:
     required: false
     default: 'inline'
   metrics:
-    description: 'Comma separated list of additional metrics to send to CloudWatch (memory, disk, io)'
+    description: 'Comma separated list of additional metrics to send to CloudWatch (cpu, network, memory, disk, io)'
     required: false
     default: ''
+  network_interface:
+    description: 'Network interface to monitor'
+    required: false
+    default: 'enp39s0'
+  disk_device:
+    description: 'Disk device to monitor'
+    required: false
+    default: 'nvme0n1p1'

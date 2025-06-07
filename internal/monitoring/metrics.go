@@ -49,32 +49,9 @@ type MetricSummary struct {
 	Source string // "AWS" or "Custom"
 }
 
-var metricMappings = map[string]string{
-	"cpu_usage_user":      "CPU User",
-	"cpu_usage_system":    "CPU System",
-	"cpu_usage_idle":      "CPU Idle",
-	"cpu_usage_iowait":    "CPU IOWait",
-	"cpu_usage_irq":       "CPU IRQ",
-	"cpu_usage_softirq":   "CPU SoftIRQ",
-	"cpu_usage_steal":     "CPU Steal",
-	"cpu_usage_guest":     "CPU Guest",
-	"cpu_usage_guestnice": "CPU Guest Nice",
-	"mem_used_percent":    "Memory Used",
-	"swap_used_percent":   "Swap Used",
-	"disk_used_percent":   "Disk Used",
-	"disk_inodes_used":    "Disk Inodes Used",
-	"net_bytes_recv":      "Network Received",
-	"net_bytes_sent":      "Network Sent",
-	"net_packets_recv":    "Network Packets Received",
-	"net_packets_sent":    "Network Packets Sent",
-	"net_err_in":          "Network Errors In",
-	"net_err_out":         "Network Errors Out",
-	"net_drop_in":         "Network Drops In",
-	"net_drop_out":        "Network Drops Out",
-}
-
 type Measurement struct {
 	Name        string
+	RealName    string
 	Rename      string
 	Unit        string
 	Aggregation string
@@ -88,12 +65,14 @@ func GetMeasurements(metric string) []Measurement {
 		return []Measurement{
 			{
 				Name:        "usage_user",
+				RealName:    "cpu_usage_user",
 				Rename:      "CPU User",
 				Unit:        "Percent",
 				Aggregation: "Average",
 			},
 			{
 				Name:        "usage_system",
+				RealName:    "cpu_usage_system",
 				Rename:      "CPU System",
 				Unit:        "Percent",
 				Aggregation: "Average",
@@ -103,14 +82,16 @@ func GetMeasurements(metric string) []Measurement {
 		return []Measurement{
 			{
 				Name:        "bytes_recv",
+				RealName:    "net_bytes_recv",
 				Rename:      "Network Received",
-				Unit:        "Bytes/s",
+				Unit:        "Bytes",
 				Aggregation: "Sum",
 			},
 			{
 				Name:        "bytes_sent",
+				RealName:    "net_bytes_sent",
 				Rename:      "Network Sent",
-				Unit:        "Bytes/s",
+				Unit:        "Bytes",
 				Aggregation: "Sum",
 			},
 		}
@@ -118,6 +99,7 @@ func GetMeasurements(metric string) []Measurement {
 		return []Measurement{
 			{
 				Name:        "used_percent",
+				RealName:    "mem_used_percent",
 				Rename:      "Memory Used",
 				Unit:        "Percent",
 				Aggregation: "Average",
@@ -127,12 +109,14 @@ func GetMeasurements(metric string) []Measurement {
 		return []Measurement{
 			{
 				Name:        "used_percent",
+				RealName:    "disk_used_percent",
 				Rename:      "Disk Used",
 				Unit:        "Percent",
 				Aggregation: "Average",
 			},
 			{
 				Name:        "inodes_used",
+				RealName:    "disk_inodes_used",
 				Rename:      "Disk Inodes Used",
 				Unit:        "Inodes",
 				Aggregation: "Sum",
@@ -142,18 +126,21 @@ func GetMeasurements(metric string) []Measurement {
 		return []Measurement{
 			{
 				Name:        "io_time",
+				RealName:    "diskio_io_time",
 				Rename:      "Disk IO Time",
-				Unit:        "Seconds",
+				Unit:        "ms",
 				Aggregation: "Sum",
 			},
 			{
 				Name:        "reads",
+				RealName:    "diskio_reads",
 				Rename:      "Disk Reads",
 				Unit:        "Ops/s",
 				Aggregation: "Sum",
 			},
 			{
 				Name:        "writes",
+				RealName:    "diskio_writes",
 				Rename:      "Disk Writes",
 				Unit:        "Ops/s",
 				Aggregation: "Sum",
@@ -188,8 +175,8 @@ func GenerateMetricsSummary(action *githubactions.Action, metrics []string, form
 	}
 
 	// Get network interface and disk device based on config
-	primaryInterface := getNetworkInterface(networkInterface)
-	rootDisk := getDiskDevice(diskDevice)
+	networkInterface = getNetworkInterface(networkInterface)
+	diskDevice = getDiskDevice(diskDevice)
 
 	action.Infof("## CloudWatch Metrics Summary (format: %s)", formatter)
 	action.Infof("Enabled metrics: cpu, network, %s\n", strings.Join(metrics, ", "))
@@ -210,29 +197,44 @@ func GenerateMetricsSummary(action *githubactions.Action, metrics []string, form
 		// Display custom metrics if enabled
 		for _, metricType := range metrics {
 			measurements := GetMeasurements(metricType)
-			action.Infof("## %s %v", metricType, measurements)
 			for _, measurement := range measurements {
 				dimensions := []types.Dimension{}
 				variants := []string{"default"}
+				if metricType == "cpu" {
+					dimensions = append(dimensions, types.Dimension{
+						Name:  aws.String("cpu"),
+						Value: aws.String("cpu-total"),
+					})
+				}
 				if metricType == "network" {
 					dimensions = append(dimensions, types.Dimension{
 						Name:  aws.String("interface"),
-						Value: aws.String(primaryInterface),
+						Value: aws.String(networkInterface),
 					})
 				}
 				if metricType == "disk" {
 					variants = []string{"/", "/tmp", "/var/lib/docker", "/home/runner"}
 					dimensions = append(dimensions, types.Dimension{
-						Name:  aws.String("path"),
-						Value: aws.String(rootDisk),
-					})
-					dimensions = append(dimensions, types.Dimension{
 						Name:  aws.String("fstype"),
 						Value: aws.String("ext4"),
 					})
+					dimensions = append(dimensions, types.Dimension{
+						Name:  aws.String("path"),
+						Value: aws.String("/"),
+					})
+				}
+				if metricType == "io" {
+					action.Infof("Disk device: %s", diskDevice)
+					dimensions = append(dimensions, types.Dimension{
+						Name:  aws.String("name"),
+						Value: aws.String(diskDevice),
+					})
 				}
 				for _, variant := range variants {
-					summary := collector.GetMetricSummary(measurement.Name, NAMESPACE, dimensions, launchTime)
+					if metricType == "disk" {
+						dimensions[len(dimensions)-1].Value = aws.String(variant)
+					}
+					summary := collector.GetMetricSummary(measurement.RealName, NAMESPACE, measurement.Aggregation, dimensions, launchTime)
 					if metricType == "disk" && variant != "/" && summary == nil {
 						continue
 					}
@@ -305,9 +307,9 @@ func NewMetricsCollector(action *githubactions.Action) *MetricsCollector {
 	}
 }
 
-func (mc *MetricsCollector) GetMetricSummary(metricName, namespace string, dimensions []types.Dimension, startTime time.Time) *MetricSummary {
+func (mc *MetricsCollector) GetMetricSummary(metricName, namespace string, aggregation string, dimensions []types.Dimension, startTime time.Time) *MetricSummary {
 	// Create cache key from parameters
-	cacheKey := mc.createCacheKey(metricName, namespace, dimensions, startTime)
+	cacheKey := mc.createCacheKey(metricName, namespace, aggregation, dimensions, startTime)
 
 	// Check cache first
 	if cached, exists := mc.cache[cacheKey]; exists {
@@ -315,7 +317,7 @@ func (mc *MetricsCollector) GetMetricSummary(metricName, namespace string, dimen
 	}
 
 	// Not in cache, fetch the data
-	data, err := mc.getMetricData(metricName, namespace, dimensions, startTime)
+	data, err := mc.getMetricData(metricName, namespace, aggregation, dimensions, startTime)
 	if err != nil {
 		mc.action.Infof("Failed to get metric %s: %v", metricName, err)
 		mc.cache[cacheKey] = nil // Cache nil result to avoid retries
@@ -349,9 +351,9 @@ func (mc *MetricsCollector) GetMetricSummary(metricName, namespace string, dimen
 }
 
 // createCacheKey generates a unique cache key from the metric parameters
-func (mc *MetricsCollector) createCacheKey(metricName, namespace string, dimensions []types.Dimension, startTime time.Time) string {
+func (mc *MetricsCollector) createCacheKey(metricName, namespace string, aggregation string, dimensions []types.Dimension, startTime time.Time) string {
 	var keyParts []string
-	keyParts = append(keyParts, metricName, namespace, startTime.Format(time.RFC3339))
+	keyParts = append(keyParts, metricName, namespace, aggregation, startTime.Format(time.RFC3339))
 
 	// Sort dimensions for consistent cache key
 	dimStrs := make([]string, len(dimensions))
@@ -364,8 +366,15 @@ func (mc *MetricsCollector) createCacheKey(metricName, namespace string, dimensi
 	return strings.Join(keyParts, "|")
 }
 
-func (mc *MetricsCollector) getMetricData(metricName, namespace string, dimensions []types.Dimension, startTime time.Time) ([]MetricDataPoint, error) {
+func (mc *MetricsCollector) getMetricData(metricName, namespace string, aggregation string, dimensions []types.Dimension, startTime time.Time) ([]MetricDataPoint, error) {
 	endTime := time.Now()
+
+	// mc.action.Infof("Getting metric data for %s", metricName)
+	// mc.action.Infof("Namespace: %s", namespace)
+	// json, _ := json.Marshal(dimensions)
+	// mc.action.Infof("Dimensions: %s", string(json))
+	// mc.action.Infof("StartTime: %s", startTime)
+	// mc.action.Infof("EndTime: %s", endTime)
 
 	input := &cloudwatch.GetMetricDataInput{
 		MetricDataQueries: []types.MetricDataQuery{
@@ -383,7 +392,7 @@ func (mc *MetricsCollector) getMetricData(metricName, namespace string, dimensio
 						}...),
 					},
 					Period: aws.Int32(10), // 10 seconds granularity for raw data
-					Stat:   aws.String("Average"),
+					Stat:   aws.String(aggregation),
 				},
 				ReturnData: aws.Bool(true),
 			},

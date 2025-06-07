@@ -34,7 +34,7 @@ func detectPrimaryNetworkInterface() string {
 	cmd = exec.Command("ls", "/sys/class/net")
 	output, err = cmd.Output()
 	if err != nil {
-		return "eth0" // ultimate fallback
+		return "enp39s0" // ultimate fallback
 	}
 
 	interfaces := strings.Fields(string(output))
@@ -44,7 +44,7 @@ func detectPrimaryNetworkInterface() string {
 		}
 	}
 
-	return "eth0" // ultimate fallback
+	return "enp39s0" // ultimate fallback
 }
 
 // detectRootDiskDevice finds the disk device that contains the root filesystem

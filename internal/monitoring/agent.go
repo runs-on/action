@@ -1,0 +1,194 @@
+package monitoring
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"os/exec"
+	"strings"
+
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/ec2"
+	"github.com/sethvargo/go-githubactions"
+)
+
+func GenerateCloudWatchConfig(action *githubactions.Action, metrics []string, networkInterface, diskDevice string) error {
+	if len(metrics) == 0 {
+		return nil
+	}
+
+	// Enable detailed monitoring for the instance
+	if err := enableDetailedMonitoring(action); err != nil {
+		action.Warningf("Failed to enable detailed monitoring: %v", err)
+	}
+
+	// Get network interface and disk device based on config
+	primaryInterface := getNetworkInterface(networkInterface)
+	rootDisk := getDiskDevice(diskDevice)
+
+	action.Infof("Using network interface: %s", primaryInterface)
+	action.Infof("Using disk device: %s", rootDisk)
+
+	config := CloudWatchConfig{
+		Metrics: MetricsConfig{
+			Namespace:        NAMESPACE,
+			MetricsCollected: make(map[string]interface{}),
+			AppendDimensions: map[string]string{
+				"InstanceId": "${aws:InstanceId}",
+			},
+			ForceFlushInterval: 5, // 5 seconds
+		},
+		Agent: AgentConfig{
+			MetricsCollectionInterval: 10,
+		},
+	}
+
+	// Configure metrics based on input with more frequent collection for detailed monitoring
+	for _, metric := range metrics {
+		switch strings.ToLower(metric) {
+		case "cpu":
+			config.Metrics.MetricsCollected["cpu"] = map[string]interface{}{
+				"drop_original_metrics": true,
+				"measurement": []string{
+					"usage_idle",
+					"usage_iowait",
+					"usage_user",
+					"usage_system",
+					"usage_steal",
+					"usage_nice",
+				},
+				"totalcpu": false,
+			}
+		case "network":
+			config.Metrics.MetricsCollected["net"] = map[string]interface{}{
+				"drop_original_metrics": true,
+				"measurement": []string{
+					"bytes_sent",
+					"bytes_recv",
+				},
+				"resources": []string{primaryInterface},
+			}
+		case "memory":
+			config.Metrics.MetricsCollected["mem"] = map[string]interface{}{
+				"drop_original_metrics": true,
+				"measurement": []string{
+					"used_percent",
+					"available_percent",
+					"total",
+					"used",
+				},
+			}
+		case "disk":
+			config.Metrics.MetricsCollected["disk"] = map[string]interface{}{
+				"drop_original_metrics": true,
+				"drop_device":           true,
+				"measurement": []string{
+					"used_percent",
+				},
+				"resources": []string{"/", "/tmp", "/var/lib/docker", "/home/runner"},
+				"ignore_file_system_types": []string{
+					"sysfs", "devtmpfs",
+				},
+			}
+		case "io":
+			config.Metrics.MetricsCollected["diskio"] = map[string]interface{}{
+				"drop_original_metrics": true,
+				"measurement": []string{
+					"reads",
+					"writes",
+					"read_bytes",
+					"write_bytes",
+					"read_time",
+					"write_time",
+					"io_time",
+				},
+				"resources": []string{rootDisk},
+			}
+		}
+	}
+
+	// Write config file
+	configFile, err := os.CreateTemp("", "runs-on-metrics-*.json")
+	if err != nil {
+		return fmt.Errorf("failed to create temp file: %w", err)
+	}
+	configPath := configFile.Name()
+	defer configFile.Close()
+
+	configJSON, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal config: %w", err)
+	}
+
+	if err := os.WriteFile(configPath, configJSON, 0644); err != nil {
+		return fmt.Errorf("failed to write config file: %w", err)
+	}
+
+	action.Infof("Generated CloudWatch config with metrics: %v", metrics)
+	action.Infof("Config file: %s", configPath)
+	action.Infof("🔗 CloudWatch link: %s", GetCloudWatchDashboardURL(action, metrics))
+
+	// Append the config to the running CloudWatch agent
+	return appendCloudWatchConfig(action, configPath)
+}
+
+func appendCloudWatchConfig(action *githubactions.Action, configPath string) error {
+	// Check if CloudWatch agent is available
+	agentCtl := "/opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl"
+	if _, err := os.Stat(agentCtl); os.IsNotExist(err) {
+		action.Warningf("CloudWatch agent not found at %s, skipping metrics configuration", agentCtl)
+		return nil
+	}
+
+	// Append the configuration to the running agent
+	cmd := exec.Command("sudo", agentCtl,
+		"-a", "append-config",
+		"-m", "ec2",
+		"-s",
+		"-c", fmt.Sprintf("file:%s", configPath))
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		action.Warningf("Failed to append CloudWatch config: %v\nOutput: %s", err, string(output))
+		return err
+	}
+
+	action.Infof("Successfully appended CloudWatch metrics configuration")
+	action.Infof("CloudWatch agent output: %s", string(output))
+
+	return nil
+}
+
+func enableDetailedMonitoring(action *githubactions.Action) error {
+	return nil
+	instanceID := os.Getenv("RUNS_ON_INSTANCE_ID")
+	if instanceID == "" {
+		return fmt.Errorf("RUNS_ON_INSTANCE_ID not set")
+	}
+
+	cfg, err := config.LoadDefaultConfig(context.Background())
+	if err != nil {
+		return fmt.Errorf("failed to load AWS config: %w", err)
+	}
+
+	ec2Client := ec2.NewFromConfig(cfg)
+
+	// Enable detailed monitoring
+	input := &ec2.MonitorInstancesInput{
+		InstanceIds: []string{instanceID},
+	}
+
+	result, err := ec2Client.MonitorInstances(context.Background(), input)
+	if err != nil {
+		return fmt.Errorf("failed to enable detailed monitoring: %w", err)
+	}
+
+	if len(result.InstanceMonitorings) > 0 {
+		monitoring := result.InstanceMonitorings[0]
+		action.Infof("✅ Detailed monitoring enabled for instance %s (state: %s)",
+			*monitoring.InstanceId, monitoring.Monitoring.State)
+	}
+
+	return nil
+}

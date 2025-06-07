@@ -127,6 +127,7 @@ func GenerateCloudWatchConfig(action *githubactions.Action, metrics []string, ne
 
 	action.Infof("Generated CloudWatch config with metrics: %v", metrics)
 	action.Infof("Config file: %s", configPath)
+	action.Infof("Config content: %s", string(configJSON))
 
 	// Append the config to the running CloudWatch agent
 	return appendCloudWatchConfig(action, configPath)

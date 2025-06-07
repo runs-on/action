@@ -254,12 +254,20 @@ func displayMetric(action *githubactions.Action, name string, summary *MetricSum
 	if formatter == "chart" {
 		action.Infof("\n📊 %s:", name)
 		caption := fmt.Sprintf("%s (%s)", name, unit)
-		graph := asciigraph.Plot(summary.Data,
+		// Build graph options
+		opts := []asciigraph.Option{
 			asciigraph.Height(8),
 			asciigraph.Width(60),
 			asciigraph.Caption(caption),
 			asciigraph.Precision(1),
-		)
+		}
+
+		// For percentage based metrics, force y-axis from 0 to 100
+		if strings.EqualFold(unit, "percent") {
+			opts = append(opts, asciigraph.LowerBound(0), asciigraph.UpperBound(100))
+		}
+
+		graph := asciigraph.Plot(summary.Data, opts...)
 		// Print each line of the graph with proper indentation
 		for _, line := range strings.Split(graph, "\n") {
 			action.Infof("  %s", line)

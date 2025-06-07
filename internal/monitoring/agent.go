@@ -13,6 +13,7 @@ import (
 	"github.com/sethvargo/go-githubactions"
 )
 
+// https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch-Agent-Configuration-File-Details.html
 func GenerateCloudWatchConfig(action *githubactions.Action, metrics []string, networkInterface, diskDevice string) error {
 	if len(metrics) == 0 {
 		return nil
@@ -46,65 +47,61 @@ func GenerateCloudWatchConfig(action *githubactions.Action, metrics []string, ne
 
 	// Configure metrics based on input with more frequent collection for detailed monitoring
 	for _, metric := range metrics {
+		measurements := GetMeasurements(metric)
 		switch strings.ToLower(metric) {
 		case "cpu":
-			config.Metrics.MetricsCollected["cpu"] = map[string]interface{}{
+			cpuConfig := map[string]interface{}{
 				"drop_original_metrics": true,
-				"measurement": []string{
-					"usage_idle",
-					"usage_iowait",
-					"usage_user",
-					"usage_system",
-					"usage_steal",
-					"usage_nice",
-				},
-				"totalcpu": false,
+				"measurement":           []string{},
+				"totalcpu":              true,
 			}
+			for _, measurement := range measurements {
+				cpuConfig["measurement"] = append(cpuConfig["measurement"].([]string), measurement.Name)
+			}
+			config.Metrics.MetricsCollected["cpu"] = cpuConfig
 		case "network":
-			config.Metrics.MetricsCollected["net"] = map[string]interface{}{
+			netConfig := map[string]interface{}{
 				"drop_original_metrics": true,
-				"measurement": []string{
-					"bytes_sent",
-					"bytes_recv",
-				},
-				"resources": []string{primaryInterface},
+				"measurement":           []string{},
+				"resources":             []string{primaryInterface},
 			}
+			for _, measurement := range measurements {
+				netConfig["measurement"] = append(netConfig["measurement"].([]string), measurement.Name)
+			}
+			config.Metrics.MetricsCollected["net"] = netConfig
 		case "memory":
-			config.Metrics.MetricsCollected["mem"] = map[string]interface{}{
+			memConfig := map[string]interface{}{
 				"drop_original_metrics": true,
-				"measurement": []string{
-					"used_percent",
-					"available_percent",
-					"total",
-					"used",
-				},
+				"measurement":           []string{},
 			}
+			for _, measurement := range measurements {
+				memConfig["measurement"] = append(memConfig["measurement"].([]string), measurement.Name)
+			}
+			config.Metrics.MetricsCollected["mem"] = memConfig
 		case "disk":
-			config.Metrics.MetricsCollected["disk"] = map[string]interface{}{
+			diskConfig := map[string]interface{}{
 				"drop_original_metrics": true,
 				"drop_device":           true,
-				"measurement": []string{
-					"used_percent",
-				},
-				"resources": []string{"/", "/tmp", "/var/lib/docker", "/home/runner"},
+				"measurement":           []string{},
+				"resources":             []string{"/", "/tmp", "/var/lib/docker", "/home/runner"},
 				"ignore_file_system_types": []string{
 					"sysfs", "devtmpfs",
 				},
 			}
-		case "io":
-			config.Metrics.MetricsCollected["diskio"] = map[string]interface{}{
-				"drop_original_metrics": true,
-				"measurement": []string{
-					"reads",
-					"writes",
-					"read_bytes",
-					"write_bytes",
-					"read_time",
-					"write_time",
-					"io_time",
-				},
-				"resources": []string{rootDisk},
+			for _, measurement := range measurements {
+				diskConfig["measurement"] = append(diskConfig["measurement"].([]string), measurement.Name)
 			}
+			config.Metrics.MetricsCollected["disk"] = diskConfig
+		case "io":
+			diskioConfig := map[string]interface{}{
+				"drop_original_metrics": true,
+				"measurement":           []string{},
+				"resources":             []string{rootDisk},
+			}
+			for _, measurement := range measurements {
+				diskioConfig["measurement"] = append(diskioConfig["measurement"].([]string), measurement.Name)
+			}
+			config.Metrics.MetricsCollected["diskio"] = diskioConfig
 		}
 	}
 

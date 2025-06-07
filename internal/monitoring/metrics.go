@@ -87,13 +87,13 @@ func GetMeasurements(metric string) []Measurement {
 	case "cpu":
 		return []Measurement{
 			{
-				Name:        "cpu_usage_user",
+				Name:        "usage_user",
 				Rename:      "CPU User",
 				Unit:        "Percent",
 				Aggregation: "Average",
 			},
 			{
-				Name:        "cpu_usage_system",
+				Name:        "usage_system",
 				Rename:      "CPU System",
 				Unit:        "Percent",
 				Aggregation: "Average",
@@ -102,13 +102,13 @@ func GetMeasurements(metric string) []Measurement {
 	case "network":
 		return []Measurement{
 			{
-				Name:        "net_bytes_recv",
+				Name:        "bytes_recv",
 				Rename:      "Network Received",
 				Unit:        "Bytes/s",
 				Aggregation: "Sum",
 			},
 			{
-				Name:        "net_bytes_sent",
+				Name:        "bytes_sent",
 				Rename:      "Network Sent",
 				Unit:        "Bytes/s",
 				Aggregation: "Sum",
@@ -117,7 +117,7 @@ func GetMeasurements(metric string) []Measurement {
 	case "memory":
 		return []Measurement{
 			{
-				Name:        "mem_used_percent",
+				Name:        "used_percent",
 				Rename:      "Memory Used",
 				Unit:        "Percent",
 				Aggregation: "Average",
@@ -126,13 +126,13 @@ func GetMeasurements(metric string) []Measurement {
 	case "disk":
 		return []Measurement{
 			{
-				Name:        "disk_used_percent",
+				Name:        "used_percent",
 				Rename:      "Disk Used",
 				Unit:        "Percent",
 				Aggregation: "Average",
 			},
 			{
-				Name:        "disk_inodes_used",
+				Name:        "inodes_used",
 				Rename:      "Disk Inodes Used",
 				Unit:        "Inodes",
 				Aggregation: "Sum",
@@ -141,19 +141,19 @@ func GetMeasurements(metric string) []Measurement {
 	case "io":
 		return []Measurement{
 			{
-				Name:        "diskio_io_time",
+				Name:        "io_time",
 				Rename:      "Disk IO Time",
 				Unit:        "Seconds",
 				Aggregation: "Sum",
 			},
 			{
-				Name:        "diskio_reads",
+				Name:        "reads",
 				Rename:      "Disk Reads",
 				Unit:        "Ops/s",
 				Aggregation: "Sum",
 			},
 			{
-				Name:        "diskio_writes",
+				Name:        "writes",
 				Rename:      "Disk Writes",
 				Unit:        "Ops/s",
 				Aggregation: "Sum",

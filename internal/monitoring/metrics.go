@@ -73,36 +73,91 @@ var metricMappings = map[string]string{
 	"net_drop_out":        "Network Drops Out",
 }
 
+type Measurement struct {
+	Name        string
+	Rename      string
+	Unit        string
+	Aggregation string
+}
+
 // GetMetricNames returns a list of metric names for a given resource type
 // https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/metrics-collected-by-CloudWatch-agent.html
-func GetMetricNames(resourceType string) []string {
-	switch resourceType {
+func GetMeasurements(metric string) []Measurement {
+	switch metric {
 	case "cpu":
-		return []string{
-			"cpu_usage_user",
-			"cpu_usage_system",
-			"cpu_usage_idle",
-			"cpu_usage_iowait",
+		return []Measurement{
+			{
+				Name:        "cpu_usage_user",
+				Rename:      "CPU User",
+				Unit:        "Percent",
+				Aggregation: "Average",
+			},
+			{
+				Name:        "cpu_usage_system",
+				Rename:      "CPU System",
+				Unit:        "Percent",
+				Aggregation: "Average",
+			},
 		}
 	case "network":
-		return []string{
-			"net_bytes_recv",
-			"net_bytes_sent",
+		return []Measurement{
+			{
+				Name:        "net_bytes_recv",
+				Rename:      "Network Received",
+				Unit:        "Bytes/s",
+				Aggregation: "Sum",
+			},
+			{
+				Name:        "net_bytes_sent",
+				Rename:      "Network Sent",
+				Unit:        "Bytes/s",
+				Aggregation: "Sum",
+			},
 		}
 	case "memory":
-		return []string{
-			"mem_used_percent",
+		return []Measurement{
+			{
+				Name:        "mem_used_percent",
+				Rename:      "Memory Used",
+				Unit:        "Percent",
+				Aggregation: "Average",
+			},
 		}
 	case "disk":
-		return []string{
-			"disk_used_percent",
-			"disk_inodes_used",
+		return []Measurement{
+			{
+				Name:        "disk_used_percent",
+				Rename:      "Disk Used",
+				Unit:        "Percent",
+				Aggregation: "Average",
+			},
+			{
+				Name:        "disk_inodes_used",
+				Rename:      "Disk Inodes Used",
+				Unit:        "Inodes",
+				Aggregation: "Sum",
+			},
 		}
 	case "io":
-		return []string{
-			"diskio_io_time",
-			"diskio_reads",
-			"diskio_writes",
+		return []Measurement{
+			{
+				Name:        "diskio_io_time",
+				Rename:      "Disk IO Time",
+				Unit:        "Seconds",
+				Aggregation: "Sum",
+			},
+			{
+				Name:        "diskio_reads",
+				Rename:      "Disk Reads",
+				Unit:        "Ops/s",
+				Aggregation: "Sum",
+			},
+			{
+				Name:        "diskio_writes",
+				Rename:      "Disk Writes",
+				Unit:        "Ops/s",
+				Aggregation: "Sum",
+			},
 		}
 	default:
 		return nil
@@ -154,88 +209,42 @@ func GenerateMetricsSummary(action *githubactions.Action, metrics []string, form
 		action.Infof("")
 		// Display custom metrics if enabled
 		for _, metricType := range metrics {
-			switch strings.ToLower(metricType) {
-			case "cpu":
-				// Display detailed CPU metrics from agent
-				for _, cpuMetric := range []string{"usage_user", "usage_system", "usage_iowait"} {
-					metricKey := "cpu_" + cpuMetric
-					displayName := metricMappings[metricKey]
-					summary := collector.GetMetricSummary(metricKey, NAMESPACE, []types.Dimension{
-						{
-							Name:  aws.String("cpu"),
-							Value: aws.String("cpu-total"),
-						},
-					}, launchTime)
-					displayMetric(action, displayName, summary, "%", formatter)
+			measurements := GetMeasurements(metricType)
+			action.Infof("## %s %v", metricType, measurements)
+			for _, measurement := range measurements {
+				dimensions := []types.Dimension{}
+				variants := []string{"default"}
+				if metricType == "network" {
+					dimensions = append(dimensions, types.Dimension{
+						Name:  aws.String("interface"),
+						Value: aws.String(primaryInterface),
+					})
 				}
-			case "network":
-				// Display network metrics from agent
-				metricKey := "net_bytes_sent"
-				displayName := metricMappings[metricKey]
-				summary := collector.GetMetricSummary(metricKey, NAMESPACE, []types.Dimension{
-					{
-						Name:  aws.String("interface"),
-						Value: aws.String(primaryInterface),
-					},
-				}, launchTime)
-				displayMetric(action, fmt.Sprintf("%s (%s)", displayName, primaryInterface), summary, "bytes/s", formatter)
-
-				metricKey = "net_bytes_recv"
-				displayName = metricMappings[metricKey]
-				summary = collector.GetMetricSummary(metricKey, NAMESPACE, []types.Dimension{
-					{
-						Name:  aws.String("interface"),
-						Value: aws.String(primaryInterface),
-					},
-				}, launchTime)
-				displayMetric(action, fmt.Sprintf("%s (%s)", displayName, primaryInterface), summary, "bytes/s", formatter)
-			case "memory":
-				metricKey := "mem_used_percent"
-				displayName := metricMappings[metricKey]
-				summary := collector.GetMetricSummary(metricKey, NAMESPACE, []types.Dimension{}, launchTime)
-				displayMetric(action, displayName, summary, "%", formatter)
-			case "disk":
-				for _, path := range []string{"/", "/tmp", "/var/lib/docker", "/home/runner"} {
-					metricKey := "disk_used_percent"
-					displayName := metricMappings[metricKey]
-					summary := collector.GetMetricSummary(metricKey, NAMESPACE, []types.Dimension{
-						{
-							Name:  aws.String("path"),
-							Value: aws.String(path),
-						},
-						{
-							Name:  aws.String("fstype"),
-							Value: aws.String("ext4"),
-						},
-					}, launchTime)
-					// some paths might not have mount points
-					if path != "/" && summary == nil {
+				if metricType == "disk" {
+					variants = []string{"/", "/tmp", "/var/lib/docker", "/home/runner"}
+					dimensions = append(dimensions, types.Dimension{
+						Name:  aws.String("path"),
+						Value: aws.String(rootDisk),
+					})
+					dimensions = append(dimensions, types.Dimension{
+						Name:  aws.String("fstype"),
+						Value: aws.String("ext4"),
+					})
+				}
+				for _, variant := range variants {
+					summary := collector.GetMetricSummary(measurement.Name, NAMESPACE, dimensions, launchTime)
+					if metricType == "disk" && variant != "/" && summary == nil {
 						continue
 					}
-					displayMetric(action, fmt.Sprintf("%s (%s)", displayName, path), summary, "%", formatter)
+					displayMetric(action, measurement.Rename, summary, measurement.Unit, formatter, variant)
 				}
-			case "io":
-				summaryReads := collector.GetMetricSummary("diskio_reads", NAMESPACE, []types.Dimension{
-					{
-						Name:  aws.String("name"),
-						Value: aws.String(rootDisk),
-					},
-				}, launchTime)
-				summaryWrites := collector.GetMetricSummary("diskio_writes", NAMESPACE, []types.Dimension{
-					{
-						Name:  aws.String("name"),
-						Value: aws.String(rootDisk),
-					},
-				}, launchTime)
-				displayMetric(action, fmt.Sprintf("Disk Reads (%s)", rootDisk), summaryReads, "ops/s", formatter)
-				displayMetric(action, fmt.Sprintf("Disk Writes (%s)", rootDisk), summaryWrites, "ops/s", formatter)
 			}
 		}
 	}
 }
 
 // displayMetric shows a metric in the specified format (sparkline or chart)
-func displayMetric(action *githubactions.Action, name string, summary *MetricSummary, unit string, formatter string) {
+func displayMetric(action *githubactions.Action, name string, summary *MetricSummary, unit string, formatter string, variant string) {
 	if summary == nil {
 		action.Infof("  %-12s ─────────────── (no data yet)", name)
 		return

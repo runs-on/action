@@ -20,3 +20,97 @@ jobs:
         uses: actions/checkout@v4
       - uses: ./
       - run: sleep 30
+
+  cache:
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [ubuntu24-full-x64, ubuntu24-full-arm64, windows22-base-x64]
+    runs-on: runs-on=${{ github.run_id }}/cpu=2/family=m7/image=${{ matrix.image }}/extras=s3-cache
+    env:
+      ARTEFACT_NAME: ${{github.run_id}}-my-artifact
+      FILENAME: random-file
+      BLOCKS: 512 # 512MB
+    steps:
+      - uses: ./
+      # ARTEFACT
+      - run: mkdir -p path/to/artifact
+      - run: echo hello > path/to/artifact/world.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARTEFACT_NAME }}
+          path: path/to/artifact/world.txt
+      - run: rm path/to/artifact/world.txt
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.ARTEFACT_NAME }}
+          path: path/to/artifact/world.txt
+      # END ARTEFACT
+
+      # DOCKER GHA CACHE
+      - uses: actions/checkout@v4
+        with:
+          repository: dockersamples/example-voting-app
+      - name: Generate random file to test caching
+        run: |
+          dd if=/dev/urandom of=vote/random.bin bs=1M count=1024
+          ls -lh vote/random.bin
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: "Build and push image (type=gha)"
+        uses: docker/build-push-action@v4
+        with:
+          context: "vote"
+          push: false
+          tags: test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      # END DOCKER GHA CACHE
+    
+      - name: Generate file
+        run: |
+          echo "Generating ${{ matrix.blocks }}MiB random file..."
+          dd if=/dev/urandom of=${{ env.FILENAME }} bs=1M count=${{ matrix.blocks }}
+          ls -lh ${{ env.FILENAME }}
+      - name: Save to cache (actions/cache)
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.FILENAME }}
+          key: github-${{github.run_id}}-actions-cache-${{strategy.job-index}}-${{ env.BLOCKS }}MiB-${{ env.FILENAME }}
+      - name: Restore from cache (actions/cache)
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.FILENAME }}
+          fail-on-cache-miss: true
+          key: github-${{github.run_id}}-actions-cache-${{strategy.job-index}}-${{ env.BLOCKS }}MiB-${{ env.FILENAME }}
+      - name: Restore from cache (actions/cache, restoreKeys)
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.FILENAME }}
+          fail-on-cache-miss: true
+          key: github-${{github.run_id}}-actions-cache-${{strategy.job-index}}-unknown
+          restore-keys: |
+            github-${{github.run_id}}-actions-cache-${{strategy.job-index}}-${{ env.BLOCKS }}MiB-
+      - name: Save to cache (runs-on/cache)
+        uses: runs-on/cache/save@v4
+        with:
+          path: ${{ env.FILENAME }}
+          key: github-${{github.run_id}}-runs-on-cache-${{strategy.job-index}}-${{ env.BLOCKS }}MiB-${{ env.FILENAME }}
+      - name: Restore from cache (runs-on/cache)
+        uses: runs-on/cache/restore@v4
+        with:
+          fail-on-cache-miss: true
+          path: ${{ env.FILENAME }}
+          key: github-${{github.run_id}}-runs-on-cache-${{strategy.job-index}}-${{ env.BLOCKS }}MiB-${{ env.FILENAME }}
+      - name: Restore from cache (runs-on/cache, restoreKeys)
+        uses: runs-on/cache/restore@v4
+        with:
+          fail-on-cache-miss: true
+          path: ${{ env.FILENAME }}
+          key: github-${{github.run_id}}-runs-on-cache-${{strategy.job-index}}-unknown
+          restore-keys: |
+            github-${{github.run_id}}-runs-on-cache-${{strategy.job-index}}-${{ env.BLOCKS }}MiB-
+      # END RUNS-ON CACHE
+
+      - name: Inspect
+        run: ls -la

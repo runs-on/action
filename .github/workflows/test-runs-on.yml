@@ -1,0 +1,22 @@
+name: RunsOn runners
+
+on:
+  push:
+    branches:
+      - main
+      - v1
+      - feature/go
+  workflow_dispatch:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [ubuntu24-full-x64, ubuntu24-full-arm64, windows22-base-x64]
+    runs-on: runs-on=${{ github.run_id }}/cpu=2/family=m7/image=${{ matrix.image }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - uses: ./
+      - run: sleep 30

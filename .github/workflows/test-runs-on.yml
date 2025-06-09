@@ -28,7 +28,7 @@ jobs:
         image: [ubuntu24-full-x64, ubuntu24-full-arm64, windows22-base-x64]
     runs-on: runs-on=${{ github.run_id }}/cpu=2/family=m7/image=${{ matrix.image }}/extras=s3-cache
     env:
-      ARTEFACT_NAME: ${{github.run_id}}-my-artifact
+      ARTEFACT_NAME: -${{ github.run_id }}-${{ strategy.job-index }}-my-artifact
       FILENAME: random-file
       BLOCKS: 512 # 512MB
     steps:

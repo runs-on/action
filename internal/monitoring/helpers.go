@@ -7,6 +7,9 @@ import (
 	"strings"
 )
 
+const DEFAULT_NETWORK_INTERFACE = "enp39s0"
+const DEFAULT_DISK_DEVICE = "nvme0n1p1"
+
 // detectPrimaryNetworkInterface finds the primary network interface (excluding loopback and docker)
 func detectPrimaryNetworkInterface() string {
 	// Try to get the interface used for the default route
@@ -34,7 +37,7 @@ func detectPrimaryNetworkInterface() string {
 	cmd = exec.Command("ls", "/sys/class/net")
 	output, err = cmd.Output()
 	if err != nil {
-		return "enp39s0" // ultimate fallback
+		return DEFAULT_NETWORK_INTERFACE // ultimate fallback
 	}
 
 	interfaces := strings.Fields(string(output))
@@ -44,7 +47,7 @@ func detectPrimaryNetworkInterface() string {
 		}
 	}
 
-	return "enp39s0" // ultimate fallback
+	return DEFAULT_NETWORK_INTERFACE // ultimate fallback
 }
 
 // detectRootDiskDevice finds the disk device that contains the root filesystem
@@ -52,7 +55,7 @@ func detectRootDiskDevice() string {
 	// Read /proc/mounts to find what device / is mounted on
 	file, err := os.Open("/proc/mounts")
 	if err != nil {
-		return "nvme0n1p1" // fallback
+		return DEFAULT_DISK_DEVICE // fallback
 	}
 	defer file.Close()
 
@@ -87,7 +90,7 @@ func detectRootDiskDevice() string {
 		}
 	}
 
-	return "nvme0n1p1" // ultimate fallback
+	return DEFAULT_DISK_DEVICE // ultimate fallback
 }
 
 // getNetworkInterface returns the network interface to use based on config

@@ -178,9 +178,12 @@ func GenerateMetricsSummary(action *githubactions.Action, metrics []string, form
 	networkInterface = getNetworkInterface(networkInterface)
 	diskDevice = getDiskDevice(diskDevice)
 
-	action.Infof("## CloudWatch Metrics Summary (format: %s)", formatter)
-	action.Infof("Enabled metrics: cpu, network, %s\n", strings.Join(metrics, ", "))
-	action.Infof("Namespace: %s\n", NAMESPACE)
+	action.Infof("## CloudWatch Metrics Summary\n")
+	action.Infof("Enabled metrics: %s", strings.Join(metrics, ", "))
+	action.Infof("Namespace: %s", NAMESPACE)
+	action.Infof("Network interface: %s", networkInterface)
+	action.Infof("Disk device: %s", diskDevice)
+	action.Infof("")
 	showLinks(action, metrics)
 
 	// Fetch and display metrics with sparklines
@@ -192,7 +195,7 @@ func GenerateMetricsSummary(action *githubactions.Action, metrics []string, form
 
 	action.Infof("📈 Metrics (since %s):", launchTime.Format(time.RFC3339))
 
-	for _, formatter := range []string{"sparkline", "chart"} {
+	for _, formatter := range []string{"chart"} {
 		action.Infof("")
 		// Display custom metrics if enabled
 		for _, metricType := range metrics {
@@ -224,7 +227,6 @@ func GenerateMetricsSummary(action *githubactions.Action, metrics []string, form
 					})
 				}
 				if metricType == "io" {
-					action.Infof("Disk device: %s", diskDevice)
 					dimensions = append(dimensions, types.Dimension{
 						Name:  aws.String("name"),
 						Value: aws.String(diskDevice),
@@ -376,13 +378,6 @@ func (mc *MetricsCollector) createCacheKey(metricName, namespace string, aggrega
 
 func (mc *MetricsCollector) getMetricData(metricName, namespace string, aggregation string, dimensions []types.Dimension, startTime time.Time) ([]MetricDataPoint, error) {
 	endTime := time.Now()
-
-	// mc.action.Infof("Getting metric data for %s", metricName)
-	// mc.action.Infof("Namespace: %s", namespace)
-	// json, _ := json.Marshal(dimensions)
-	// mc.action.Infof("Dimensions: %s", string(json))
-	// mc.action.Infof("StartTime: %s", startTime)
-	// mc.action.Infof("EndTime: %s", endTime)
 
 	input := &cloudwatch.GetMetricDataInput{
 		MetricDataQueries: []types.MetricDataQuery{

@@ -57,8 +57,10 @@ func createSparkline(values []float64) string {
 	return result.String()
 }
 
+// TODO: show direct link to Explorer interface of CloudWatch, but it's currently buggy as hell
 func showLinks(action *githubactions.Action, metrics []string) {
-	action.Infof("🔗 EC2 instance link: %s\n", GetEC2InstanceLink(action))
+	action.Infof("🔗 EC2 instance link (go to Monitoring tab): %s\n", GetEC2InstanceLink(action))
+	action.Infof("🔗 CloudWatch link (%s namespace): %s\n", NAMESPACE, GetCloudWatchLink(action))
 }
 
 func GetEC2InstanceLink(action *githubactions.Action) string {
@@ -74,4 +76,14 @@ func GetEC2InstanceLink(action *githubactions.Action) string {
 
 	return fmt.Sprintf("https://%s.console.aws.amazon.com/ec2/home?region=%s#InstanceDetails:instanceId=%s",
 		region, region, instanceID)
+}
+
+func GetCloudWatchLink(action *githubactions.Action) string {
+	region := os.Getenv("RUNS_ON_AWS_REGION")
+	if region == "" {
+		region = "us-east-1"
+	}
+
+	return fmt.Sprintf("https://%[1]s.console.aws.amazon.com/cloudwatch/home?region=%[1]s#metricsV2?graph=~()&namespace=~'%[2]s",
+		region, NAMESPACE)
 }

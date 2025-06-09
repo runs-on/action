@@ -13,8 +13,6 @@ import (
 	"github.com/sethvargo/go-githubactions"
 )
 
-// type MeasurementConfig struct {}
-
 // https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch-Agent-Configuration-File-Details.html
 func GenerateCloudWatchConfig(action *githubactions.Action, metrics []string, networkInterface, diskDevice string) error {
 	if len(metrics) == 0 {

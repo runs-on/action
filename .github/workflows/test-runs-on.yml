@@ -34,40 +34,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: ./
-      # ARTEFACT
-      - run: mkdir -p path/to/artifact
-      - run: echo hello > path/to/artifact/world.txt
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ${{ env.ARTEFACT_NAME }}
-          path: path/to/artifact/world.txt
-      - run: rm path/to/artifact/world.txt
-      - uses: actions/download-artifact@v4
-        with:
-          name: ${{ env.ARTEFACT_NAME }}
-          path: path/to/artifact/world.txt
-      # END ARTEFACT
 
-      # DOCKER GHA CACHE
-      - uses: actions/checkout@v4
-        with:
-          repository: dockersamples/example-voting-app
-      - name: Generate random file to test caching
-        run: |
-          dd if=/dev/urandom of=vote/random.bin bs=1M count=1024
-          ls -lh vote/random.bin
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-      - name: "Build and push image (type=gha)"
-        uses: docker/build-push-action@v4
-        with:
-          context: "vote"
-          push: false
-          tags: test
-          cache-from: type=gha,scope=${{ matrix.image }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
-      # END DOCKER GHA CACHE
-    
       - name: Generate file
         if: ${{ runner.os == 'Linux' }}
         run: |
@@ -83,6 +50,37 @@ jobs:
           $rng.GetBytes($random)
           [System.IO.File]::WriteAllBytes("${{ env.FILENAME }}", $random)
           Get-Item ${{ env.FILENAME }} | Select-Object Length,Name
+
+      # ARTEFACT
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARTEFACT_NAME }}
+          path: ${{ env.FILENAME }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.ARTEFACT_NAME }}
+          path: ${{ env.FILENAME }}
+      # END ARTEFACT
+
+      # DOCKER GHA CACHE
+      - uses: actions/checkout@v4
+        with:
+          repository: dockersamples/example-voting-app
+          path: apps
+      - run: cp ${{ env.FILENAME }} apps/vote/random.bin
+      - run: ls -lh apps/vote/random.bin
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: "Build and push image (type=gha)"
+        uses: docker/build-push-action@v4
+        with:
+          context: "apps/vote"
+          push: false
+          tags: test
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+      # END DOCKER GHA CACHE
+    
       - name: Save to cache (actions/cache)
         uses: actions/cache/save@v4
         with:

@@ -3,7 +3,7 @@ const os = require('os')
 const process = require('process')
 const path = require('path')
 
-const ARGS = '{{ .Args }}'.split(',')
+const ARGS = '{{ .Args }}'.split(',').filter(arg => arg !== '')
 const WINDOWS = 'win32'
 const LINUX = 'linux'
 const AMD64 = 'x64'

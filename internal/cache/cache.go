@@ -14,7 +14,7 @@ func UpdateZctionsConfig(action *githubactions.Action, actionsResultsURL string,
 		return
 	}
 
-	configURL := actionsResultsURL + "/config"
+	configURL := actionsResultsURL + "config"
 	data := url.Values{}
 	// Send the ZCTIONS_RESULTS_URL value under the key 'ACTIONS_RESULTS_URL'.
 	// This value is only known by the GitHub Actions runner, and is needed by the RunsOn agent cache proxy to handle artefacts caching.

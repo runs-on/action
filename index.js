@@ -31,6 +31,7 @@ function main() {
     const binary = chooseBinary()
     const mainScript = path.join(__dirname, binary)
     if (os.platform() === WINDOWS) {
+        console.log(`Starting ${mainScript} with arguments ${ARGS.join(' ')}`, ARGS.length)
         childProcess.execFileSync('powershell', [
             '-Command',
             `Start-Process -FilePath "${mainScript}" ${ARGS.length > 0 ? '-ArgumentList "' + ARGS.join(' ') + '"' : ''} -Verb RunAs -WindowStyle Hidden -Wait`

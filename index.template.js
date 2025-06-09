@@ -20,7 +20,7 @@ function chooseBinary() {
         return `main-linux-arm64`
     }
     if (platform === WINDOWS && arch === AMD64) {
-        return `main-windows-amd64`
+        return `main-windows-amd64.exe`
     }
 
     console.error(`Unsupported platform (${platform}) and architecture (${arch})`)

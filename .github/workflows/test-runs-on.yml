@@ -64,15 +64,25 @@ jobs:
           context: "vote"
           push: false
           tags: test
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
       # END DOCKER GHA CACHE
     
       - name: Generate file
+        if: ${{ runner.os == 'Linux' }}
         run: |
           echo "Generating ${{ env.BLOCKS }}MiB random file..."
           dd if=/dev/urandom of=${{ env.FILENAME }} bs=1M count=${{ env.BLOCKS }}
           ls -lh ${{ env.FILENAME }}
+      - name: Generate file
+        if: ${{ runner.os == 'Windows' }}
+        run: |
+          echo "Generating ${{ env.BLOCKS }}MiB random file..."
+          $random = New-Object byte[] (${{ env.BLOCKS }} * 1MB)
+          $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+          $rng.GetBytes($random)
+          [System.IO.File]::WriteAllBytes("${{ env.FILENAME }}", $random)
+          Get-Item ${{ env.FILENAME }} | Select-Object Length,Name
       - name: Save to cache (actions/cache)
         uses: actions/cache/save@v4
         with:

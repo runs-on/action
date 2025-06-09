@@ -33,7 +33,7 @@ function main() {
     if (os.platform() === WINDOWS) {
         childProcess.execFileSync('powershell', [
             '-Command',
-            `Start-Process -FilePath "${mainScript}" -ArgumentList "${ARGS.join(' ')}" -Verb RunAs -WindowStyle Hidden -Wait`
+            `Start-Process -FilePath "${mainScript}" ${ARGS.length > 0 ? '-ArgumentList "' + ARGS.join(' ') + '"' : ''} -Verb RunAs -WindowStyle Hidden -Wait`
         ], { stdio: 'inherit' })
     } else {
         childProcess.execFileSync('sudo', ['-n', '-E', mainScript, ...ARGS], { stdio: 'inherit' })

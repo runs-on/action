@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  test:
+  default:
     strategy:
       fail-fast: false
       matrix:
@@ -21,7 +21,7 @@ jobs:
       - uses: ./
       - run: sleep 30
 
-  cache:
+  magic-cache:
     strategy:
       fail-fast: false
       matrix:
@@ -32,6 +32,7 @@ jobs:
       FILENAME: random-file
       BLOCKS: 512 # 512MB
     steps:
+      - uses: actions/checkout@v4
       - uses: ./
       # ARTEFACT
       - run: mkdir -p path/to/artifact

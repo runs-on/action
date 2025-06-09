@@ -24,7 +24,7 @@ function chooseBinary() {
     }
 
     console.error(`Unsupported platform (${platform}) and architecture (${arch})`)
-    process.exit(1)
+    process.exit(0)
 }
 
 function main() {

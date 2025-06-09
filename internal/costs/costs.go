@@ -133,6 +133,7 @@ func ComputeAndDisplayCosts(action *githubactions.Action, cfg *config.Config) er
 	headers := []string{"metric", "value"}
 	rows := [][]string{
 		{"Instance Type", costData.InstanceType},
+		{"Instance Lifecycle", instanceLifecycle},
 		{"Region", costData.Region},
 		{"Duration", durationStr},
 		{"Cost", costStr},

@@ -1,0 +1,22 @@
+name: GitHub runners
+
+on:
+  push:
+    branches:
+      - main
+      - v1
+      - feature/go
+  workflow_dispatch:
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      # expectation: this is just a noop on managed runners
+      - uses: ./
+      - run: sleep 60

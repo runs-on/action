@@ -85,5 +85,5 @@ func (c *Config) HasShowCosts() bool {
 }
 
 func (c *Config) HasMetrics() bool {
-	return len(c.Metrics) > 0 && runtime.GOOS != "windows"
+	return len(c.Metrics) > 0 && runtime.GOOS == "linux"
 }

@@ -80,15 +80,17 @@ jobs:
       - if: ${{ runner.os == 'Windows' }}
         run: Get-ChildItem apps/vote/random.bin | Select-Object Length,Name
       - name: Set up Docker Buildx
+        if: ${{ runner.os == 'Linux' }}
         uses: docker/setup-buildx-action@v3
       - name: "Build and push image (type=gha)"
+        if: ${{ runner.os == 'Linux' }}
         uses: docker/build-push-action@v4
         with:
           context: "apps/vote"
           push: false
           tags: test
-          cache-from: type=gha,scope=${{ matrix.image }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+          cache-from: type=gha,scope=v2-${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=v2-${{ matrix.image }}
       # END DOCKER GHA CACHE
     
       - name: Save to cache (actions/cache)

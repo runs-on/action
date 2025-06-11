@@ -35,9 +35,13 @@ Send additional metrics using CloudWatch agent.
 
 Supported metrics:
 
-- `memory` (mem_used_percent, mem_available_percent, mem_total, mem_used)
-- `disk` (used_percent, free, total, used for all filesystems, excluding sysfs/devtmpfs)  
-- `io` (reads, writes, read_bytes, write_bytes, read_time, write_time, io_time)
+| Metric Type | Available Metrics |
+|------------|------------------|
+| `cpu` | `usage_user`, `usage_system` |
+| `network` | `bytes_recv`, `bytes_sent` |
+| `memory` | `used_percent` |
+| `disk` | `used_percent`, `inodes_used` |
+| `io` | `io_time`, `reads`, `writes` |
 
 ```yaml
 jobs:
@@ -46,10 +50,8 @@ jobs:
     steps:
       - uses: runs-on/action@v1
         with:
-          metrics: memory,disk,io
+          metrics: cpu,network,memory,disk,io
 ```
-
-**Note:** AWS provides CPU, network, and basic EBS metrics by default. Memory and detailed disk usage require the CloudWatch agent.
 
 The action will display live metrics with sparklines and charts in the post-execution summary, showing data from the last 6 hours.
 
@@ -57,5 +59,4 @@ The action will display live metrics with sparklines and charts in the post-exec
 
 This action will probably host a few other features such as:
 
-- enabling instance monitoring through CloudWatch (RAM, CPU, etc.)
 - enabling/disabling SSM agent ?

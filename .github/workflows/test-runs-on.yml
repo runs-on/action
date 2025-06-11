@@ -132,3 +132,36 @@ jobs:
           restore-keys: |
             github-${{github.run_id}}-runs-on-cache-${{strategy.job-index}}-${{ env.BLOCKS }}MiB-
       # END RUNS-ON CACHE
+
+  metrics:
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [ubuntu24-full-x64, ubuntu24-full-arm64]
+    runs-on: runs-on=${{ github.run_id }}/cpu=2/family=m7/image=${{ matrix.image }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./
+        with:
+          metrics: cpu,network,memory,disk,io
+      - name: Generate load
+        run: |
+          # CPU intensive - variable load
+          for i in {1..90}; do
+            dd if=/dev/zero bs=1M count=$((RANDOM % 100 + 50)) | md5sum &
+            sleep 1
+          done &
+          
+          # Memory intensive - variable load
+          for i in {1..90}; do
+            stress-ng --vm $((RANDOM % 4 + 1)) --vm-bytes $((RANDOM % 512 + 256))M --timeout 1s &
+            sleep 1
+          done &
+          
+          # Disk intensive - variable load
+          for i in {1..90}; do
+            dd if=/dev/urandom of=/tmp/testfile$i bs=1M count=$((RANDOM % 100 + 50)) &
+            sleep 1
+          done &
+          
+          wait

@@ -1,12 +1,7 @@
-name: Test sccache functionality
+name: Test / Sccache
 
 on:
   push:
-    branches:
-      - main
-      - feature/*
-      - v*
-  pull_request:
     branches:
       - main
       - feature/*
@@ -20,16 +15,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable
         
-      - name: Configure runs-on action with sccache
-        uses: ./
+      - uses: ./
         with:
           sccache: s3
           
-      - name: Setup sccache
-        uses: mozilla-actions/sccache-action@v0.0.9
+      - uses: mozilla-actions/sccache-action@v0.0.9
         
       - name: Create simple Rust project
         run: |

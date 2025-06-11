@@ -56,7 +56,10 @@ jobs:
         with:
           name: ${{ env.ARTEFACT_NAME }}
           path: ${{ env.FILENAME }}
-      - run: rm -f ${{ env.FILENAME }}
+      - if: ${{ runner.os == 'Linux' }}
+        run: rm -f ${{ env.FILENAME }}
+      - if: ${{ runner.os == 'Windows' }}
+        run: Remove-Item ${{ env.FILENAME }}
       - uses: actions/download-artifact@v4
         with:
           name: ${{ env.ARTEFACT_NAME }}

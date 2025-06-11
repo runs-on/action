@@ -9,6 +9,7 @@ import (
 	"github.com/runs-on/action/internal/costs"
 	"github.com/runs-on/action/internal/env"
 	"github.com/runs-on/action/internal/monitoring"
+	"github.com/runs-on/action/internal/sccache"
 	"github.com/sethvargo/go-githubactions"
 )
 
@@ -28,6 +29,13 @@ func handleMainExecution(action *githubactions.Action, ctx context.Context) {
 
 	if cfg.HasShowCosts() {
 		action.Infof("show_costs is enabled. You will find cost details in the post-execution step of this action.")
+	}
+
+	// Configure sccache if requested
+	if cfg.HasSccache() {
+		if err := sccache.ConfigureSccache(action, cfg.Sccache); err != nil {
+			action.Errorf("Failed to configure sccache: %v", err)
+		}
 	}
 
 	// Configure CloudWatch metrics if requested

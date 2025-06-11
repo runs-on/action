@@ -16,6 +16,7 @@ type Config struct {
 	Metrics           []string
 	NetworkInterface  string
 	DiskDevice        string
+	Sccache           string
 	ZctionsResultsURL string
 	ActionsResultsURL string
 }
@@ -58,6 +59,8 @@ func NewConfigFromInputs(action *githubactions.Action) (*Config, error) {
 		cfg.DiskDevice = "auto"
 	}
 
+	cfg.Sccache = action.GetInput("sccache")
+
 	cfg.ZctionsResultsURL = os.Getenv("ZCTIONS_RESULTS_URL")
 	cfg.ActionsResultsURL = os.Getenv("ACTIONS_RESULTS_URL")
 
@@ -66,6 +69,7 @@ func NewConfigFromInputs(action *githubactions.Action) (*Config, error) {
 	action.Infof("Input 'metrics': %v", cfg.Metrics)
 	action.Infof("Input 'network_interface': %s", cfg.NetworkInterface)
 	action.Infof("Input 'disk_device': %s", cfg.DiskDevice)
+	action.Infof("Input 'sccache': %s", cfg.Sccache)
 
 	if cfg.ZctionsResultsURL != "" {
 		action.Infof("ZCTIONS_RESULTS_URL is set: %s", cfg.ZctionsResultsURL)
@@ -86,4 +90,8 @@ func (c *Config) HasShowCosts() bool {
 
 func (c *Config) HasMetrics() bool {
 	return len(c.Metrics) > 0 && runtime.GOOS == "linux"
+}
+
+func (c *Config) HasSccache() bool {
+	return c.Sccache != "" && runtime.GOOS == "linux"
 }

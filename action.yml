@@ -28,3 +28,7 @@ inputs:
     description: 'Disk device to monitor'
     required: false
     default: 'nvme0n1p1'
+  sccache:
+    description: 'Enable sccache. Can take either "s3" (RunsOn S3 cache bucket) or be empty (disabled). You still need to setup sccache in your workflow, for instance with mozilla-actions/sccache-action.'
+    required: false
+    default: ''

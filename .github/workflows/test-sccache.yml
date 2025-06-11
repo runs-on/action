@@ -35,8 +35,12 @@ jobs:
         run: |
           cargo new --bin test-project
           cd test-project
-          # Add some dependencies to make compilation more interesting
+          # Create a complete Cargo.toml with dependencies
           cat > Cargo.toml << 'EOF'
+          [package]
+          name = "test-project"
+          version = "0.1.0"
+          edition = "2021"
           
           [dependencies]
           serde = { version = "1.0", features = ["derive"] }

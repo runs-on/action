@@ -211,6 +211,14 @@ echo "SCCACHE_S3_KEY_PREFIX=cache/sccache" >> $GITHUB_ENV
 echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
 ```
 
+## Development
+
+Make your source code changes in a commit, then push the updated binaries and JS files in a separate commit:
+
+```
+make release
+```
+
 ## Future work
 
 This action will probably host a few other features such as:

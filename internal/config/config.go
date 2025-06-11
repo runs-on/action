@@ -89,9 +89,17 @@ func (c *Config) HasShowCosts() bool {
 }
 
 func (c *Config) HasMetrics() bool {
-	return len(c.Metrics) > 0 && runtime.GOOS == "linux"
+	return c.IsUsingRunsOn() && c.IsUsingLinux() && len(c.Metrics) > 0
 }
 
 func (c *Config) HasSccache() bool {
-	return c.Sccache != "" && runtime.GOOS == "linux"
+	return c.IsUsingRunsOn() && c.IsUsingLinux() && c.Sccache != ""
+}
+
+func (c *Config) IsUsingRunsOn() bool {
+	return os.Getenv("RUNS_ON_RUNNER_NAME") != ""
+}
+
+func (c *Config) IsUsingLinux() bool {
+	return runtime.GOOS == "linux"
 }

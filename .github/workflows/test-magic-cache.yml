@@ -76,7 +76,7 @@ jobs:
         with:
           context: "apps/vote"
           push: false
-          tags: test
+          tags: test-${{ matrix.image }}
           cache-from: type=gha,scope=v3-${{ matrix.image }}
           cache-to: type=gha,mode=max,scope=v3-${{ matrix.image }}
       # END DOCKER GHA CACHE

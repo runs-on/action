@@ -1,0 +1,42 @@
+name: Test / Metrics
+on:
+  push:
+    branches:
+      - main
+      - v*
+      - feature/*
+  workflow_dispatch:
+
+jobs:
+  metrics:
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [ubuntu24-full-x64, ubuntu24-full-arm64]
+    runs-on: runs-on=${{ github.run_id }}/cpu=2/family=m7/image=${{ matrix.image }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./
+        with:
+          metrics: cpu,network,memory,disk,io
+      - name: Generate load
+        run: |
+          # CPU intensive - variable load
+          for i in {1..10}; do
+            dd if=/dev/zero bs=1M count=$((RANDOM % 100 + 150)) | md5sum &
+            sleep 10
+          done &
+          
+          # Memory intensive - variable load
+          for i in {1..10}; do
+            stress-ng --vm $((RANDOM % 4 + 1)) --vm-bytes $((RANDOM % 512 + 256))M --timeout 10s &
+            sleep 10
+          done &
+          
+          # Disk intensive - variable load
+          for i in {1..10}; do
+            dd if=/dev/urandom of=/tmp/testfile$i bs=1M count=$((RANDOM % 100 + 150)) &
+            sleep 10
+          done &
+          
+          wait

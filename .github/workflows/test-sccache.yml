@@ -1,0 +1,105 @@
+name: Test / Sccache
+
+on:
+  push:
+    branches:
+      - main
+      - feature/*
+      - v*
+  workflow_dispatch:
+
+jobs:
+  test-sccache:
+    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/extras=s3-cache
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: dtolnay/rust-toolchain@stable
+        
+      - uses: ./
+        with:
+          sccache: s3
+          
+      - uses: mozilla-actions/sccache-action@v0.0.9
+        
+      - name: Create simple Rust project
+        run: |
+          cargo new --bin test-project
+          cd test-project
+          # Create a complete Cargo.toml with dependencies
+          cat > Cargo.toml << 'EOF'
+          [package]
+          name = "test-project"
+          version = "0.1.0"
+          edition = "2021"
+          
+          [dependencies]
+          serde = { version = "1.0", features = ["derive"] }
+          tokio = { version = "1.0", features = ["full"] }
+          reqwest = { version = "0.11", features = ["json"] }
+          EOF
+          
+          # Create a simple main.rs that uses the dependencies
+          cat > src/main.rs << 'EOF'
+          use serde::{Deserialize, Serialize};
+          use std::collections::HashMap;
+          
+          #[derive(Serialize, Deserialize, Debug)]
+          struct Config {
+              name: String,
+              version: String,
+              features: Vec<String>,
+          }
+          
+          #[tokio::main]
+          async fn main() -> Result<(), Box<dyn std::error::Error>> {
+              let config = Config {
+                  name: "test-app".to_string(),
+                  version: "1.0.0".to_string(),
+                  features: vec!["sccache".to_string(), "s3".to_string()],
+              };
+              
+              println!("Config: {:?}", config);
+              
+              // Simple HTTP client test
+              let client = reqwest::Client::new();
+              let response = client
+                  .get("https://httpbin.org/json")
+                  .send()
+                  .await?;
+              
+              if response.status().is_success() {
+                  println!("HTTP request successful!");
+              }
+              
+              Ok(())
+          }
+          EOF
+          
+      - name: First compilation (cache miss expected)
+        run: |
+          cd test-project
+          echo "Starting first compilation..."
+          time cargo build --release
+          
+      - name: Clean and second compilation (cache hit expected)
+        run: |
+          cd test-project
+          cargo clean
+          echo "Starting second compilation (should be faster with sccache)..."
+          time cargo build --release
+          
+      - name: Display sccache statistics
+        run: |
+          echo "sccache statistics:"
+          sccache --show-stats || echo "sccache not available or not configured"
+          
+      - name: Verify environment variables
+        run: |
+          echo "Checking sccache environment variables:"
+          echo "SCCACHE_GHA_ENABLED: $SCCACHE_GHA_ENABLED"
+          echo "SCCACHE_BUCKET: $SCCACHE_BUCKET"
+          echo "SCCACHE_REGION: $SCCACHE_REGION"
+          echo "SCCACHE_S3_KEY_PREFIX: $SCCACHE_S3_KEY_PREFIX"
+          echo "RUSTC_WRAPPER: $RUSTC_WRAPPER" 

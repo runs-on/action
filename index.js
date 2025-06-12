@@ -39,6 +39,12 @@ function main() {
     } else {
         console.log(`Current user: ${process.env.USER || process.env.USERNAME}`)
         try {
+            const whoami = childProcess.execSync('whoami').toString().trim()
+            console.log(`Current user (whoami): ${whoami}`)
+        } catch (error) {
+            console.log('Could not determine user via whoami')
+        }
+        try {
             childProcess.execFileSync('sudo', ['-n', '-E', mainScript, ...ARGS], { stdio: 'inherit' })
         } catch (error) {
             if (error.code === 'ENOENT') {

@@ -30,12 +30,21 @@ type Tag struct {
 func NewConfigFromInputs(action *githubactions.Action) (*Config, error) {
 	cfg := &Config{}
 
+	// Check both show_env and show-env (deprecated) inputs
+	// Prioritize show_env, fall back to show-env
 	showEnvStr := action.GetInput("show_env")
+	if showEnvStr == "" {
+		showEnvStr = action.GetInput("show-env")
+		if showEnvStr != "" {
+			action.Warningf("Using deprecated 'show-env' input. Please use 'show_env' instead.")
+		}
+	}
+
 	if showEnvStr != "" {
 		var err error
 		cfg.ShowEnv, err = strconv.ParseBool(showEnvStr)
 		if err != nil {
-			action.Warningf("Error parsing 'show_env' input '%s': %v. Assuming false.", showEnvStr, err)
+			action.Warningf("Error parsing show environment input '%s': %v. Assuming false.", showEnvStr, err)
 		}
 	}
 

@@ -22,6 +22,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: ./
+        with:
+          # old deprecated parameter
+          show-env: true
 
       - name: Generate file
         if: ${{ runner.os == 'Linux' }}

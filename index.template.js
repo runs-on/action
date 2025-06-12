@@ -37,7 +37,17 @@ function main() {
             `Start-Process -FilePath "${mainScript}" ${ARGS.length > 0 ? '-ArgumentList "' + ARGS.join(' ') + '"' : ''} -Verb RunAs -WindowStyle Hidden -Wait`
         ], { stdio: 'inherit' })
     } else {
-        childProcess.execFileSync('sudo', ['-n', '-E', mainScript, ...ARGS], { stdio: 'inherit' })
+        console.log(`Current user: ${process.env.USER || process.env.USERNAME}`)
+        try {
+            childProcess.execFileSync('sudo', ['-n', '-E', mainScript, ...ARGS], { stdio: 'inherit' })
+        } catch (error) {
+            if (error.code === 'ENOENT') {
+                // sudo not available (likely in container), try running directly
+                childProcess.execFileSync(mainScript, ARGS, { stdio: 'inherit' })
+            } else {
+                throw error
+            }
+        }
     }
     process.exit(0)
 }

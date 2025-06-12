@@ -37,7 +37,18 @@ function main() {
             `Start-Process -FilePath "${mainScript}" ${ARGS.length > 0 ? '-ArgumentList "' + ARGS.join(' ') + '"' : ''} -Verb RunAs -WindowStyle Hidden -Wait`
         ], { stdio: 'inherit' })
     } else {
-        childProcess.execFileSync('sudo', ['-n', '-E', mainScript, ...ARGS], { stdio: 'inherit' })
+        const sudoAvailable = childProcess.spawnSync('which', ['sudo'], { stdio: 'ignore' }).status === 0;
+
+        if (!sudoAvailable && process.getuid && process.getuid() === 0) {
+            console.log(`Running ${mainScript} without sudo with arguments ${ARGS.join(' ')}`, ARGS.length)
+            childProcess.execFileSync(mainScript, ARGS, { stdio: 'inherit' })
+        } else if (!sudoAvailable) {
+            console.error('Sudo is not available, and the script requires elevated privileges. Please run as root or install sudo.')
+            process.exit(1)
+        } else {
+            console.log(`Starting ${mainScript} with arguments ${ARGS.join(' ')}`, ARGS.length)
+            childProcess.execFileSync('sudo', [mainScript, ...ARGS], { stdio: 'inherit' })
+        }
     }
     process.exit(0)
 }

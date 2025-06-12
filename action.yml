@@ -3,32 +3,9 @@ description: 'RunsOn Action for magic caching, and more'
 runs:
   using: 'node20'
   main: 'index.js'
-  post: 'post.js'
-  # required, otherwise it could snapshot directories even if previous steps failed or were interrupted, which could lead to corrupted snapshots
-  post-if: "success()"
 
 inputs:
-  show_env:
+  show-env:
     description: 'Show all environment variables'
     required: false
     default: 'false'
-  show_costs:
-    description: 'Control how execution costs are displayed: "inline" for log output, "summary" for GitHub job summary, any other value disables the feature'
-    required: false
-    default: 'inline'
-  metrics:
-    description: 'Comma separated list of additional metrics to send to CloudWatch (cpu, network, memory, disk, io)'
-    required: false
-    default: ''
-  network_interface:
-    description: 'Network interface to monitor'
-    required: false
-    default: 'enp39s0'
-  disk_device:
-    description: 'Disk device to monitor'
-    required: false
-    default: 'nvme0n1p1'
-  sccache:
-    description: 'Enable sccache. Can take either "s3" (RunsOn S3 cache bucket) or be empty (disabled). You still need to setup sccache in your workflow, for instance with mozilla-actions/sccache-action.'
-    required: false
-    default: ''

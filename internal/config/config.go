@@ -30,14 +30,11 @@ type Tag struct {
 func NewConfigFromInputs(action *githubactions.Action) (*Config, error) {
 	cfg := &Config{}
 
-	// Check both show_env and show-env (deprecated) inputs
-	// Prioritize show_env, fall back to show-env
-	showEnvStr := action.GetInput("show_env")
-	if showEnvStr == "" {
-		showEnvStr = action.GetInput("show-env")
-		if showEnvStr != "" {
-			action.Warningf("Using deprecated 'show-env' input. Please use 'show_env' instead.")
-		}
+	showEnvStr := action.GetInput("show-env")
+	if showEnvStr != "" {
+		action.Warningf("Using deprecated 'show-env' input. Please use 'show_env' instead.")
+	} else {
+		showEnvStr = action.GetInput("show_env")
 	}
 
 	if showEnvStr != "" {

@@ -6,6 +6,7 @@ on:
       - main
       - v*
       - feature/*
+      - fix/*
   workflow_dispatch:
 
 jobs:

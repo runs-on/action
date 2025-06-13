@@ -1,4 +1,5 @@
-name: Test / Default
+name: Test / Container
+
 on:
   push:
     branches:
@@ -10,28 +11,37 @@ on:
 
 jobs:
   github:
-    name: GitHub runners
+    name: GitHub
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
+        container:
+          - ubuntu:24.04
+    runs-on: ubuntu-latest
+    container: ${{ matrix.container }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      # expectation: this is just a noop on managed runners
       - uses: ./
+        with:
+          show_env: 'true'
+          metrics: 'cpu,memory'
       - run: sleep 30
 
   runs-on:
-    name: RunsOn runners
+    name: RunsOn
     strategy:
       fail-fast: false
       matrix:
-        image: [ubuntu24-full-x64, ubuntu24-full-arm64, windows22-base-x64]
+        image: [ubuntu24-full-x64, ubuntu24-full-arm64]
+        container:
+          - ubuntu:24.04
     runs-on: runs-on=${{ github.run_id }}/cpu=2/family=m7/image=${{ matrix.image }}
+    container: ${{ matrix.container }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
       - uses: ./
-      - run: sleep 30
+        with:
+          show_env: 'true'
+          metrics: 'cpu,memory,network,disk'

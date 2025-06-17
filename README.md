@@ -29,6 +29,11 @@ jobs:
           show_env: true
 ```
 
+Possible values:
+
+* `true` - Show all environment variables
+* `false` - Don't show environment variables (default)
+
 ### `show_costs`
 
 Displays how much it cost to run that workflow job. Uses https://ec2-pricing.runs-on.com to get accurate data, for both on-demand and spot pricing across all regions and availability zones.
@@ -48,6 +53,12 @@ Example output in the post-step:
 | GitHub equivalent cost | $0.0240         |
 | Savings                | $0.0200 (82.8%) |
 ```
+
+Possible values:
+
+* `inline` - Display costs in the action log output (default)
+* `summary` - Display costs in the action log output and in the GitHub job summary
+* Any other value - Disables the feature
 
 ### `metrics`
 
@@ -74,6 +85,16 @@ jobs:
         with:
           metrics: cpu,network,memory,disk,io
 ```
+
+Possible values:
+
+* `cpu` - CPU usage metrics (`usage_user`, `usage_system`)
+* `network` - Network metrics (`bytes_recv`, `bytes_sent`)
+* `memory` - Memory metrics (`used_percent`)
+* `disk` - Disk metrics (`used_percent`, `inodes_used`)
+* `io` - I/O metrics (`io_time`, `reads`, `writes`)
+* Comma-separated combinations (e.g., `cpu,network,memory,disk,io`)
+* Empty string - No additional metrics (default)
 
 The action will display live metrics with sparklines and charts in the post-execution summary.
 
@@ -202,6 +223,11 @@ jobs:
       - uses: mozilla-actions/sccache-action@v0.0.9
       - run: # your slow rust compilation
 ```
+
+Possible values:
+
+* `s3` - Use RunsOn S3 cache bucket for sccache backend
+* Empty string - Disable sccache configuration (default)
 
 What this does under the hood is the equivalent of:
 

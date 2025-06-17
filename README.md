@@ -9,7 +9,7 @@ jobs:
   build:
     runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/extras=s3-cache
     steps:
-      - uses: runs-on/action@v1
+      - uses: runs-on/action@v2
       - other steps
 ```
 
@@ -24,7 +24,7 @@ jobs:
   build:
     runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/extras=s3-cache
     steps:
-      - uses: runs-on/action@v1
+      - uses: runs-on/action@v2
         with:
           show_env: true
 ```
@@ -51,6 +51,8 @@ Example output in the post-step:
 
 ### `metrics`
 
+**Note: this is currently only available with a development release of RunsOn. This will be fully functional with v2.8.4+**
+
 Send additional metrics using CloudWatch agent.
 
 Supported metrics:
@@ -68,7 +70,7 @@ jobs:
   build:
     runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/extras=s3-cache
     steps:
-      - uses: runs-on/action@v1
+      - uses: runs-on/action@v2
         with:
           metrics: cpu,network,memory,disk,io
 ```
@@ -194,7 +196,7 @@ jobs:
   build:
     runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/extras=s3-cache
     steps:
-      - uses: runs-on/action@v1
+      - uses: runs-on/action@v2
         with:
           sccache: s3
       - uses: mozilla-actions/sccache-action@v0.0.9

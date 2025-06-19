@@ -63,7 +63,7 @@ func handlePostExecution(action *githubactions.Action, ctx context.Context) {
 
 	err = costs.ComputeAndDisplayCosts(action, cfg)
 	if err != nil {
-		action.Errorf("Failed to compute or display costs: %v", err)
+		action.Warningf("Failed to compute or display costs: %v", err)
 	}
 
 	// Display metrics summary

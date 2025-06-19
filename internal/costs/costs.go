@@ -11,6 +11,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/runs-on/action/internal/config"
 	"github.com/sethvargo/go-githubactions"
 )
@@ -25,6 +28,8 @@ type CostRequestPayload struct {
 	InstanceType      string `json:"instanceType"`
 	InstanceLifecycle string `json:"instanceLifecycle"`
 	Region            string `json:"region"`
+	Az                string `json:"az"`
+	ZoneId            string `json:"zoneId,omitempty"`
 	Arch              string `json:"arch"`
 	StartedAt         string `json:"startedAt"`
 }
@@ -42,6 +47,40 @@ type CostResponseData struct {
 		Amount     float64 `json:"amount"`
 		Percentage float64 `json:"percentage"`
 	} `json:"savings"`
+}
+
+// getZoneIdFromZoneName maps an availability zone name to its zone ID using AWS API
+func getZoneIdFromZoneName(zoneName, region string) (string, error) {
+	if zoneName == "" || region == "" {
+		return "", fmt.Errorf("zone name and region are required")
+	}
+
+	cfg, err := awsconfig.LoadDefaultConfig(context.Background(), awsconfig.WithRegion(region))
+	if err != nil {
+		return "", fmt.Errorf("failed to load AWS config: %w", err)
+	}
+
+	ec2Client := ec2.NewFromConfig(cfg)
+
+	input := &ec2.DescribeAvailabilityZonesInput{
+		ZoneNames: []string{zoneName},
+	}
+
+	result, err := ec2Client.DescribeAvailabilityZones(context.Background(), input)
+	if err != nil {
+		return "", fmt.Errorf("failed to describe availability zones: %w", err)
+	}
+
+	if len(result.AvailabilityZones) == 0 {
+		return "", fmt.Errorf("no availability zone found for zone name: %s", zoneName)
+	}
+
+	zoneId := aws.ToString(result.AvailabilityZones[0].ZoneId)
+	if zoneId == "" {
+		return "", fmt.Errorf("zone ID not found for zone name: %s", zoneName)
+	}
+
+	return zoneId, nil
 }
 
 // ComputeAndDisplayCosts fetches cost data and displays it based on config.
@@ -63,6 +102,7 @@ func ComputeAndDisplayCosts(action *githubactions.Action, cfg *config.Config) er
 
 	// Get runner information from environment variables
 	region := os.Getenv("RUNS_ON_AWS_REGION")
+	az := os.Getenv("RUNS_ON_AWS_AZ")
 	instanceType := os.Getenv("RUNS_ON_INSTANCE_TYPE")
 	instanceLifecycle := os.Getenv("RUNS_ON_INSTANCE_LIFECYCLE")
 	if instanceLifecycle == "" {
@@ -73,11 +113,25 @@ func ComputeAndDisplayCosts(action *githubactions.Action, cfg *config.Config) er
 		instanceArchitecture = "x64" // Default to x64 if not provided
 	}
 
+	// Attempt to find the zone ID mapping for the zone name
+	zoneId := "" // Default to empty string if mapping fails
+	if az != "" && region != "" {
+		if mappedZoneId, err := getZoneIdFromZoneName(az, region); err != nil {
+			// FIXME: change to warning 2 months after v2.8.4 release of RunsOn
+			action.Infof("Failed to get zone ID for zone %s: %v. Using zone name instead, report might not be completely accurate.", az, err)
+		} else {
+			zoneId = mappedZoneId
+			action.Infof("Mapped zone name %s to zone ID %s", az, zoneId)
+		}
+	}
+
 	// Prepare request payload
 	payload := CostRequestPayload{
 		InstanceType:      instanceType,
 		InstanceLifecycle: instanceLifecycle,
 		Region:            region,
+		Az:                az,
+		ZoneId:            zoneId, // Use zone ID instead of zone name
 		Arch:              instanceArchitecture,
 		StartedAt:         instanceLaunchedAt,
 	}

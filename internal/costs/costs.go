@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"runtime"
 	"strings"
 	"time"
 
@@ -32,15 +33,21 @@ type CostRequestPayload struct {
 	ZoneId            string `json:"zoneId,omitempty"`
 	Arch              string `json:"arch"`
 	StartedAt         string `json:"startedAt"`
+	Platform          string `json:"platform"`
 }
 
 // CostResponseData matches the JSON structure returned by the cost API.
 type CostResponseData struct {
-	InstanceType    string  `json:"instanceType"`
-	Region          string  `json:"region"`
-	DurationMinutes float64 `json:"durationMinutes"`
-	TotalCost       float64 `json:"totalCost"`
-	Github          struct {
+	InstanceType      string  `json:"instanceType"`
+	Region            string  `json:"region"`
+	Platform          string  `json:"platform"`
+	Arch              string  `json:"arch"`
+	Az                string  `json:"az"`
+	ZoneId            string  `json:"zoneId"`
+	InstanceLifecycle string  `json:"instanceLifecycle"`
+	DurationMinutes   float64 `json:"durationMinutes"`
+	TotalCost         float64 `json:"totalCost"`
+	Github            struct {
 		TotalCost float64 `json:"totalCost"`
 	} `json:"github"`
 	Savings struct {
@@ -113,6 +120,8 @@ func ComputeAndDisplayCosts(action *githubactions.Action, cfg *config.Config) er
 		instanceArchitecture = "x64" // Default to x64 if not provided
 	}
 
+	platform := runtime.GOOS
+
 	// Attempt to find the zone ID mapping for the zone name
 	zoneId := "" // Default to empty string if mapping fails
 	if az != "" && region != "" {
@@ -134,6 +143,7 @@ func ComputeAndDisplayCosts(action *githubactions.Action, cfg *config.Config) er
 		ZoneId:            zoneId, // Use zone ID instead of zone name
 		Arch:              instanceArchitecture,
 		StartedAt:         instanceLaunchedAt,
+		Platform:          platform,
 	}
 
 	payloadBytes, err := json.Marshal(payload)
@@ -187,8 +197,12 @@ func ComputeAndDisplayCosts(action *githubactions.Action, cfg *config.Config) er
 	headers := []string{"metric", "value"}
 	rows := [][]string{
 		{"Instance Type", costData.InstanceType},
-		{"Instance Lifecycle", instanceLifecycle},
+		{"Instance Lifecycle", costData.InstanceLifecycle},
 		{"Region", costData.Region},
+		{"Platform", costData.Platform},
+		{"Arch", costData.Arch},
+		{"Az", costData.Az},
+		{"Zone ID", costData.ZoneId},
 		{"Duration", durationStr},
 		{"Cost", costStr},
 		{"GitHub equivalent cost", githubCostStr},

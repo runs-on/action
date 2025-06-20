@@ -4,8 +4,6 @@ runs:
   using: 'node20'
   main: 'index.js'
   post: 'post.js'
-  # required, otherwise it could snapshot directories even if previous steps failed or were interrupted, which could lead to corrupted snapshots
-  post-if: "success()"
 
 inputs:
   show_env:

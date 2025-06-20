@@ -1,3 +1,6 @@
+PREVIOUS_TAG ?= $(shell git tag -l | tail -n 1)
+TAG=v2.0.2
+
 .PHONY: help
 help:
 	@echo 'Usage:'
@@ -43,3 +46,16 @@ _require-upx:
 ifndef UPX_BIN
 	$(error 'upx is not installed, it can be installed via "apt-get install upx", "apk add upx" or "brew install upx".')
 endif
+
+.PHONY: bump tag release
+
+bump:
+	gsed -i "s/$(PREVIOUS_TAG)/$(TAG)/g" README.md
+	gsed -i "s/$(PREVIOUS_TAG)/$(TAG)/g" action.yml
+
+tag: bump
+	git tag -a $(TAG) -m "Release $(TAG)"
+	git push origin $(TAG)
+
+release: tag
+	gh release create $(TAG) --generate-notes

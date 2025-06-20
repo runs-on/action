@@ -8,7 +8,7 @@ help:
 	@echo '   make main-linux-amd64      Build static binary for linux/amd64'
 	@echo '   make main-linux-arm64      Build static binary for linux/arm64'
 	@echo '   make main-windows-amd64    Build static binary for windows/amd64'
-	@echo '   make release               Build all static binaries + `index.js` and `post.js`'
+	@echo '   make build                 Build all static binaries + `index.js` and `post.js`'
 	@echo ''
 
 UPX_BIN := $(shell command -v upx 2> /dev/null)
@@ -38,8 +38,8 @@ main-windows-amd64: _require-upx
 	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -installsuffix static -o "main-windows-amd64.exe" $(COMMAND)
 	upx -q -9 "main-windows-amd64.exe"
 
-.PHONY: release
-release: main-linux-amd64 main-linux-arm64 main-windows-amd64 js
+.PHONY: build
+build: main-linux-amd64 main-linux-arm64 main-windows-amd64 js
 
 .PHONY: _require-upx
 _require-upx:

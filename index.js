@@ -32,10 +32,8 @@ function main() {
     const mainScript = path.join(__dirname, binary)
     if (os.platform() === WINDOWS) {
         console.log(`Starting ${mainScript} with arguments ${ARGS.join(' ')}`, ARGS.length)
-        childProcess.execFileSync('powershell', [
-            '-Command',
-            `Start-Process -FilePath "${mainScript}" ${ARGS.length > 0 ? '-ArgumentList "' + ARGS.join(' ') + '"' : ''} -Verb RunAs -WindowStyle Hidden -Wait`
-        ], { stdio: 'inherit' })
+        // runner user has elevated privileges, so we can just run the script directly
+        childProcess.execFileSync(mainScript, ARGS, { stdio: 'inherit' })
     } else {
         try {
             childProcess.execFileSync('sudo', ['-n', '-E', mainScript, ...ARGS], { stdio: 'inherit' })

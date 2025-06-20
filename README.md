@@ -96,7 +96,7 @@ Possible values:
 * Comma-separated combinations (e.g., `cpu,network,memory,disk,io`)
 * Empty string - No additional metrics (default)
 
-The action will display live metrics with sparklines and charts in the post-execution summary.
+The action will display live metrics with charts in the post-execution summary.
 
 <details>
 <summary>Example output:</summary>

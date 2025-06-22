@@ -131,27 +131,39 @@ func GenerateCloudWatchConfig(action *githubactions.Action, metrics []string, ne
 }
 
 func appendCloudWatchConfig(action *githubactions.Action, configPath string) error {
-	// Check if CloudWatch agent is available
-	agentCtl := "/opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl"
-	if _, err := os.Stat(agentCtl); os.IsNotExist(err) {
-		action.Warningf("CloudWatch agent not found at %s, skipping metrics configuration", agentCtl)
+	// Check if CloudWatch agent starter is available
+	agentStarter := "/opt/aws/amazon-cloudwatch-agent/bin/start-amazon-cloudwatch-agent"
+	if _, err := os.Stat(agentStarter); os.IsNotExist(err) {
+		action.Warningf("CloudWatch agent not found at %s, skipping metrics configuration", agentStarter)
 		return nil
 	}
 
-	// Append the configuration to the running agent
-	cmd := exec.Command("sudo", agentCtl,
-		"-a", "append-config",
-		"-m", "ec2",
-		"-s",
-		"-c", fmt.Sprintf("file:%s", configPath))
-
-	output, err := cmd.CombinedOutput()
+	// Store the configuration in the expected location for Docker containers
+	configDestination := "/opt/aws/amazon-cloudwatch-agent/bin/default_linux_config.json"
+	
+	// Read the generated config
+	configData, err := os.ReadFile(configPath)
 	if err != nil {
-		action.Warningf("Failed to append CloudWatch config: %v\nOutput: %s", err, string(output))
+		return fmt.Errorf("failed to read config file: %w", err)
+	}
+
+	// Write config to the expected location
+	if err := os.WriteFile(configDestination, configData, 0644); err != nil {
+		action.Warningf("Failed to write config to %s: %v", configDestination, err)
 		return err
 	}
 
-	action.Infof("Successfully appended CloudWatch metrics configuration")
+	action.Infof("Stored CloudWatch config at %s", configDestination)
+
+	// Start the CloudWatch agent
+	cmd := exec.Command("sudo", agentStarter)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		action.Warningf("Failed to start CloudWatch agent: %v\nOutput: %s", err, string(output))
+		return err
+	}
+
+	action.Infof("Successfully started CloudWatch agent")
 	action.Infof("CloudWatch agent output: %s", string(output))
 
 	return nil

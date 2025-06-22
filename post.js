@@ -28,12 +28,6 @@ function chooseBinary() {
 }
 
 function main() {
-    // Skip all operations if not running on RunsOn runners
-    if (!process.env.RUNS_ON_RUNNER_NAME) {
-        console.log('Not running on RunsOn runner, skipping post-execution operations')
-        process.exit(0)
-    }
-
     const binary = chooseBinary()
     const mainScript = path.join(__dirname, binary)
     if (os.platform() === WINDOWS) {

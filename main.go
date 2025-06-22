@@ -20,12 +20,6 @@ func handleMainExecution(action *githubactions.Action, ctx context.Context) {
 		action.Fatalf("Failed to load configuration: %v", err)
 	}
 
-	// Skip all operations if not running on RunsOn runners
-	if !cfg.IsUsingRunsOn() {
-		action.Infof("Not running on RunsOn runner, skipping all operations")
-		return
-	}
-
 	// Execute logic based on configuration
 	if cfg.HasShowEnv() {
 		env.DisplayEnvVars()
@@ -60,12 +54,6 @@ func handlePostExecution(action *githubactions.Action, ctx context.Context) {
 	cfg, err := config.NewConfigFromInputs(action)
 	if err != nil {
 		action.Errorf("Failed to load configuration in post-execution: %v", err)
-		return
-	}
-
-	// Skip all operations if not running on RunsOn runners
-	if !cfg.IsUsingRunsOn() {
-		action.Infof("Not running on RunsOn runner, skipping post-execution operations")
 		return
 	}
 

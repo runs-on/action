@@ -127,32 +127,71 @@ func GenerateCloudWatchConfig(action *githubactions.Action, metrics []string, ne
 	action.Infof("Config content: %s", string(configJSON))
 
 	// Append the config to the running CloudWatch agent
-	return appendCloudWatchConfig(action, configPath)
+	return configStartCloudWatchAgent(action, configPath)
 }
 
-func appendCloudWatchConfig(action *githubactions.Action, configPath string) error {
-	// Check if CloudWatch agent is available
-	agentCtl := "/opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl"
-	if _, err := os.Stat(agentCtl); os.IsNotExist(err) {
-		action.Warningf("CloudWatch agent not found at %s, skipping metrics configuration", agentCtl)
+func configStartCloudWatchAgent(action *githubactions.Action, configPath string) error {
+	// Check if CloudWatch agent installation exists
+	agentBinDir := "/opt/aws/amazon-cloudwatch-agent/bin/"
+	if _, err := os.Stat(agentBinDir); os.IsNotExist(err) {
+		action.Warningf("CloudWatch agent bin directory not found at %s, skipping metrics configuration", agentBinDir)
 		return nil
 	}
 
-	// Append the configuration to the running agent
-	cmd := exec.Command("sudo", agentCtl,
-		"-a", "append-config",
-		"-m", "ec2",
-		"-s",
-		"-c", fmt.Sprintf("file:%s", configPath))
+	// Check if start script is available
+	agentStarter := "/opt/aws/amazon-cloudwatch-agent/bin/start-amazon-cloudwatch-agent"
+	if _, err := os.Stat(agentStarter); os.IsNotExist(err) {
+		action.Warningf("CloudWatch agent start script not found at %s, skipping metrics configuration", agentStarter)
+		return nil
+	}
 
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		action.Warningf("Failed to append CloudWatch config: %v\nOutput: %s", err, string(output))
+	// Create etc directory if it doesn't exist
+	etcDir := "/opt/aws/amazon-cloudwatch-agent/etc"
+	if err := exec.Command("sudo", "mkdir", "-p", etcDir).Run(); err != nil {
+		action.Warningf("Failed to create etc directory %s: %v", etcDir, err)
 		return err
 	}
 
-	action.Infof("Successfully appended CloudWatch metrics configuration")
-	action.Infof("CloudWatch agent output: %s", string(output))
+	// Read the generated config
+	configData, err := os.ReadFile(configPath)
+	if err != nil {
+		return fmt.Errorf("failed to read config file: %w", err)
+	}
+
+	// Store the configuration directly in the standard CloudWatch agent location
+	configDestination := "/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json"
+	
+	// Write config directly to the standard location
+	if err := os.WriteFile(configDestination, configData, 0644); err != nil {
+		action.Warningf("Failed to write config to %s: %v", configDestination, err)
+		return err
+	}
+
+	action.Infof("Created CloudWatch config at %s", configDestination)
+
+	// Start the CloudWatch agent in fire-and-forget mode
+	action.Infof("Starting Amazon CloudWatch agent in background...")
+	cmd := exec.Command("nohup", "sudo", agentStarter)
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+	
+	if err := cmd.Start(); err != nil {
+		action.Warningf("Failed to start CloudWatch agent: %v", err)
+		return err
+	}
+
+	action.Infof("CloudWatch agent start script launched, waiting 3 seconds for agent to initialize...")
+	
+	// Wait for agent to initialize
+	exec.Command("sleep", "3").Run()
+
+	// Check if agent process is running
+	checkCmd := exec.Command("pgrep", "-f", "amazon-cloudwatch-agent")
+	if output, err := checkCmd.Output(); err == nil && len(output) > 0 {
+		action.Infof("✅ Amazon CloudWatch agent processes found: %s", strings.TrimSpace(string(output)))
+	} else {
+		action.Warningf("No Amazon CloudWatch agent processes found after startup")
+	}
 
 	return nil
 }

@@ -28,6 +28,11 @@ function chooseBinary() {
 }
 
 function main() {
+    // Skip all operations if not running on RunsOn runners
+    if (!process.env.RUNS_ON_RUNNER_NAME || process.env.RUNS_ON_RUNNER_NAME === '') {
+        console.log('This action is only meant to be run on RunsOn (https://runs-on.com) runners, skipping all operations')
+        process.exit(0)
+    }
     const binary = chooseBinary()
     const mainScript = path.join(__dirname, binary)
     if (os.platform() === WINDOWS) {

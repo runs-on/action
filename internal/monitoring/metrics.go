@@ -329,7 +329,7 @@ func (mc *MetricsCollector) GetMetricSummary(metricName, namespace string, aggre
 	// Not in cache, fetch the data
 	data, err := mc.getMetricData(metricName, namespace, aggregation, dimensions, startTime)
 	if err != nil {
-		mc.action.Infof("Failed to get metric %s: %v", metricName, err)
+		mc.action.Warningf("Failed to get metric %s: %v", metricName, err)
 		mc.cache[cacheKey] = nil // Cache nil result to avoid retries
 		return nil
 	}

@@ -9,10 +9,10 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatch"
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatch/types"
 	"github.com/guptarohit/asciigraph"
+	"github.com/runs-on/action/internal/utils"
 	"github.com/sethvargo/go-githubactions"
 )
 
@@ -297,7 +297,7 @@ type MetricsCollector struct {
 }
 
 func NewMetricsCollector(action *githubactions.Action) *MetricsCollector {
-	cfg, err := config.LoadDefaultConfig(context.Background())
+	cfg, err := utils.GetAWSClientFromEC2IMDS(context.Background())
 	if err != nil {
 		action.Warningf("Failed to load AWS config: %v", err)
 		return nil
@@ -310,7 +310,7 @@ func NewMetricsCollector(action *githubactions.Action) *MetricsCollector {
 	}
 
 	return &MetricsCollector{
-		cwClient:   cloudwatch.NewFromConfig(cfg),
+		cwClient:   cloudwatch.NewFromConfig(*cfg),
 		instanceID: instanceID,
 		action:     action,
 		cache:      make(map[string]*MetricSummary), // Initialize cache
@@ -329,7 +329,7 @@ func (mc *MetricsCollector) GetMetricSummary(metricName, namespace string, aggre
 	// Not in cache, fetch the data
 	data, err := mc.getMetricData(metricName, namespace, aggregation, dimensions, startTime)
 	if err != nil {
-		mc.action.Infof("Failed to get metric %s: %v", metricName, err)
+		mc.action.Warningf("Failed to get metric %s: %v", metricName, err)
 		mc.cache[cacheKey] = nil // Cache nil result to avoid retries
 		return nil
 	}

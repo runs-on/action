@@ -10,16 +10,29 @@ on:
 
 jobs:
   metrics:
+    permissions:
+      id-token: write
+      contents: read
     strategy:
       fail-fast: false
       matrix:
         image: [ubuntu24-full-x64, ubuntu24-full-arm64]
+        configuration: ["existing-aws-creds", "no-aws-creds"]
     runs-on: runs-on=${{ github.run_id }}/cpu=2/family=m7/image=${{ matrix.image }}
     steps:
       - uses: actions/checkout@v4
+      - name: configure aws credentials
+        if: matrix.configuration == 'existing-aws-creds'
+        uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502
+        with:
+          role-to-assume: arn:aws:iam::756351362063:role/github-oidc
+          role-session-name: test
+          aws-region: ${{ env.RUNS_ON_AWS_REGION }}
       - uses: ./
         with:
           metrics: cpu,network,memory,disk,io
+      - name: Setup
+        run: sudo apt-get update && sudo apt-get install -y stress-ng
       - name: Generate load
         run: |
           # CPU intensive - variable load

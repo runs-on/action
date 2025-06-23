@@ -13,9 +13,9 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/runs-on/action/internal/config"
+	"github.com/runs-on/action/internal/utils"
 	"github.com/sethvargo/go-githubactions"
 )
 
@@ -62,12 +62,12 @@ func getZoneIdFromZoneName(zoneName, region string) (string, error) {
 		return "", fmt.Errorf("zone name and region are required")
 	}
 
-	cfg, err := awsconfig.LoadDefaultConfig(context.Background(), awsconfig.WithRegion(region))
+	cfg, err := utils.GetAWSClientFromEC2IMDS(context.Background())
 	if err != nil {
 		return "", fmt.Errorf("failed to load AWS config: %w", err)
 	}
 
-	ec2Client := ec2.NewFromConfig(cfg)
+	ec2Client := ec2.NewFromConfig(*cfg)
 
 	input := &ec2.DescribeAvailabilityZonesInput{
 		ZoneNames: []string{zoneName},

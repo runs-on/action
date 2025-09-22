@@ -19,7 +19,7 @@ import (
 	"github.com/sethvargo/go-githubactions"
 )
 
-const costAPIURL = "https://api.runs-on.com/cost"
+const costAPIURL = "https://go.runs-on.com/api/costs"
 const apiTimeout = 5 * time.Second
 
 // This file is for cost-related logic.

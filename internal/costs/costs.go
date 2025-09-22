@@ -19,7 +19,7 @@ import (
 	"github.com/sethvargo/go-githubactions"
 )
 
-const costAPIURL = "https://ec2-pricing.runs-on.com/cost"
+const costAPIURL = "https://api.runs-on.com/cost"
 const apiTimeout = 5 * time.Second
 
 // This file is for cost-related logic.

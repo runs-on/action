@@ -36,12 +36,86 @@ jobs:
         image: [ubuntu24-full-x64, ubuntu24-full-arm64]
         container:
           - ubuntu:24.04
-    runs-on: runs-on=${{ github.run_id }}/cpu=2/family=m7/image=${{ matrix.image }}
+    runs-on: runs-on=${{ github.run_id }}/cpu=2/family=m7/image=${{ matrix.image }}/extras=s3-cache
     container: ${{ matrix.container }}
+    env:
+      ARTEFACT_NAME: ${{ github.run_id }}-${{ strategy.job-index }}-my-artifact
+      FILENAME: random-file
+      BLOCKS: 128 # 128MB
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
       - uses: ./
         with:
           show_env: 'true'
           metrics: 'cpu,memory,network,disk'
+
+      - name: Generate file
+        if: ${{ runner.os == 'Linux' }}
+        run: |
+          echo "Generating ${{ env.BLOCKS }}MiB random file..."
+          dd if=/dev/urandom of=${{ env.FILENAME }} bs=1M count=${{ env.BLOCKS }}
+          ls -lh ${{ env.FILENAME }}
+      - name: Generate file
+        if: ${{ runner.os == 'Windows' }}
+        run: |
+          echo "Generating ${{ env.BLOCKS }}MiB random file..."
+          $random = New-Object byte[] (${{ env.BLOCKS }} * 1MB)
+          $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+          $rng.GetBytes($random)
+          [System.IO.File]::WriteAllBytes("${{ env.FILENAME }}", $random)
+          Get-Item ${{ env.FILENAME }} | Select-Object Length,Name
+
+      # ARTEFACT
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARTEFACT_NAME }}
+          path: ${{ env.FILENAME }}
+      - if: ${{ runner.os == 'Linux' }}
+        run: rm -f ${{ env.FILENAME }}
+      - if: ${{ runner.os == 'Windows' }}
+        run: Remove-Item ${{ env.FILENAME }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.ARTEFACT_NAME }}
+          path: .
+      # END ARTEFACT
+
+      - name: Save to cache (actions/cache)
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.FILENAME }}
+          key: github-${{github.run_id}}-actions-cache-${{strategy.job-index}}-${{ env.BLOCKS }}MiB-${{ env.FILENAME }}
+      - name: Restore from cache (actions/cache)
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.FILENAME }}
+          fail-on-cache-miss: true
+          key: github-${{github.run_id}}-actions-cache-${{strategy.job-index}}-${{ env.BLOCKS }}MiB-${{ env.FILENAME }}
+      - name: Restore from cache (actions/cache, restoreKeys)
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.FILENAME }}
+          fail-on-cache-miss: true
+          key: github-${{github.run_id}}-actions-cache-${{strategy.job-index}}-unknown
+          restore-keys: |
+            github-${{github.run_id}}-actions-cache-${{strategy.job-index}}-${{ env.BLOCKS }}MiB-
+      - name: Save to cache (runs-on/cache)
+        uses: runs-on/cache/save@v4
+        with:
+          path: ${{ env.FILENAME }}
+          key: github-${{github.run_id}}-runs-on-cache-${{strategy.job-index}}-${{ env.BLOCKS }}MiB-${{ env.FILENAME }}
+      - name: Restore from cache (runs-on/cache)
+        uses: runs-on/cache/restore@v4
+        with:
+          fail-on-cache-miss: true
+          path: ${{ env.FILENAME }}
+          key: github-${{github.run_id}}-runs-on-cache-${{strategy.job-index}}-${{ env.BLOCKS }}MiB-${{ env.FILENAME }}
+      - name: Restore from cache (runs-on/cache, restoreKeys)
+        uses: runs-on/cache/restore@v4
+        with:
+          fail-on-cache-miss: true
+          path: ${{ env.FILENAME }}
+          key: github-${{github.run_id}}-runs-on-cache-${{strategy.job-index}}-unknown
+          restore-keys: |
+            github-${{github.run_id}}-runs-on-cache-${{strategy.job-index}}-${{ env.BLOCKS }}MiB-
+      # END RUNS-ON CACHE

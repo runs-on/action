@@ -2,8 +2,10 @@ package monitoring
 
 import (
 	"bufio"
+	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 )
 
@@ -107,6 +109,60 @@ func getDiskDevice(diskDevice string) string {
 		return detectRootDiskDevice()
 	}
 	return diskDevice
+}
+
+// getVolumeID extracts the EBS volume ID from a disk device name
+// It reads the MODEL and SERIAL from /sys/block/${BASE}/device/ and converts
+// the serial to the volume ID format (vol-...)
+func getVolumeID(diskDevice string) (string, error) {
+	// Extract base device name (remove partition suffix like p1, p2, etc.)
+	base := diskDevice
+	// Remove partition suffix pattern: p1, p2, etc. (e.g., nvme0n1p1 -> nvme0n1)
+	re := regexp.MustCompile(`p\d+$`)
+	base = re.ReplaceAllString(base, "")
+
+	// Read MODEL
+	modelPath := fmt.Sprintf("/sys/block/%s/device/model", base)
+	modelBytes, err := os.ReadFile(modelPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to read model: %w", err)
+	}
+	model := strings.TrimSpace(string(modelBytes))
+
+	// Validate MODEL contains "Amazon Elastic Block Store"
+	if !strings.Contains(strings.ToLower(model), "amazon elastic block store") {
+		return "", fmt.Errorf("%s does not look like an EBS NVMe device (model=%s)", base, model)
+	}
+
+	// Read SERIAL
+	serialPath := fmt.Sprintf("/sys/block/%s/device/serial", base)
+	serialBytes, err := os.ReadFile(serialPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to read serial: %w", err)
+	}
+	serial := strings.TrimSpace(string(serialBytes))
+	// Remove all whitespace
+	serial = strings.ReplaceAll(serial, " ", "")
+	serial = strings.ReplaceAll(serial, "\t", "")
+	serial = strings.ReplaceAll(serial, "\n", "")
+
+	// Convert SERIAL to VOLUME_ID format
+	// Pattern: vol00bb... -> vol-00bb...
+	volPattern := regexp.MustCompile(`^vol[0-9a-f]+$`)
+	volWithDashPattern := regexp.MustCompile(`^vol-[0-9a-f]+$`)
+
+	var volumeID string
+	if volPattern.MatchString(serial) {
+		// vol00bb... -> vol-00bb...
+		volumeID = "vol-" + serial[3:]
+	} else if volWithDashPattern.MatchString(serial) {
+		// Already in correct format
+		volumeID = serial
+	} else {
+		return "", fmt.Errorf("unexpected NVMe serial format: %s", serial)
+	}
+
+	return volumeID, nil
 }
 
 // calculateMin returns the minimum value in a slice

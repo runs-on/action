@@ -104,6 +104,13 @@ func GetMeasurements(metric string) []Measurement {
 				Unit:        "Percent",
 				Aggregation: "Average",
 			},
+			{
+				Name:        "available_percent",
+				RealName:    "mem_available_percent",
+				Rename:      "Memory Available",
+				Unit:        "Percent",
+				Aggregation: "Average",
+			},
 		}
 	case "disk":
 		return []Measurement{

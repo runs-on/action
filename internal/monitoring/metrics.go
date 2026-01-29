@@ -178,24 +178,11 @@ func GenerateMetricsSummary(action *githubactions.Action, metrics []string, form
 	networkInterface = getNetworkInterface(networkInterface)
 	diskDevice = getDiskDevice(diskDevice)
 
-	// Get volume ID from disk device
-	volumeID := ""
-	if diskDevice != "" {
-		var err error
-		volumeID, err = getVolumeID(diskDevice)
-		if err != nil {
-			action.Warningf("Failed to get volume ID from disk device %s: %v", diskDevice, err)
-		}
-	}
-
 	action.Infof("## CloudWatch Metrics Summary\n")
 	action.Infof("Enabled metrics: %s", strings.Join(metrics, ", "))
 	action.Infof("Namespace: %s", NAMESPACE)
 	action.Infof("Network interface: %s", networkInterface)
 	action.Infof("Disk device: %s", diskDevice)
-	if volumeID != "" {
-		action.Infof("Volume ID: %s", volumeID)
-	}
 	action.Infof("")
 	showLinks(action, metrics)
 
@@ -237,10 +224,6 @@ func GenerateMetricsSummary(action *githubactions.Action, metrics []string, form
 					dimensions = append(dimensions, types.Dimension{
 						Name:  aws.String("path"),
 						Value: aws.String("/"),
-					})
-					dimensions = append(dimensions, types.Dimension{
-						Name:  aws.String("volume_id"),
-						Value: aws.String(volumeID),
 					})
 				}
 				if metricType == "io" {

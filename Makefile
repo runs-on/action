@@ -41,6 +41,12 @@ main-windows-amd64: _require-upx
 .PHONY: build
 build: main-linux-amd64 main-linux-arm64 main-windows-amd64 js
 
+# `make dist` is org-wide convention for re-building the distributed binaries before pushing a PR. Used by Claude skills.
+.PHONY: dist
+dist: build
+	git add main-linux-amd64 main-linux-arm64 main-windows-amd64.exe index.js post.js
+	git commit -m "dist: rebuild binaries"
+
 .PHONY: _require-upx
 _require-upx:
 ifndef UPX_BIN

@@ -126,32 +126,56 @@ func GenerateCloudWatchConfig(action *githubactions.Action, metrics []string, ne
 	action.Infof("Config file: %s", configPath)
 	action.Infof("Config content: %s", string(configJSON))
 
-	// Append the config to the running CloudWatch agent
-	return appendCloudWatchConfig(action, configPath)
+	// Apply the config to the CloudWatch agent (start if needed, or append if already running)
+	return applyCloudWatchConfig(action, configPath)
 }
 
-func appendCloudWatchConfig(action *githubactions.Action, configPath string) error {
+const agentCtl = "/opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl"
+
+// isCloudWatchAgentRunning checks if the CloudWatch agent is currently running
+func isCloudWatchAgentRunning() bool {
+	cmd := exec.Command("sudo", agentCtl, "-a", "status")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return false
+	}
+	// The status command returns JSON with "status": "running" if the agent is running
+	return strings.Contains(string(output), `"status": "running"`)
+}
+
+func applyCloudWatchConfig(action *githubactions.Action, configPath string) error {
 	// Check if CloudWatch agent is available
-	agentCtl := "/opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl"
 	if _, err := os.Stat(agentCtl); os.IsNotExist(err) {
 		action.Warningf("CloudWatch agent not found at %s, skipping metrics configuration", agentCtl)
 		return nil
 	}
 
-	// Append the configuration to the running agent
-	cmd := exec.Command("sudo", agentCtl,
-		"-a", "append-config",
-		"-m", "ec2",
-		"-s",
-		"-c", fmt.Sprintf("file:%s", configPath))
+	var cmd *exec.Cmd
+	if isCloudWatchAgentRunning() {
+		// Agent is running, append the configuration
+		action.Infof("CloudWatch agent is running, appending configuration...")
+		cmd = exec.Command("sudo", agentCtl,
+			"-a", "append-config",
+			"-m", "ec2",
+			"-s",
+			"-c", fmt.Sprintf("file:%s", configPath))
+	} else {
+		// Agent is not running, start it with the configuration
+		action.Infof("CloudWatch agent is not running, starting it with configuration...")
+		cmd = exec.Command("sudo", agentCtl,
+			"-a", "fetch-config",
+			"-m", "ec2",
+			"-s",
+			"-c", fmt.Sprintf("file:%s", configPath))
+	}
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		action.Warningf("Failed to append CloudWatch config: %v\nOutput: %s", err, string(output))
+		action.Warningf("Failed to configure CloudWatch agent: %v\nOutput: %s", err, string(output))
 		return err
 	}
 
-	action.Infof("Successfully appended CloudWatch metrics configuration")
+	action.Infof("Successfully configured CloudWatch agent")
 	action.Infof("CloudWatch agent output: %s", string(output))
 
 	return nil

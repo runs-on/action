@@ -17,7 +17,7 @@ jobs:
       fail-fast: false
       matrix:
         image: [ubuntu24-full-x64, ubuntu24-full-arm64]
-        configuration: ["existing-aws-creds", "no-aws-creds"]
+        configuration: ["existing-aws-creds", "no-aws-creds", "cw-agent-stopped"]
     runs-on: runs-on=${{ github.run_id }}/cpu=2/family=m7/image=${{ matrix.image }}
     steps:
       - uses: actions/checkout@v4
@@ -28,6 +28,9 @@ jobs:
           role-to-assume: arn:aws:iam::756351362063:role/github-oidc
           role-session-name: test
           aws-region: ${{ env.RUNS_ON_AWS_REGION }}
+      - name: Stop CloudWatch agent
+        if: matrix.configuration == 'cw-agent-stopped'
+        run: sudo /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a stop || true
       - uses: ./
         with:
           metrics: cpu,network,memory,disk,io

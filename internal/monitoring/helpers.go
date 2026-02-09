@@ -121,20 +121,7 @@ func getVolumeID(diskDevice string) (string, error) {
 	re := regexp.MustCompile(`p\d+$`)
 	base = re.ReplaceAllString(base, "")
 
-	// Read MODEL
-	modelPath := fmt.Sprintf("/sys/block/%s/device/model", base)
-	modelBytes, err := os.ReadFile(modelPath)
-	if err != nil {
-		return "", fmt.Errorf("failed to read model: %w", err)
-	}
-	model := strings.TrimSpace(string(modelBytes))
-
-	// Validate MODEL contains "Amazon Elastic Block Store"
-	if !strings.Contains(strings.ToLower(model), "amazon elastic block store") {
-		return "", fmt.Errorf("%s does not look like an EBS NVMe device (model=%s)", base, model)
-	}
-
-	// Read SERIAL
+	// Read SERIAL first - this is the definitive way to identify EBS volumes
 	serialPath := fmt.Sprintf("/sys/block/%s/device/serial", base)
 	serialBytes, err := os.ReadFile(serialPath)
 	if err != nil {
@@ -159,7 +146,25 @@ func getVolumeID(diskDevice string) (string, error) {
 		// Already in correct format
 		volumeID = serial
 	} else {
+		// Serial doesn't match volume ID pattern - check model for better error message
+		modelPath := fmt.Sprintf("/sys/block/%s/device/model", base)
+		modelBytes, err := os.ReadFile(modelPath)
+		if err == nil {
+			model := strings.TrimSpace(string(modelBytes))
+			return "", fmt.Errorf("%s does not look like an EBS NVMe device (model=%s, serial=%s)", base, model, serial)
+		}
 		return "", fmt.Errorf("unexpected NVMe serial format: %s", serial)
+	}
+
+	// Optionally validate MODEL (but don't fail if serial already indicates it's a volume)
+	modelPath := fmt.Sprintf("/sys/block/%s/device/model", base)
+	modelBytes, err := os.ReadFile(modelPath)
+	if err == nil {
+		model := strings.TrimSpace(string(modelBytes))
+		if !strings.Contains(strings.ToLower(model), "amazon elastic block store") {
+			// Model doesn't match, but serial does - this might be instance storage with volume-like serial
+			// We'll still return the volume ID since the serial pattern matched
+		}
 	}
 
 	return volumeID, nil

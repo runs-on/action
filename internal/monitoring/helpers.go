@@ -2,6 +2,7 @@ package monitoring
 
 import (
 	"bufio"
+	"math"
 	"os"
 	"os/exec"
 	"strings"
@@ -111,6 +112,7 @@ func getDiskDevice(diskDevice string) string {
 
 // calculateMin returns the minimum value in a slice
 func calculateMin(data []float64) float64 {
+	data = sanitizeFloatSeries(data)
 	if len(data) == 0 {
 		return 0
 	}
@@ -125,6 +127,7 @@ func calculateMin(data []float64) float64 {
 
 // calculateMax returns the maximum value in a slice
 func calculateMax(data []float64) float64 {
+	data = sanitizeFloatSeries(data)
 	if len(data) == 0 {
 		return 0
 	}
@@ -139,6 +142,7 @@ func calculateMax(data []float64) float64 {
 
 // calculateStats computes min, max, and average of a slice of floats
 func calculateStats(data []float64) (min, max, avg float64) {
+	data = sanitizeFloatSeries(data)
 	if len(data) == 0 {
 		return 0, 0, 0
 	}
@@ -158,4 +162,20 @@ func calculateStats(data []float64) (min, max, avg float64) {
 
 	avg = sum / float64(len(data))
 	return
+}
+
+func sanitizeFloatSeries(data []float64) []float64 {
+	if len(data) == 0 {
+		return nil
+	}
+
+	sanitized := make([]float64, 0, len(data))
+	for _, value := range data {
+		if math.IsNaN(value) || math.IsInf(value, 0) {
+			continue
+		}
+		sanitized = append(sanitized, value)
+	}
+
+	return sanitized
 }

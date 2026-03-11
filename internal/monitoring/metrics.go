@@ -43,9 +43,6 @@ type MetricDataPoint struct {
 type MetricSummary struct {
 	Name   string
 	Data   []float64
-	Min    float64
-	Max    float64
-	Avg    float64
 	Unit   string
 	Source string // "AWS" or "Custom"
 }
@@ -357,14 +354,9 @@ func (mc *MetricsCollector) GetMetricSummary(metricName, namespace string, aggre
 		return nil
 	}
 
-	min, max, avg := calculateStats(values)
-
 	summary := &MetricSummary{
 		Name: metricName,
 		Data: values,
-		Min:  min,
-		Max:  max,
-		Avg:  avg,
 	}
 
 	// Cache the result

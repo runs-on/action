@@ -110,36 +110,6 @@ func getDiskDevice(diskDevice string) string {
 	return diskDevice
 }
 
-// calculateMin returns the minimum value in a slice
-func calculateMin(data []float64) float64 {
-	data = sanitizeFloatSeries(data)
-	if len(data) == 0 {
-		return 0
-	}
-	min := data[0]
-	for _, v := range data {
-		if v < min {
-			min = v
-		}
-	}
-	return min
-}
-
-// calculateMax returns the maximum value in a slice
-func calculateMax(data []float64) float64 {
-	data = sanitizeFloatSeries(data)
-	if len(data) == 0 {
-		return 0
-	}
-	max := data[0]
-	for _, v := range data {
-		if v > max {
-			max = v
-		}
-	}
-	return max
-}
-
 // calculateStats computes min, max, and average of a slice of floats
 func calculateStats(data []float64) (min, max, avg float64) {
 	data = sanitizeFloatSeries(data)

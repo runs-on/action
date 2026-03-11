@@ -3,6 +3,7 @@ package monitoring
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"sort"
 	"strings"
@@ -253,6 +254,12 @@ func displayMetric(action *githubactions.Action, name string, summary *MetricSum
 		action.Infof("  %-12s ─────────────── (no data yet)", name)
 		return
 	}
+	data := sanitizeFloatSeries(summary.Data)
+	if len(data) == 0 {
+		action.Infof("  %-12s ─────────────── (no valid data yet)", name)
+		return
+	}
+	min, max, avg := calculateStats(data)
 	if formatter == "chart" {
 		action.Infof("\n📊 %s:", name)
 		caption := fmt.Sprintf("%s (%s)", name, unit)
@@ -269,21 +276,21 @@ func displayMetric(action *githubactions.Action, name string, summary *MetricSum
 			opts = append(opts, asciigraph.LowerBound(0), asciigraph.UpperBound(100))
 		}
 
-		graph := asciigraph.Plot(summary.Data, opts...)
+		graph := asciigraph.Plot(data, opts...)
 		// Print each line of the graph with proper indentation
 		for _, line := range strings.Split(graph, "\n") {
 			action.Infof("  %s", line)
 		}
-		action.Infof("  Stats: min:%.1f avg:%.1f max:%.1f %s", summary.Min, summary.Avg, summary.Max, unit)
+		action.Infof("  Stats: min:%.1f avg:%.1f max:%.1f %s", min, avg, max, unit)
 	} else {
 		// Use sparkline format
-		sparkline := createSparkline(summary.Data)
+		sparkline := createSparkline(data)
 		if unit == "ops/s" {
 			action.Infof("  %-12s %s avg:%.0f %s",
-				name, sparkline, summary.Avg, unit)
+				name, sparkline, avg, unit)
 		} else {
 			action.Infof("  %-12s %s min:%.1f avg:%.1f max:%.1f %s",
-				name, sparkline, summary.Min, summary.Avg, summary.Max, unit)
+				name, sparkline, min, avg, max, unit)
 		}
 	}
 	action.Infof("\n")
@@ -343,6 +350,11 @@ func (mc *MetricsCollector) GetMetricSummary(metricName, namespace string, aggre
 	values := make([]float64, len(data))
 	for i, dp := range data {
 		values[i] = dp.Value
+	}
+	values = sanitizeFloatSeries(values)
+	if len(values) == 0 {
+		mc.cache[cacheKey] = nil
+		return nil
 	}
 
 	min, max, avg := calculateStats(values)
@@ -418,12 +430,16 @@ func (mc *MetricsCollector) getMetricData(metricName, namespace string, aggregat
 
 	// Combine timestamps and values
 	for i, value := range metricResult.Values {
-		if i < len(metricResult.Timestamps) {
-			points = append(points, MetricDataPoint{
-				Timestamp: metricResult.Timestamps[i],
-				Value:     value,
-			})
+		if i >= len(metricResult.Timestamps) {
+			continue
 		}
+		if math.IsNaN(value) || math.IsInf(value, 0) {
+			continue
+		}
+		points = append(points, MetricDataPoint{
+			Timestamp: metricResult.Timestamps[i],
+			Value:     value,
+		})
 	}
 
 	// Sort by timestamp

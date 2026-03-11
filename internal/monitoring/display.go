@@ -10,6 +10,7 @@ import (
 
 // createSparkline generates a Unicode sparkline from data
 func createSparkline(values []float64) string {
+	values = sanitizeFloatSeries(values)
 	if len(values) == 0 {
 		return "─"
 	}

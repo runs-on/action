@@ -93,7 +93,7 @@ func (c *Config) HasMetrics() bool {
 }
 
 func (c *Config) HasSccache() bool {
-	return c.IsUsingRunsOn() && c.IsUsingLinux() && c.Sccache != ""
+	return c.IsUsingRunsOn() && c.Sccache != ""
 }
 
 func (c *Config) IsUsingRunsOn() bool {

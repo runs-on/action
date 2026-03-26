@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  test-sccache:
+  test-sccache-linux:
     runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/extras=s3-cache
     
     steps:
@@ -103,4 +103,97 @@ jobs:
           echo "SCCACHE_BUCKET: $SCCACHE_BUCKET"
           echo "SCCACHE_REGION: $SCCACHE_REGION"
           echo "SCCACHE_S3_KEY_PREFIX: $SCCACHE_S3_KEY_PREFIX"
-          echo "RUSTC_WRAPPER: $RUSTC_WRAPPER" 
+          echo "RUSTC_WRAPPER: $RUSTC_WRAPPER"
+
+  test-sccache-windows:
+    runs-on: runs-on=${{ github.run_id }}/cpu=2/family=m7/image=windows25-full-x64/extras=s3-cache
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: ./
+        with:
+          sccache: s3
+
+      - uses: mozilla-actions/sccache-action@v0.0.9
+
+      - name: Create simple Rust project
+        run: |
+          cargo new --bin test-project
+          cd test-project
+          @"
+          [package]
+          name = "test-project"
+          version = "0.1.0"
+          edition = "2021"
+
+          [dependencies]
+          serde = { version = "1.0", features = ["derive"] }
+          tokio = { version = "1.0", features = ["full"] }
+          reqwest = { version = "0.11", features = ["json"] }
+          "@ | Set-Content Cargo.toml
+
+          @"
+          use serde::{Deserialize, Serialize};
+          use std::collections::HashMap;
+
+          #[derive(Serialize, Deserialize, Debug)]
+          struct Config {
+              name: String,
+              version: String,
+              features: Vec<String>,
+          }
+
+          #[tokio::main]
+          async fn main() -> Result<(), Box<dyn std::error::Error>> {
+              let config = Config {
+                  name: "test-app".to_string(),
+                  version: "1.0.0".to_string(),
+                  features: vec!["sccache".to_string(), "s3".to_string()],
+              };
+
+              println!("Config: {:?}", config);
+
+              // Simple HTTP client test
+              let client = reqwest::Client::new();
+              let response = client
+                  .get("https://httpbin.org/json")
+                  .send()
+                  .await?;
+
+              if response.status().is_success() {
+                  println!("HTTP request successful!");
+              }
+
+              Ok(())
+          }
+          "@ | Set-Content src/main.rs
+
+      - name: First compilation (cache miss expected)
+        run: |
+          cd test-project
+          Write-Host "Starting first compilation..."
+          Measure-Command { cargo build --release } | Select-Object TotalSeconds
+
+      - name: Clean and second compilation (cache hit expected)
+        run: |
+          cd test-project
+          cargo clean
+          Write-Host "Starting second compilation (should be faster with sccache)..."
+          Measure-Command { cargo build --release } | Select-Object TotalSeconds
+
+      - name: Display sccache statistics
+        run: |
+          Write-Host "sccache statistics:"
+          sccache.exe --show-stats
+
+      - name: Verify environment variables
+        run: |
+          Write-Host "Checking sccache environment variables:"
+          Write-Host "SCCACHE_GHA_ENABLED: $env:SCCACHE_GHA_ENABLED"
+          Write-Host "SCCACHE_BUCKET: $env:SCCACHE_BUCKET"
+          Write-Host "SCCACHE_REGION: $env:SCCACHE_REGION"
+          Write-Host "SCCACHE_S3_KEY_PREFIX: $env:SCCACHE_S3_KEY_PREFIX"
+          Write-Host "RUSTC_WRAPPER: $env:RUSTC_WRAPPER"

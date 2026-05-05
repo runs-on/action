@@ -18,7 +18,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
       # expectation: this is just a noop on managed runners
       - uses: ./
       - run: sleep 30
@@ -32,6 +32,6 @@ jobs:
     runs-on: runs-on=${{ github.run_id }}/cpu=2/family=m7/image=${{ matrix.image }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
       - uses: ./
       - run: sleep 30

@@ -8,8 +8,9 @@ import (
 	"github.com/sethvargo/go-githubactions"
 )
 
-// UpdateZctionsConfig sends a PUT request if ZCTIONS_RESULTS_URL is set.
-func UpdateZctionsConfig(action *githubactions.Action, actionsResultsURL string, zctionsResultsURL string) {
+// UpdateZctionsConfig sends the original GitHub backend URLs and runtime token
+// to the local RunsOn cache service. The token is intentionally never logged.
+func UpdateZctionsConfig(action *githubactions.Action, actionsResultsURL string, zctionsResultsURL string, zctionsCacheURL string, actionsRuntimeToken string) {
 	if zctionsResultsURL == "" {
 		return
 	}
@@ -19,6 +20,12 @@ func UpdateZctionsConfig(action *githubactions.Action, actionsResultsURL string,
 	// Send the ZCTIONS_RESULTS_URL value under the key 'ACTIONS_RESULTS_URL'.
 	// This value is only known by the GitHub Actions runner, and is needed by the RunsOn agent cache proxy to handle artefacts caching.
 	data.Set("ACTIONS_RESULTS_URL", zctionsResultsURL)
+	if zctionsCacheURL != "" {
+		data.Set("ACTIONS_CACHE_URL", zctionsCacheURL)
+	}
+	if actionsRuntimeToken != "" {
+		data.Set("ACTIONS_RUNTIME_TOKEN", actionsRuntimeToken)
+	}
 
 	req, err := http.NewRequest(http.MethodPut, configURL, strings.NewReader(data.Encode()))
 	if err != nil {

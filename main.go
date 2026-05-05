@@ -25,7 +25,7 @@ func handleMainExecution(action *githubactions.Action, ctx context.Context) {
 		env.DisplayEnvVars()
 	}
 
-	cache.UpdateZctionsConfig(action, cfg.ActionsResultsURL, cfg.ZctionsResultsURL)
+	cache.UpdateZctionsConfig(action, cfg.ActionsResultsURL, cfg.ZctionsResultsURL, cfg.ZctionsCacheURL, cfg.ActionsRuntimeToken)
 
 	if cfg.HasShowCosts() {
 		action.Infof("show_costs is enabled. You will find cost details in the post-execution step of this action.")

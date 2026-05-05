@@ -11,14 +11,16 @@ import (
 
 // Config holds the action's configuration values derived from inputs and environment.
 type Config struct {
-	ShowEnv           bool
-	ShowCosts         string
-	Metrics           []string
-	NetworkInterface  string
-	DiskDevice        string
-	Sccache           string
-	ZctionsResultsURL string
-	ActionsResultsURL string
+	ShowEnv             bool
+	ShowCosts           string
+	Metrics             []string
+	NetworkInterface    string
+	DiskDevice          string
+	Sccache             string
+	ZctionsResultsURL   string
+	ZctionsCacheURL     string
+	ActionsResultsURL   string
+	ActionsRuntimeToken string
 }
 
 type Tag struct {
@@ -62,7 +64,9 @@ func NewConfigFromInputs(action *githubactions.Action) (*Config, error) {
 	cfg.Sccache = action.GetInput("sccache")
 
 	cfg.ZctionsResultsURL = os.Getenv("ZCTIONS_RESULTS_URL")
+	cfg.ZctionsCacheURL = os.Getenv("ZCTIONS_CACHE_URL")
 	cfg.ActionsResultsURL = os.Getenv("ACTIONS_RESULTS_URL")
+	cfg.ActionsRuntimeToken = os.Getenv("ACTIONS_RUNTIME_TOKEN")
 
 	action.Infof("Input 'show_env': %t", cfg.ShowEnv)
 	action.Infof("Input 'show_costs': %s", cfg.ShowCosts)
@@ -75,6 +79,16 @@ func NewConfigFromInputs(action *githubactions.Action) (*Config, error) {
 		action.Infof("ZCTIONS_RESULTS_URL is set: %s", cfg.ZctionsResultsURL)
 	} else {
 		action.Infof("ZCTIONS_RESULTS_URL is not set.")
+	}
+	if cfg.ZctionsCacheURL != "" {
+		action.Infof("ZCTIONS_CACHE_URL is set: %s", cfg.ZctionsCacheURL)
+	} else {
+		action.Infof("ZCTIONS_CACHE_URL is not set.")
+	}
+	if cfg.ActionsRuntimeToken != "" {
+		action.Infof("ACTIONS_RUNTIME_TOKEN is set.")
+	} else {
+		action.Infof("ACTIONS_RUNTIME_TOKEN is not set.")
 	}
 
 	return cfg, nil

@@ -20,7 +20,7 @@ jobs:
         configuration: ["existing-aws-creds", "no-aws-creds", "cw-agent-stopped"]
     runs-on: runs-on=${{ github.run_id }}/cpu=2/family=m7/image=${{ matrix.image }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: configure aws credentials
         if: matrix.configuration == 'existing-aws-creds'
         uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502

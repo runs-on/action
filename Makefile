@@ -9,6 +9,9 @@ help:
 	@echo '   make main-linux-arm64      Build static binary for linux/arm64'
 	@echo '   make main-windows-amd64    Build static binary for windows/amd64'
 	@echo '   make build                 Build all static binaries + `index.js` and `post.js`'
+	@echo '   make dist                  Build generated artifacts and commit them locally'
+	@echo '   make tag                   Print tag instructions'
+	@echo '   make release               Print release instructions'
 	@echo ''
 
 UPX_BIN := $(shell command -v upx 2> /dev/null)
@@ -41,7 +44,7 @@ main-windows-amd64: _require-upx
 .PHONY: build
 build: main-linux-amd64 main-linux-arm64 main-windows-amd64 js
 
-# `make dist` is org-wide convention for re-building the distributed binaries before pushing a PR. Used by Claude skills.
+# Rebuild generated action artifacts and create a local dist commit.
 .PHONY: dist
 dist: build
 	git add main-linux-amd64 main-linux-arm64 main-windows-amd64.exe index.js post.js
@@ -59,9 +62,11 @@ bump:
 	gsed -i "s/$(PREVIOUS_TAG)/$(TAG)/g" README.md
 	gsed -i "s/$(PREVIOUS_TAG)/$(TAG)/g" action.yml
 
-tag: bump
-	git tag -a $(TAG) -m "Release $(TAG)"
-	git push origin $(TAG)
+tag:
+	@echo 'Release tags are created by the manual GitHub Actions "Release" workflow after CI commits generated artifacts.'
+	@echo 'Do not create release tags locally.'
+	@exit 1
 
-release: tag
-	gh release create $(TAG) --generate-notes
+release:
+	@echo 'Releases are created by the manual GitHub Actions "Release" workflow.'
+	@echo 'Run it with the desired tag, for example TAG=$(TAG), so CI builds, commits, tags, signs, and attests the exact release artifacts.'

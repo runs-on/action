@@ -340,6 +340,8 @@ Do not create or push release tags locally. The tag must be created by the workf
 
 The repository must have these secrets configured:
 
+* `RELEASE_APP_ID` - GitHub App ID for the release app allowed to bypass release branch rules
+* `RELEASE_APP_PRIVATE_KEY` - private key for the release GitHub App
 * `RELEASE_GPG_PRIVATE_KEY` - armored private key used to sign `SHA256SUMS`
 * `RELEASE_GPG_PASSPHRASE` - passphrase for the private key
 * `RELEASE_GPG_KEY_ID` - optional key id when the imported keyring contains more than one signing key

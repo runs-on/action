@@ -185,9 +185,13 @@ jobs:
             SHA256SUMS \
             SHA256SUMS.asc
 
-      - name: Attest release binaries
-        uses: actions/attest@v4.1.0
+      - name: Attest release binaries (SLSA Build Provenance)
+        uses: actions/attest-build-provenance@v4.1.0
         with:
+          # Each entry in SHA256SUMS becomes a separate attested subject,
+          # so consumers can verify a single binary with
+          #   gh attestation verify main-linux-amd64 --owner runs-on
+          # without having to download the full sums file first.
           subject-checksums: SHA256SUMS
 
       - name: Publish GitHub release

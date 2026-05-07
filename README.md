@@ -326,10 +326,31 @@ echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
 
 ## Development
 
-Make your source code changes in a commit, then push the updated binaries and JS files in a separate commit:
+Make your source code changes in a commit, then rebuild and commit the generated binaries and JS files:
 
 ```
-make release
+make dist
+```
+
+## Release
+
+Releases are created by the manual **Release** GitHub Actions workflow. Run it from the `v2` branch with a new tag, for example `v2.1.2`. The workflow builds the distributed artifacts in CI, commits them to the release branch, tags that artifact commit, creates a draft release with assets, signs `SHA256SUMS`, creates GitHub artifact attestations, and publishes the draft.
+
+Do not create or push release tags locally. The tag must be created by the workflow after the CI-built artifacts have been committed.
+
+The repository must have these secrets configured:
+
+* `RELEASE_GPG_PRIVATE_KEY` - armored private key used to sign `SHA256SUMS`
+* `RELEASE_GPG_PASSPHRASE` - passphrase for the private key
+* `RELEASE_GPG_KEY_ID` - optional key id when the imported keyring contains more than one signing key
+
+To verify a release:
+
+```bash
+gh release download v2.1.2 -R runs-on/action
+gpg --verify SHA256SUMS.asc SHA256SUMS
+shasum -a 256 -c SHA256SUMS
+gh attestation verify main-linux-amd64 -R runs-on/action
 ```
 
 ## Future work

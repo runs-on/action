@@ -61,12 +61,20 @@ jobs:
             exit 1
           fi
 
+      - name: Create release app token
+        id: release-app-token
+        uses: actions/create-github-app-token@v3.1.1
+        with:
+          app-id: ${{ secrets.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+
       - name: Checkout target branch
         uses: actions/checkout@v6.0.2
         with:
           ref: ${{ env.TARGET_BRANCH }}
           fetch-depth: 0
-          token: ${{ github.token }}
+          token: ${{ steps.release-app-token.outputs.token }}
 
       - name: Configure git identity
         shell: bash
@@ -171,7 +179,7 @@ jobs:
       - name: Create draft GitHub release
         shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.release-app-token.outputs.token }}
         run: |
           set -euo pipefail
           gh release create "${TAG}" \
@@ -193,7 +201,7 @@ jobs:
       - name: Publish GitHub release
         shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.release-app-token.outputs.token }}
         run: |
           set -euo pipefail
           gh release edit "${TAG}" \

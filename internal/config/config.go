@@ -21,6 +21,9 @@ type Config struct {
 	ZctionsCacheURL     string
 	ActionsResultsURL   string
 	ActionsRuntimeToken string
+	DatadogAPIKey       string
+	DatadogAppKey       string
+	DatadogSite         string
 }
 
 type Tag struct {
@@ -62,6 +65,13 @@ func NewConfigFromInputs(action *githubactions.Action) (*Config, error) {
 	}
 
 	cfg.Sccache = action.GetInput("sccache")
+
+	cfg.DatadogAPIKey = action.GetInput("datadog_api_key")
+	cfg.DatadogAppKey = action.GetInput("datadog_app_key")
+	cfg.DatadogSite = action.GetInput("datadog_site")
+	if cfg.DatadogSite == "" {
+		cfg.DatadogSite = "datadoghq.com"
+	}
 
 	cfg.ZctionsResultsURL = os.Getenv("ZCTIONS_RESULTS_URL")
 	cfg.ZctionsCacheURL = os.Getenv("ZCTIONS_CACHE_URL")
@@ -108,6 +118,10 @@ func (c *Config) HasMetrics() bool {
 
 func (c *Config) HasSccache() bool {
 	return c.IsUsingRunsOn() && c.IsUsingLinux() && c.Sccache != ""
+}
+
+func (c *Config) HasDatadog() bool {
+	return c.DatadogAPIKey != "" && c.DatadogAppKey != ""
 }
 
 func (c *Config) IsUsingRunsOn() bool {

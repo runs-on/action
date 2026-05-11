@@ -30,3 +30,15 @@ inputs:
     description: 'Enable sccache. Can take either "s3" (RunsOn S3 cache bucket) or be empty (disabled). You still need to setup sccache in your workflow, for instance with mozilla-actions/sccache-action.'
     required: false
     default: ''
+  datadog_api_key:
+    description: 'Datadog API key. When set together with datadog_app_key, per-job cost data is forwarded to Datadog as custom metrics in the post step.'
+    required: false
+    default: ''
+  datadog_app_key:
+    description: 'Datadog application key. Required alongside datadog_api_key to forward cost metrics to Datadog.'
+    required: false
+    default: ''
+  datadog_site:
+    description: 'Datadog site (e.g. datadoghq.com, datadoghq.eu, us3.datadoghq.com). Defaults to datadoghq.com.'
+    required: false
+    default: 'datadoghq.com'

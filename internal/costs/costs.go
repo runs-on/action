@@ -222,6 +222,10 @@ func ComputeAndDisplayCosts(action *githubactions.Action, cfg *config.Config) er
 		action.Infof("Cost summary added to job summary.")
 	}
 
+	if err := PushCostMetricsToDatadog(action, cfg, &costData); err != nil {
+		action.Warningf("Failed to push cost metrics to Datadog: %v", err)
+	}
+
 	return nil
 }
 

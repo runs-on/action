@@ -1,0 +1,109 @@
+name: checkout-with-cache
+description: 'Restore a RunsOn EFS repository cache before actions/checkout, then update it after checkout'
+
+inputs:
+  encryption_key:
+    description: 'Optional passphrase used to encrypt/decrypt the tarball with openssl AES-256-CBC/PBKDF2'
+    required: false
+    default: ''
+  write_branches:
+    description: 'Comma-separated list of branches allowed to write to the cache; defaults to the repository default branch'
+    required: false
+    default: ${{ github.event.repository.default_branch }}
+  keep_files_count:
+    description: 'Number of repository cache files to keep on EFS'
+    required: false
+    default: '5'
+  force_checkout:
+    description: 'When true, skip restoring from the cache before checkout'
+    required: false
+    default: 'false'
+  force_write:
+    description: 'When true, write a cache file even when one already exists for the current SHA'
+    required: false
+    default: 'false'
+  cache_dir:
+    description: 'EFS cache directory. Defaults to /mnt/efs/${GITHUB_REPOSITORY}/.git'
+    required: false
+    default: ''
+  fetch_depth:
+    description: 'fetch-depth passed to actions/checkout'
+    required: false
+    default: '0'
+  persist_credentials:
+    description: 'persist-credentials passed to actions/checkout'
+    required: false
+    default: 'false'
+
+outputs:
+  cache_dir:
+    description: 'The EFS directory where the cache is stored'
+    value: ${{ steps.efs.outputs.cache_dir }}
+  cache_hit:
+    description: 'Whether the cache was restored from EFS'
+    value: ${{ steps.efs.outputs.cache_hit }}
+  latest_file_name:
+    description: 'The latest file in the cache directory'
+    value: ${{ steps.efs.outputs.latest_file_name }}
+  latest_file_path:
+    description: 'The path to the latest cache file'
+    value: ${{ steps.efs.outputs.latest_file_path }}
+  ref:
+    description: 'The branch, tag, or SHA that was checked out'
+    value: ${{ steps.checkout.outputs.ref }}
+  commit:
+    description: 'The commit SHA that was checked out'
+    value: ${{ steps.checkout.outputs.commit }}
+
+runs:
+  using: composite
+  steps:
+    - name: Check if EFS is enabled
+      id: efs_enabled
+      shell: bash
+      env:
+        EFS_MOUNT_PATH: /mnt/efs
+      run: bash "${{ github.action_path }}/is_efs_enabled.sh"
+
+    - name: Discover EFS cache
+      id: efs
+      shell: bash
+      env:
+        EFS_ENABLED: ${{ steps.efs_enabled.outputs.enabled }}
+        CACHE_DIR: ${{ inputs.cache_dir }}
+      run: bash "${{ github.action_path }}/cache_discover.sh"
+
+    - name: Restore .git from EFS
+      if: ${{ steps.efs.outputs.enabled == 'true' && steps.efs.outputs.cache_hit == 'true' && inputs.force_checkout != 'true' }}
+      shell: bash
+      env:
+        ENC_KEY: ${{ inputs.encryption_key }}
+        CACHE_FILE: ${{ steps.efs.outputs.latest_file_path }}
+        WORKSPACE: ${{ github.workspace }}
+      run: bash "${{ github.action_path }}/cache_restore.sh"
+
+    - name: Checkout repository
+      uses: actions/checkout@v6
+      id: checkout
+      with:
+        clean: 'true'
+        fetch-depth: ${{ inputs.fetch_depth }}
+        persist-credentials: ${{ inputs.persist_credentials }}
+
+    - name: Update EFS cache if necessary
+      if: ${{ steps.efs.outputs.enabled == 'true' && github.event_name != 'pull_request' && github.event_name != 'pull_request_target' && contains(inputs.write_branches, github.ref_name) }}
+      shell: bash
+      env:
+        ENC_KEY: ${{ inputs.encryption_key }}
+        CACHE_DIR: ${{ steps.efs.outputs.cache_dir }}
+        WORKSPACE: ${{ github.workspace }}
+        FORCE_WRITE: ${{ inputs.force_write }}
+      run: bash "${{ github.action_path }}/cache_update.sh"
+
+    - name: Cleanup EFS cache
+      if: ${{ steps.efs.outputs.enabled == 'true' && github.event_name != 'pull_request' && github.event_name != 'pull_request_target' && contains(inputs.write_branches, github.ref_name) }}
+      shell: bash
+      env:
+        CACHE_DIR: ${{ steps.efs.outputs.cache_dir }}
+        KEEP_FILES_COUNT: ${{ inputs.keep_files_count }}
+      run: bash "${{ github.action_path }}/cache_rotation.sh"

@@ -14,7 +14,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        image: [ubuntu24-full-x64, ubuntu24-full-arm64, windows22-base-x64]
+        image: [ubuntu24-full-x64, ubuntu24-full-arm64, ubuntu26-full-x64, ubuntu26-full-arm64, windows22-base-x64]
     runs-on: runs-on=${{ github.run_id }}/cpu=2/family=m7/image=${{ matrix.image }}/extras=s3-cache
     env:
       ARTEFACT_NAME: ${{ github.run_id }}-${{ strategy.job-index }}-my-artifact

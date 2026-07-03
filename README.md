@@ -324,6 +324,54 @@ echo "SCCACHE_S3_KEY_PREFIX=cache/sccache" >> $GITHUB_ENV
 echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
 ```
 
+### `cache` / `path`
+
+Only available for Linux runners, on jobs with a `snap=<size>[:<name>]` label (sticky disk).
+
+Persists package manager caches across jobs by bind-mounting them onto the job's sticky disk — a dedicated EBS volume that is snapshotted at job completion and restored (per repo, name, architecture, and branch) on the next job. No tarball upload/download: caches are available at native disk speed, with no size penalty on job duration.
+
+Example:
+
+```yaml
+jobs:
+  build:
+    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/snap=20gb
+    steps:
+      - uses: actions/checkout@v4
+      - uses: runs-on/action@v2
+        with:
+          cache: |
+            go
+            node
+```
+
+Supported cache modes and the directories they persist:
+
+| Mode | Aliases | Cached paths |
+|---|---|---|
+| `go` | `golang` | `~/.cache/go-build`, `~/go/pkg/mod` |
+| `node` | `npm` | `~/.npm` |
+| `yarn` | | `~/.cache/yarn` |
+| `pnpm` | | `~/.pnpm-store` |
+| `ruby` | `bundler` | `~/.bundle`, `vendor/bundle` |
+| `rust` | `cargo` | `~/.cargo/registry`, `~/.cargo/git` |
+| `python` | `pip` | `~/.cache/pip` |
+| `uv` | | `~/.cache/uv` |
+| `poetry` | | `~/.cache/pypoetry` |
+| `apt` | | `/var/cache/apt/archives` |
+| `gradle` | | `~/.gradle/caches`, `~/.gradle/wrapper` |
+| `maven` | | `~/.m2/repository` |
+| `playwright` | | `~/.cache/ms-playwright` |
+
+Use the `path` input to persist arbitrary additional paths (newline separated). Relative paths are resolved against the workspace, so run this action **after** `actions/checkout` when caching workspace-relative paths (e.g. `vendor/bundle`).
+
+Other related inputs:
+
+* `wait_timeout` - how long to wait for the sticky disk to be ready (default `5m`)
+* `fail_on_missing` - fail the step when no sticky disk is available instead of continuing without cache (default `false`)
+
+The action sets a `cache-hit` output: `true` when every requested path was restored from a previous snapshot.
+
 ## Development
 
 Make your source code changes in a commit, then rebuild and commit the generated binaries and JS files:

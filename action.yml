@@ -30,3 +30,23 @@ inputs:
     description: 'Enable sccache. Can take either "s3" (RunsOn S3 cache bucket) or be empty (disabled). You still need to setup sccache in your workflow, for instance with mozilla-actions/sccache-action.'
     required: false
     default: ''
+  cache:
+    description: 'Newline/comma separated list of cache modes to persist on the sticky disk (go, node, yarn, pnpm, ruby, rust, python, uv, poetry, apt, gradle, maven, playwright). Requires a snap=<size>[:<name>] label on the job. Linux only. Run this action after actions/checkout when caching workspace-relative paths.'
+    required: false
+    default: ''
+  path:
+    description: 'Newline separated list of arbitrary paths to persist on the sticky disk. Requires a snap=<size>[:<name>] label on the job. Linux only.'
+    required: false
+    default: ''
+  wait_timeout:
+    description: 'How long to wait for the sticky disk to be ready (Go duration, e.g. "5m")'
+    required: false
+    default: '5m'
+  fail_on_missing:
+    description: 'Fail the step if no sticky disk is available (no snap= label, or not ready before wait_timeout)'
+    required: false
+    default: 'false'
+
+outputs:
+  cache-hit:
+    description: 'Set to "true" when every requested cache path was restored from a previous snapshot, "false" otherwise'

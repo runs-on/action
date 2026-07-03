@@ -10,6 +10,7 @@ import (
 	"github.com/runs-on/action/internal/env"
 	"github.com/runs-on/action/internal/monitoring"
 	"github.com/runs-on/action/internal/sccache"
+	"github.com/runs-on/action/internal/stickydisk"
 	"github.com/sethvargo/go-githubactions"
 )
 
@@ -35,6 +36,18 @@ func handleMainExecution(action *githubactions.Action, ctx context.Context) {
 	if cfg.HasSccache() {
 		if err := sccache.ConfigureSccache(action, cfg.Sccache); err != nil {
 			action.Errorf("Failed to configure sccache: %v", err)
+		}
+	}
+
+	// Configure sticky disk cache mounts if requested
+	if cfg.HasStickyDiskCache() {
+		if err := stickydisk.Configure(action, stickydisk.Options{
+			Modes:         cfg.Cache,
+			Paths:         cfg.CachePaths,
+			WaitTimeout:   cfg.CacheWaitTimeout,
+			FailOnMissing: cfg.CacheFailOnMissing,
+		}); err != nil {
+			action.Fatalf("Failed to configure sticky disk cache: %v", err)
 		}
 	}
 
@@ -69,6 +82,11 @@ func handlePostExecution(action *githubactions.Action, ctx context.Context) {
 	// Display metrics summary
 	if cfg.HasMetrics() {
 		monitoring.GenerateMetricsSummary(action, cfg.Metrics, "chart", cfg.NetworkInterface, cfg.DiskDevice)
+	}
+
+	// Display sticky disk cache usage
+	if cfg.HasStickyDiskCache() {
+		stickydisk.DisplayUsage(action)
 	}
 
 	action.Infof("Post-execution phase finished.")

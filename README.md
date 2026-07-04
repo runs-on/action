@@ -359,9 +359,12 @@ Supported cache modes and the directories they persist:
 | `uv` | | `~/.cache/uv` |
 | `poetry` | | `~/.cache/pypoetry` |
 | `apt` | | `/var/cache/apt/archives` |
+| `buildkit` | `buildx` | BuildKit layer cache (dedicated `buildkitd` with state on the sticky disk, registered as the current buildx builder) |
 | `gradle` | | `~/.gradle/caches`, `~/.gradle/wrapper` |
 | `maven` | | `~/.m2/repository` |
 | `playwright` | | `~/.cache/ms-playwright` |
+
+The `buildkit` mode follows the dedicated-builder pattern: it starts a `buildkitd` daemon whose state (and the buildkit binaries themselves) live on the sticky disk, and registers it as the current buildx builder. The docker daemon is never touched. Use `docker buildx build` (or `docker/build-push-action`); add `--load` when you need the built image available to the local docker daemon (e.g. for `docker run`). `docker pull` and plain `docker build` on the default builder are not cached by this mode.
 
 Use the `path` input to persist arbitrary additional paths (newline separated). Relative paths are resolved against the workspace, so run this action **after** `actions/checkout` when caching workspace-relative paths (e.g. `vendor/bundle`).
 

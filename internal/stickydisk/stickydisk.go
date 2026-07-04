@@ -90,6 +90,7 @@ func Configure(action *githubactions.Action, opts Options) error {
 	}
 	var specs []mountSpec
 	var posts []func(action *githubactions.Action) error
+	var results []mountResult
 	seen := map[string]bool{}
 	addTarget := func(path string, root bool) {
 		resolved := resolveTarget(path, home, workspace)
@@ -100,6 +101,15 @@ func Configure(action *githubactions.Action, opts Options) error {
 		specs = append(specs, mountSpec{target: resolved, root: root})
 	}
 	for _, mode := range modes {
+		// Modes with a Setup function own their whole setup (no bind mounts).
+		if mode.Setup != nil {
+			hit, err := mode.Setup(action, mountRoot)
+			if err != nil {
+				action.Warningf("Failed to set up %s cache: %v", mode.Name, err)
+			}
+			results = append(results, mountResult{Target: mode.Name, Hit: hit && err == nil, Err: err})
+			continue
+		}
 		for _, path := range mode.Paths {
 			addTarget(path, mode.Root)
 		}
@@ -114,13 +124,12 @@ func Configure(action *githubactions.Action, opts Options) error {
 		addTarget(strings.TrimSpace(path), false)
 	}
 
-	if len(specs) == 0 {
+	if len(specs) == 0 && len(results) == 0 {
 		action.Warningf("No cache paths to set up.")
 		action.SetOutput("cache-hit", "false")
 		return nil
 	}
 
-	results := make([]mountResult, 0, len(specs))
 	for _, spec := range specs {
 		hit, err := bindMount(action, mountRoot, spec.target, spec.root)
 		if err != nil {
@@ -189,6 +198,24 @@ func waitForReady(action *githubactions.Action, readyFile string, timeout time.D
 			logged = true
 		}
 		time.Sleep(readyPollInterval)
+	}
+}
+
+// PostJob runs the post-step hooks of the requested cache modes (e.g. stop
+// buildkitd), before the sticky disk is unmounted and snapshotted by the
+// runner's job-completed hook.
+func PostJob(action *githubactions.Action, modeNames []string) {
+	if runtime.GOOS != "linux" {
+		return
+	}
+	modes, _ := ResolveModes(modeNames)
+	for _, mode := range modes {
+		if mode.PostJob == nil {
+			continue
+		}
+		if err := mode.PostJob(action); err != nil {
+			action.Warningf("Post-job hook for %s cache failed: %v", mode.Name, err)
+		}
 	}
 }
 

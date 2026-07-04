@@ -19,6 +19,12 @@ type CacheMode struct {
 	Root bool
 	// Post runs after the paths have been bind-mounted (e.g. apt config fixups).
 	Post func(action *githubactions.Action) error
+	// Setup, when set, replaces the Paths bind-mount mechanism entirely: the
+	// mode owns its whole setup (e.g. buildkit runs a daemon off the disk).
+	Setup func(action *githubactions.Action, mountRoot string) (hit bool, err error)
+	// PostJob runs during the action's post step, before the sticky disk is
+	// unmounted and snapshotted (e.g. stop buildkitd for a consistent state).
+	PostJob func(action *githubactions.Action) error
 }
 
 var cacheModes = map[string]CacheMode{
@@ -32,6 +38,7 @@ var cacheModes = map[string]CacheMode{
 	"uv":         {Name: "uv", Paths: []string{"~/.cache/uv"}},
 	"poetry":     {Name: "poetry", Paths: []string{"~/.cache/pypoetry"}},
 	"apt":        {Name: "apt", Paths: []string{"/var/cache/apt/archives"}, Root: true, Post: configureApt},
+	"buildkit":   {Name: "buildkit", Setup: setupBuildkit, PostJob: stopBuildkit},
 	"gradle":     {Name: "gradle", Paths: []string{"~/.gradle/caches", "~/.gradle/wrapper"}},
 	"maven":      {Name: "maven", Paths: []string{"~/.m2/repository"}},
 	"playwright": {Name: "playwright", Paths: []string{"~/.cache/ms-playwright"}},
@@ -43,6 +50,7 @@ var modeAliases = map[string]string{
 	"pip":     "python",
 	"bundler": "ruby",
 	"cargo":   "rust",
+	"buildx":  "buildkit",
 }
 
 // ValidModes returns the sorted list of supported cache mode names.

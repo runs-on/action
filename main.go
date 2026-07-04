@@ -84,8 +84,10 @@ func handlePostExecution(action *githubactions.Action, ctx context.Context) {
 		monitoring.GenerateMetricsSummary(action, cfg.Metrics, "chart", cfg.NetworkInterface, cfg.DiskDevice)
 	}
 
-	// Display sticky disk cache usage
+	// Run cache mode post-job hooks (e.g. stop buildkitd) before the sticky
+	// disk is unmounted and snapshotted, then display usage
 	if cfg.HasStickyDiskCache() {
+		stickydisk.PostJob(action, cfg.Cache)
 		stickydisk.DisplayUsage(action)
 	}
 

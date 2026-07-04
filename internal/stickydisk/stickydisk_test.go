@@ -60,6 +60,33 @@ func TestSourceDirName(t *testing.T) {
 	}
 }
 
+func TestBuildkitMode(t *testing.T) {
+	for _, name := range []string{"buildkit", "buildx"} {
+		modes, unknown := ResolveModes([]string{name})
+		if len(unknown) != 0 || len(modes) != 1 {
+			t.Fatalf("expected %s to resolve to one mode, got modes=%v unknown=%v", name, modes, unknown)
+		}
+		mode := modes[0]
+		if mode.Name != "buildkit" {
+			t.Errorf("expected canonical name buildkit, got %s", mode.Name)
+		}
+		if mode.Setup == nil || mode.PostJob == nil {
+			t.Errorf("expected buildkit mode to define Setup and PostJob")
+		}
+		if len(mode.Paths) != 0 {
+			t.Errorf("expected buildkit mode to have no bind-mount paths, got %v", mode.Paths)
+		}
+	}
+}
+
+func TestBuildkitTarballURL(t *testing.T) {
+	url := buildkitTarballURL("v0.31.1", "arm64")
+	expected := "https://github.com/moby/buildkit/releases/download/v0.31.1/buildkit-v0.31.1.linux-arm64.tar.gz"
+	if url != expected {
+		t.Errorf("got %q, want %q", url, expected)
+	}
+}
+
 func TestValidModesContainsCore(t *testing.T) {
 	valid := strings.Join(ValidModes(), ",")
 	for _, name := range []string{"go", "node", "ruby", "rust", "python", "apt"} {

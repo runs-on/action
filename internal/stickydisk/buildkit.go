@@ -22,6 +22,18 @@ const (
 	buildkitStopWait    = 20 * time.Second
 )
 
+// buildkitGCConfig bounds the buildkit cache relative to the sticky disk so
+// the volume never fills up: GC prunes least-recently-used layers during
+// builds once maxUsedSpace/minFreeSpace are crossed.
+func buildkitGCConfig() string {
+	return fmt.Sprintf(`[worker.oci]
+  gc = true
+  reservedSpace = "10%%"
+  maxUsedSpace = "75%%"
+  minFreeSpace = "%d%%"
+`, warnFreePct)
+}
+
 func buildkitTarballURL(version, arch string) string {
 	return fmt.Sprintf("https://github.com/moby/buildkit/releases/download/%s/buildkit-%s.linux-%s.tar.gz", version, version, arch)
 }
@@ -61,11 +73,18 @@ func setupBuildkit(action *githubactions.Action, mountRoot string) (hit bool, er
 		return hit, err
 	}
 
+	// GC config sized relative to the volume, regenerated each job so
+	// threshold changes in the action roll out to existing lineages.
+	configFile := filepath.Join(mountRoot, "buildkit", "buildkitd.toml")
+	if err := os.WriteFile(configFile, []byte(buildkitGCConfig()), 0644); err != nil {
+		return hit, fmt.Errorf("failed to write %s: %w", configFile, err)
+	}
+
 	// Start buildkitd detached, state on the sticky disk. --group docker
 	// makes the socket accessible to the runner user (member of docker group).
 	action.Infof("Starting buildkitd %s (root: %s)", buildkitVersion, stateRoot)
-	startCmd := fmt.Sprintf("nohup %s --root %s --addr unix://%s --group docker > %s 2>&1 &",
-		buildkitd, stateRoot, buildkitSocketPath, buildkitLogFile)
+	startCmd := fmt.Sprintf("nohup %s --config %s --root %s --addr unix://%s --group docker > %s 2>&1 &",
+		buildkitd, configFile, stateRoot, buildkitSocketPath, buildkitLogFile)
 	if err := runLogged(action, "sudo", "sh", "-c", startCmd); err != nil {
 		return hit, err
 	}

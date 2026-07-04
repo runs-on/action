@@ -3,8 +3,6 @@ package stickydisk
 import (
 	"fmt"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -68,6 +66,10 @@ func Configure(action *githubactions.Action, opts Options) error {
 		return missing(action, opts, err.Error())
 	}
 	action.Infof("Sticky disk ready at %s (name: %s)", mountRoot, os.Getenv("RUNS_ON_STICKYDISK_NAME"))
+
+	// Self-heal a critically full volume before cache-hit detection: wiped
+	// caches report a miss and the next snapshot starts clean.
+	checkCritical(action, mountRoot)
 
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -231,12 +233,8 @@ func DisplayUsage(action *githubactions.Action) {
 	if mountRoot == "" {
 		return
 	}
-	mountsDir := filepath.Join(mountRoot, "mounts")
-	if _, err := os.Stat(mountsDir); err != nil {
+	if _, err := os.Stat(mountRoot); err != nil {
 		return
 	}
-	out, err := exec.Command("sudo", "du", "-sh", mountsDir).CombinedOutput()
-	if err == nil {
-		action.Infof("Sticky disk cache usage: %s", strings.TrimSpace(string(out)))
-	}
+	warnOnPressure(action, mountRoot)
 }

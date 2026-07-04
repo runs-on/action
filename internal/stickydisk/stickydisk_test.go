@@ -87,6 +87,50 @@ func TestBuildkitTarballURL(t *testing.T) {
 	}
 }
 
+func TestDiskStatsThresholds(t *testing.T) {
+	gb := uint64(1 << 30)
+	tests := []struct {
+		name     string
+		stats    diskStats
+		pressure bool
+		critical bool
+	}{
+		{"plenty free", diskStats{totalBytes: 100 * gb, freeBytes: 50 * gb, totalInodes: 1000, freeInodes: 900}, false, false},
+		{"low space", diskStats{totalBytes: 100 * gb, freeBytes: 15 * gb, totalInodes: 1000, freeInodes: 900}, true, false},
+		{"critical space", diskStats{totalBytes: 100 * gb, freeBytes: 3 * gb, totalInodes: 1000, freeInodes: 900}, true, true},
+		{"low inodes only", diskStats{totalBytes: 100 * gb, freeBytes: 50 * gb, totalInodes: 1000, freeInodes: 80}, true, false},
+		{"critical inodes only", diskStats{totalBytes: 100 * gb, freeBytes: 50 * gb, totalInodes: 1000, freeInodes: 30}, true, true},
+		{"empty stats", diskStats{}, false, false},
+	}
+	for _, tt := range tests {
+		if got := tt.stats.underPressure(); got != tt.pressure {
+			t.Errorf("%s: underPressure() = %v, want %v", tt.name, got, tt.pressure)
+		}
+		if got := tt.stats.critical(); got != tt.critical {
+			t.Errorf("%s: critical() = %v, want %v", tt.name, got, tt.critical)
+		}
+	}
+}
+
+func TestStatDiskSmoke(t *testing.T) {
+	stats, err := statDisk(t.TempDir())
+	if err != nil {
+		t.Fatalf("statDisk failed: %v", err)
+	}
+	if stats.totalBytes == 0 {
+		t.Errorf("expected non-zero totalBytes")
+	}
+}
+
+func TestBuildkitGCConfig(t *testing.T) {
+	config := buildkitGCConfig()
+	for _, expected := range []string{"[worker.oci]", "gc = true", `maxUsedSpace = "75%"`, `minFreeSpace = "20%"`} {
+		if !strings.Contains(config, expected) {
+			t.Errorf("expected %q in config:\n%s", expected, config)
+		}
+	}
+}
+
 func TestValidModesContainsCore(t *testing.T) {
 	valid := strings.Join(ValidModes(), ",")
 	for _, name := range []string{"go", "node", "ruby", "rust", "python", "apt"} {

@@ -368,6 +368,8 @@ The `buildkit` mode follows the dedicated-builder pattern: it starts a `buildkit
 
 Use the `path` input to persist arbitrary additional paths (newline separated). Relative paths are resolved against the workspace, so run this action **after** `actions/checkout` when caching workspace-relative paths (e.g. `vendor/bundle`).
 
+**Disk pressure:** the buildkit cache is bounded by BuildKit's own garbage collection (capped at ~75% of the volume, keeping 20% free; least-recently-used layers are pruned automatically during builds). Other cache modes have no native GC: when the volume drops below 20% free space (or 10% free inodes), the post step emits a warning and a job summary with a per-cache breakdown — increase the `snap=` label size to fix. If a volume is ever critically full at job start (<5% free space or inodes), all caches on it are automatically reset so the job runs cold instead of failing with "no space left on device", and the next snapshot starts clean.
+
 Other related inputs:
 
 * `wait_timeout` - how long to wait for the sticky disk to be ready (default `5m`)

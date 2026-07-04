@@ -3,9 +3,7 @@ package stickydisk
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strings"
 
 	"github.com/sethvargo/go-githubactions"
 )
@@ -72,7 +70,7 @@ func checkCritical(action *githubactions.Action, mountRoot string) {
 		if _, err := os.Stat(dir); os.IsNotExist(err) {
 			continue
 		}
-		if err := runLogged(action, "sudo", "rm", "-rf", dir); err != nil {
+		if err := removeCacheDir(action, dir); err != nil {
 			action.Warningf("Failed to reset %s: %v", dir, err)
 		}
 	}
@@ -111,9 +109,9 @@ func usageBreakdown(mountRoot string) string {
 	if len(targets) == 0 {
 		return "(no cache directories)"
 	}
-	out, err := exec.Command("sudo", append([]string{"du", "-sh"}, targets...)...).CombinedOutput()
+	out, err := duCacheDirs(targets)
 	if err != nil {
 		return fmt.Sprintf("(du failed: %v)", err)
 	}
-	return strings.TrimSpace(string(out))
+	return out
 }

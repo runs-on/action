@@ -31,11 +31,11 @@ inputs:
     required: false
     default: ''
   cache:
-    description: 'Newline/comma separated list of cache modes to persist on the sticky disk (go, node, yarn, pnpm, ruby, rust, python, uv, poetry, apt, buildkit, gradle, maven, playwright). Requires a snap=<size>[:<name>] label on the job. Linux only. Run this action after actions/checkout when caching workspace-relative paths.'
+    description: 'Newline/comma separated list of cache modes to persist on the sticky disk (go, node, yarn, pnpm, ruby, rust, python, uv, poetry, apt, buildkit, gradle, maven, playwright). Requires a snap=<size>[:<name>] label on the job. Linux and Windows (apt and buildkit modes are Linux only). Run this action after actions/checkout when caching workspace-relative paths.'
     required: false
     default: ''
   path:
-    description: 'Newline separated list of arbitrary paths to persist on the sticky disk. Requires a snap=<size>[:<name>] label on the job. Linux only.'
+    description: 'Newline separated list of arbitrary paths to persist on the sticky disk. Requires a snap=<size>[:<name>] label on the job. Linux and Windows.'
     required: false
     default: ''
   wait_timeout:

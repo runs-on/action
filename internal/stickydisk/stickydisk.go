@@ -12,10 +12,22 @@ import (
 )
 
 const (
-	defaultReadyFile   = "/runs-on/stickydisk.ready"
 	defaultWaitTimeout = 5 * time.Minute
 	readyPollInterval  = 500 * time.Millisecond
 )
+
+// defaultReadyFile mirrors the agent's STICKYDISK_READY_FILE; only a fallback,
+// the agent publishes RUNS_ON_STICKYDISK_READY_FILE.
+func defaultReadyFile() string {
+	if runtime.GOOS == "windows" {
+		return `C:\runs-on\stickydisk.ready`
+	}
+	return "/runs-on/stickydisk.ready"
+}
+
+func supportedOS() bool {
+	return runtime.GOOS == "linux" || runtime.GOOS == "windows"
+}
 
 // Options configures the sticky disk cache setup.
 type Options struct {
@@ -40,15 +52,15 @@ type mountResult struct {
 // are reported as warnings; only a missing/unready sticky disk combined with
 // FailOnMissing returns an error.
 func Configure(action *githubactions.Action, opts Options) error {
-	if runtime.GOOS != "linux" {
-		action.Warningf("Sticky disk cache is only supported on Linux runners, skipping.")
+	if !supportedOS() {
+		action.Warningf("Sticky disk cache is only supported on Linux and Windows runners, skipping.")
 		action.SetOutput("cache-hit", "false")
 		return nil
 	}
 
 	readyFile := os.Getenv("RUNS_ON_STICKYDISK_READY_FILE")
 	if readyFile == "" {
-		readyFile = defaultReadyFile
+		readyFile = defaultReadyFile()
 	}
 
 	if os.Getenv("RUNS_ON_STICKYDISK_DIR") == "" {
@@ -73,7 +85,11 @@ func Configure(action *githubactions.Action, opts Options) error {
 
 	home, err := os.UserHomeDir()
 	if err != nil {
-		home = "/home/runner"
+		if runtime.GOOS == "windows" {
+			home = `C:\Users\runner`
+		} else {
+			home = "/home/runner"
+		}
 	}
 	workspace := os.Getenv("GITHUB_WORKSPACE")
 	if workspace == "" {
@@ -103,6 +119,10 @@ func Configure(action *githubactions.Action, opts Options) error {
 		specs = append(specs, mountSpec{target: resolved, root: root})
 	}
 	for _, mode := range modes {
+		if !mode.supportedOn(runtime.GOOS) {
+			action.Warningf("Cache mode '%s' is not supported on Windows runners, skipping.", mode.Name)
+			continue
+		}
 		// Modes with a Setup function own their whole setup (no bind mounts).
 		if mode.Setup != nil {
 			hit, err := mode.Setup(action, mountRoot)
@@ -112,7 +132,7 @@ func Configure(action *githubactions.Action, opts Options) error {
 			results = append(results, mountResult{Target: mode.Name, Hit: hit && err == nil, Err: err})
 			continue
 		}
-		for _, path := range mode.Paths {
+		for _, path := range mode.pathsFor(runtime.GOOS) {
 			addTarget(path, mode.Root)
 		}
 		if mode.Post != nil {
@@ -133,7 +153,7 @@ func Configure(action *githubactions.Action, opts Options) error {
 	}
 
 	for _, spec := range specs {
-		hit, err := bindMount(action, mountRoot, spec.target, spec.root)
+		hit, err := cacheMount(action, mountRoot, spec.target, spec.root)
 		if err != nil {
 			action.Warningf("Failed to set up cache for %s: %v", spec.target, err)
 		}
@@ -207,12 +227,12 @@ func waitForReady(action *githubactions.Action, readyFile string, timeout time.D
 // buildkitd), before the sticky disk is unmounted and snapshotted by the
 // runner's job-completed hook.
 func PostJob(action *githubactions.Action, modeNames []string) {
-	if runtime.GOOS != "linux" {
+	if !supportedOS() {
 		return
 	}
 	modes, _ := ResolveModes(modeNames)
 	for _, mode := range modes {
-		if mode.PostJob == nil {
+		if mode.PostJob == nil || !mode.supportedOn(runtime.GOOS) {
 			continue
 		}
 		if err := mode.PostJob(action); err != nil {

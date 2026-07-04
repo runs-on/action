@@ -139,3 +139,34 @@ func TestValidModesContainsCore(t *testing.T) {
 		}
 	}
 }
+
+func TestModePathsForWindows(t *testing.T) {
+	golang := cacheModes["go"]
+	linuxPaths := strings.Join(golang.pathsFor("linux"), ",")
+	if !strings.Contains(linuxPaths, "~/.cache/go-build") {
+		t.Errorf("unexpected linux paths: %s", linuxPaths)
+	}
+	winPaths := strings.Join(golang.pathsFor("windows"), ",")
+	if !strings.Contains(winPaths, "~/AppData/Local/go-build") || !strings.Contains(winPaths, "~/go/pkg/mod") {
+		t.Errorf("unexpected windows paths: %s", winPaths)
+	}
+	// Modes without WindowsPaths keep their default paths on Windows.
+	rust := cacheModes["rust"]
+	if strings.Join(rust.pathsFor("windows"), ",") != strings.Join(rust.Paths, ",") {
+		t.Errorf("rust paths should be identical on windows")
+	}
+}
+
+func TestModeSupportedOn(t *testing.T) {
+	for _, name := range []string{"apt", "buildkit"} {
+		if cacheModes[name].supportedOn("windows") {
+			t.Errorf("%s must not be supported on windows", name)
+		}
+		if !cacheModes[name].supportedOn("linux") {
+			t.Errorf("%s must be supported on linux", name)
+		}
+	}
+	if !cacheModes["go"].supportedOn("windows") {
+		t.Error("go mode must be supported on windows")
+	}
+}

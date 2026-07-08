@@ -3,11 +3,14 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
+	"os"
 
 	"github.com/runs-on/action/internal/cache"
 	"github.com/runs-on/action/internal/config"
 	"github.com/runs-on/action/internal/costs"
 	"github.com/runs-on/action/internal/env"
+	"github.com/runs-on/action/internal/gitproxy"
 	"github.com/runs-on/action/internal/monitoring"
 	"github.com/runs-on/action/internal/sccache"
 	"github.com/runs-on/action/internal/stickydisk"
@@ -97,7 +100,16 @@ func handlePostExecution(action *githubactions.Action, ctx context.Context) {
 func main() {
 	ctx := context.Background()
 	postFlag := flag.Bool("post", false, "Indicates the post-execution phase")
+	gitProxyFlag := flag.Bool("git-proxy-serve", false, "Run the local git mirror proxy (internal, spawned by the git cache mode)")
 	flag.Parse()
+
+	if *gitProxyFlag {
+		if err := gitproxy.RunFromEnv(ctx); err != nil {
+			fmt.Fprintf(os.Stderr, "git proxy failed: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	action := githubactions.New()
 

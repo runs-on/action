@@ -55,4 +55,3 @@ func runLogged(action *githubactions.Action, name string, args ...string) error 
 	}
 	return nil
 }
-

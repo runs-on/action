@@ -44,18 +44,20 @@ var cacheModes = map[string]CacheMode{
 	"poetry":     {Name: "poetry", Paths: []string{"~/.cache/pypoetry"}, WindowsPaths: []string{"~/AppData/Local/pypoetry/Cache"}},
 	"apt":        {Name: "apt", Paths: []string{"/var/cache/apt/archives"}, Root: true, Post: configureApt},
 	"buildkit":   {Name: "buildkit", Setup: setupBuildkit, PostJob: stopBuildkit},
+	"git":        {Name: "git", Setup: setupGit, PostJob: stopGit},
 	"gradle":     {Name: "gradle", Paths: []string{"~/.gradle/caches", "~/.gradle/wrapper"}},
 	"maven":      {Name: "maven", Paths: []string{"~/.m2/repository"}},
 	"playwright": {Name: "playwright", Paths: []string{"~/.cache/ms-playwright"}, WindowsPaths: []string{"~/AppData/Local/ms-playwright"}},
 }
 
 var modeAliases = map[string]string{
-	"golang":  "go",
-	"npm":     "node",
-	"pip":     "python",
-	"bundler": "ruby",
-	"cargo":   "rust",
-	"buildx":  "buildkit",
+	"golang":   "go",
+	"npm":      "node",
+	"pip":      "python",
+	"bundler":  "ruby",
+	"cargo":    "rust",
+	"buildx":   "buildkit",
+	"checkout": "git",
 }
 
 // pathsFor returns the cache paths for the given OS.

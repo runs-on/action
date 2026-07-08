@@ -1,0 +1,276 @@
+// Package gitproxy implements a local git smart-HTTP proxy backed by bare
+// repository mirrors stored on the sticky disk. Fetch URLs are rewritten to
+// it via git's url.<base>.insteadOf mechanism, so an unmodified
+// actions/checkout (or any git fetch of a github.com repo) is served from
+// local storage, with only new objects crossing the network once per job.
+//
+// Adapted from github.com/crohr/smart-git-proxy (internal/mirror,
+// internal/gitproxy). Protocol serving is delegated to `git http-backend`
+// (see cgi.go) instead of a hand-rolled smart-HTTP implementation, and the
+// shared-proxy pack cache was dropped: a per-job proxy serves each pack once.
+package gitproxy
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"sync"
+	"time"
+
+	"golang.org/x/sync/singleflight"
+)
+
+// Status indicates what EnsureRepo had to do before a repo could be served.
+type Status string
+
+const (
+	StatusHit   Status = "mirror-hit"   // served from an existing fresh mirror
+	StatusClone Status = "mirror-clone" // had to clone a new mirror
+	StatusSync  Status = "mirror-sync"  // had to sync a stale mirror
+	StatusStale Status = "mirror-stale" // sync failed, serving stale data
+)
+
+// Mirror manages bare git repository mirrors under a root directory.
+type Mirror struct {
+	root       string
+	staleAfter time.Duration
+	log        *slog.Logger
+
+	group      singleflight.Group
+	maintGroup singleflight.Group
+	lastSync   sync.Map // map[repoKey]time.Time
+}
+
+// NewMirror creates a mirror manager rooted at root. lastSync tracking is
+// in-memory only: a proxy process is fresh per job, so the first request for
+// each repo always syncs from upstream — guaranteeing that the just-pushed
+// SHA a workflow runs against is present in the mirror.
+func NewMirror(root string, staleAfter time.Duration, log *slog.Logger) (*Mirror, error) {
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		return nil, fmt.Errorf("create mirror root: %w", err)
+	}
+	return &Mirror{root: root, staleAfter: staleAfter, log: log}, nil
+}
+
+// RepoPath returns the filesystem path for a repo mirror.
+func (m *Mirror) RepoPath(host, owner, repo string) string {
+	return filepath.Join(m.root, host, owner, repo+".git")
+}
+
+// EnsureRepo ensures the mirror exists and is fresh enough to serve.
+// authHeader is the Authorization header value from the client request (can
+// be empty). Returns the path to the bare repo and what had to be done.
+func (m *Mirror) EnsureRepo(ctx context.Context, host, owner, repo, upstreamURL, authHeader string) (string, Status, error) {
+	start := time.Now()
+	repoPath := m.RepoPath(host, owner, repo)
+	key := fmt.Sprintf("%s/%s/%s", host, owner, repo)
+
+	// Clone goes through singleflight so a concurrent request never sees a
+	// half-created directory: it waits for the in-flight clone instead.
+	result, err, _ := m.group.Do("clone:"+key, func() (interface{}, error) {
+		if _, err := os.Stat(repoPath); os.IsNotExist(err) {
+			if err := m.cloneRepo(ctx, repoPath, upstreamURL, authHeader); err != nil {
+				return StatusClone, err
+			}
+			m.lastSync.Store(key, time.Now())
+			return StatusClone, nil
+		}
+		return StatusHit, nil
+	})
+	if err != nil {
+		return "", "", err
+	}
+	if result.(Status) == StatusClone {
+		m.log.Info("mirror cloned", "repo", key, "duration_ms", time.Since(start).Milliseconds())
+		return repoPath, StatusClone, nil
+	}
+
+	if m.isStale(key) {
+		_, err, _ := m.group.Do("sync:"+key, func() (interface{}, error) {
+			return nil, m.syncRepo(ctx, repoPath, upstreamURL, authHeader)
+		})
+		if err != nil {
+			// For repos cloned with auth, a sync failure likely means the
+			// token is bad: surface it rather than serving stale private data.
+			if m.requiresAuth(repoPath) {
+				return "", "", fmt.Errorf("authentication required: %w", err)
+			}
+			m.log.Warn("sync failed, serving stale", "repo", key, "err", err)
+			return repoPath, StatusStale, nil
+		}
+		m.lastSync.Store(key, time.Now())
+		m.scheduleOptimize(repoPath, false)
+		m.log.Info("mirror synced", "repo", key, "duration_ms", time.Since(start).Milliseconds())
+		return repoPath, StatusSync, nil
+	}
+
+	// Fresh mirror: still validate auth for private repos so an
+	// unauthenticated client cannot read a previously-mirrored private repo.
+	if m.requiresAuth(repoPath) {
+		if err := m.validateAuth(ctx, upstreamURL, authHeader); err != nil {
+			return "", "", fmt.Errorf("authentication required: %w", err)
+		}
+	}
+	return repoPath, StatusHit, nil
+}
+
+// isStale returns true if the repo needs syncing.
+func (m *Mirror) isStale(key string) bool {
+	lastSync, ok := m.lastSync.Load(key)
+	if !ok {
+		return true
+	}
+	return time.Since(lastSync.(time.Time)) > m.staleAfter
+}
+
+// requiresAuth checks if a repo was cloned with authentication.
+func (m *Mirror) requiresAuth(repoPath string) bool {
+	_, err := os.Stat(filepath.Join(repoPath, ".requires-auth"))
+	return err == nil
+}
+
+// validateAuth validates the auth token can access the upstream repo.
+func (m *Mirror) validateAuth(ctx context.Context, upstreamURL, authHeader string) error {
+	cmd := exec.CommandContext(ctx, "git", "ls-remote", "--exit-code", "-q", upstreamURL, "HEAD")
+	cmd.Env = gitEnv(authHeader)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git ls-remote failed: %w\noutput: %s", err, output)
+	}
+	return nil
+}
+
+// cloneRepo creates a new bare mirror.
+func (m *Mirror) cloneRepo(ctx context.Context, repoPath, upstreamURL, authHeader string) error {
+	m.log.Info("cloning mirror", "path", repoPath, "hasAuth", authHeader != "")
+	if err := os.MkdirAll(filepath.Dir(repoPath), 0o755); err != nil {
+		return fmt.Errorf("create parent dir: %w", err)
+	}
+
+	// Disable GC and delta recompression during clone to reduce CPU/memory
+	// pressure: the received pack is stored as-is, optimizeRepo repacks later.
+	args := []string{
+		"-c", "gc.auto=0",
+		"-c", "core.compression=0",
+		"-c", "pack.window=0",
+		"-c", "pack.depth=0",
+		"-c", "pack.deltaCacheSize=1",
+		"-c", "pack.threads=1",
+		"clone", "--mirror", "--", upstreamURL, repoPath,
+	}
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Env = gitEnv(authHeader)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		// git may leave a partial directory behind; remove it so the next
+		// attempt does not mistake it for a valid mirror.
+		os.RemoveAll(repoPath)
+		return fmt.Errorf("git clone failed: %w\noutput: %s", err, output)
+	}
+
+	// actions/checkout fetches exact commit SHAs and sparse checkouts fetch
+	// with --filter=blob:none; upload-pack rejects both unless the mirror
+	// repo config allows them.
+	for _, kv := range [][2]string{
+		{"uploadpack.allowAnySHA1InWant", "true"},
+		{"uploadpack.allowFilter", "true"},
+	} {
+		cmd := exec.CommandContext(ctx, "git", "-C", repoPath, "config", kv[0], kv[1])
+		if output, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("git config %s failed: %w\noutput: %s", kv[0], err, output)
+		}
+	}
+
+	if authHeader != "" {
+		if err := os.WriteFile(filepath.Join(repoPath, ".requires-auth"), []byte("1"), 0o644); err != nil {
+			m.log.Warn("failed to mark repo as requiring auth", "path", repoPath, "err", err)
+		}
+	}
+
+	m.scheduleOptimize(repoPath, true)
+	return nil
+}
+
+// syncRepo fetches updates from upstream.
+func (m *Mirror) syncRepo(ctx context.Context, repoPath, upstreamURL, authHeader string) error {
+	start := time.Now()
+	args := []string{
+		"-C", repoPath,
+		"-c", "gc.auto=0",
+		"-c", "core.compression=0",
+		"-c", "pack.window=0",
+		"-c", "pack.depth=0",
+		"-c", "pack.deltaCacheSize=1",
+		"-c", "pack.threads=1",
+		"fetch", "--all", "--prune", "--force",
+	}
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Env = gitEnv(authHeader)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git fetch failed: %w\noutput: %s", err, output)
+	}
+	m.log.Debug("sync complete", "path", repoPath, "duration_ms", time.Since(start).Milliseconds())
+	return nil
+}
+
+// HasObject reports whether the mirror repo contains the given object.
+func (m *Mirror) HasObject(ctx context.Context, repoPath, oid string) bool {
+	return exec.CommandContext(ctx, "git", "--git-dir", repoPath, "cat-file", "-e", oid).Run() == nil
+}
+
+// optimizeRepo runs maintenance tasks: bitmaps and commit-graphs make
+// upload-pack on warm jobs fast for large repos, and persist in the snapshot.
+// If full is true (after clone), repack with bitmap; otherwise (after sync)
+// only midx+commit-graph.
+func (m *Mirror) optimizeRepo(ctx context.Context, repoPath string, full bool) {
+	// Avoid lock contention if another git process is writing commit-graph.
+	if _, err := os.Stat(filepath.Join(repoPath, "objects", "info", "commit-graph.lock")); err == nil {
+		return
+	}
+	if full {
+		cmd := exec.CommandContext(ctx, "git", "-C", repoPath, "repack", "-a", "-d", "-b", "--write-bitmap-index")
+		if output, err := cmd.CombinedOutput(); err != nil {
+			m.log.Warn("git repack failed", "path", repoPath, "err", err, "output", string(output))
+		}
+	}
+	cmd := exec.CommandContext(ctx, "git", "-C", repoPath, "commit-graph", "write", "--reachable")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		m.log.Warn("git commit-graph write failed", "path", repoPath, "err", err, "output", string(output))
+	}
+	cmd = exec.CommandContext(ctx, "git", "-C", repoPath, "multi-pack-index", "write", "--bitmap")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		m.log.Warn("git multi-pack-index write failed", "path", repoPath, "err", err, "output", string(output))
+	}
+}
+
+// scheduleOptimize runs optimizeRepo in the background with a per-repo
+// singleflight to avoid concurrent maintenance.
+func (m *Mirror) scheduleOptimize(repoPath string, full bool) {
+	go func() {
+		m.maintGroup.Do(repoPath, func() (interface{}, error) {
+			m.optimizeRepo(context.Background(), repoPath, full)
+			return nil, nil
+		})
+	}()
+}
+
+// gitEnv returns the environment for git commands talking to upstream. The
+// global/system config MUST be masked: once the action has installed its
+// url.insteadOf rewrites, an upstream fetch reading the runner's global
+// config would loop back into this proxy.
+func gitEnv(authHeader string) []string {
+	env := append(os.Environ(),
+		"GIT_TERMINAL_PROMPT=0",
+		"GIT_CONFIG_GLOBAL=/dev/null",
+		"GIT_CONFIG_SYSTEM=/dev/null",
+	)
+	if authHeader != "" {
+		env = append(env,
+			"GIT_CONFIG_COUNT=1",
+			"GIT_CONFIG_KEY_0=http.extraheader",
+			fmt.Sprintf("GIT_CONFIG_VALUE_0=Authorization: %s", authHeader),
+		)
+	}
+	return env
+}

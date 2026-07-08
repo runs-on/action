@@ -31,9 +31,13 @@ inputs:
     required: false
     default: ''
   cache:
-    description: 'Newline/comma separated list of cache modes to persist on the sticky disk (go, node, yarn, pnpm, ruby, rust, python, uv, poetry, apt, buildkit, gradle, maven, playwright). Requires a snap=<size>[:<name>] label on the job. Linux and Windows (apt and buildkit modes are Linux only). Run this action after actions/checkout when caching workspace-relative paths.'
+    description: 'Newline/comma separated list of cache modes to persist on the sticky disk (go, node, yarn, pnpm, ruby, rust, python, uv, poetry, apt, buildkit, git, gradle, maven, playwright). Requires a snap=<size>[:<name>] label on the job. Linux and Windows (apt, buildkit and git modes are Linux only). Run this action after actions/checkout when caching workspace-relative paths. The git mode is the exception: it must run BEFORE actions/checkout, since it accelerates github.com fetches with git mirrors persisted on the sticky disk (combine both by running the action twice).'
     required: false
     default: ''
+  token:
+    description: 'GitHub token used by the git cache mode to sync repository mirrors from github.com. Supply a PAT if the job checks out private repositories other than the workflow repository.'
+    required: false
+    default: ${{ github.token }}
   path:
     description: 'Newline separated list of arbitrary paths to persist on the sticky disk. Requires a snap=<size>[:<name>] label on the job. Linux and Windows.'
     required: false

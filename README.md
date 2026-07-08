@@ -360,11 +360,37 @@ Supported cache modes and the directories they persist:
 | `poetry` | | `~/.cache/pypoetry` |
 | `apt` | | `/var/cache/apt/archives` |
 | `buildkit` | `buildx` | BuildKit layer cache (dedicated `buildkitd` with state on the sticky disk, registered as the current buildx builder) |
+| `git` | `checkout` | Git repository mirrors (local git proxy serving github.com fetches from the sticky disk) |
 | `gradle` | | `~/.gradle/caches`, `~/.gradle/wrapper` |
 | `maven` | | `~/.m2/repository` |
 | `playwright` | | `~/.cache/ms-playwright` |
 
 The `buildkit` mode follows the dedicated-builder pattern: it starts a `buildkitd` daemon whose state (and the buildkit binaries themselves) live on the sticky disk, and registers it as the current buildx builder. The docker daemon is never touched. Use `docker buildx build` (or `docker/build-push-action`); add `--load` when you need the built image available to the local docker daemon (e.g. for `docker run`). `docker pull` and plain `docker build` on the default builder are not cached by this mode.
+
+#### `git` mode (fast checkouts)
+
+The `git` mode accelerates `actions/checkout` — and any other `git fetch`/`git clone` of a github.com repository during the job — without changing your checkout step. It starts a local git proxy whose bare repository mirrors live on the sticky disk, and rewrites `https://github.com/` fetch URLs to it (global `url.insteadOf`). The mirror syncs once per repo per job (only new objects cross the network); the fetch itself, including shallow `fetch-depth: 1` packs, is served at disk speed by `git upload-pack` on the runner.
+
+Unlike other modes, the `git` mode must run **before** `actions/checkout`:
+
+```yaml
+jobs:
+  build:
+    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/snap=20gb
+    steps:
+      - uses: runs-on/action@v2
+        with:
+          cache: git
+      - uses: actions/checkout@v4
+```
+
+To combine it with workspace-relative `path:` caching (which must run after checkout), run the action twice — the second invocation reuses the already-running proxy.
+
+Notes and limitations:
+
+* Mirror syncs authenticate with the `token` input (default: `${{ github.token }}`). Checking out **other private repositories** requires passing a PAT with access to them, since the rewritten URLs no longer match the credentials configured by `actions/checkout`.
+* `git push` is pinned to upstream (`pushInsteadOf`) and never goes through the proxy; Git LFS and anything else the proxy cannot serve is transparently forwarded to github.com. If mirroring fails for any reason, fetches fall back to upstream — the mode never breaks a build.
+* SSH remotes (`git@github.com:`) are not rewritten, and container jobs (`container:`) are not accelerated (the proxy listens on the host's loopback). GitHub Enterprise Server is not supported. Linux only.
 
 Use the `path` input to persist arbitrary additional paths (newline separated). Relative paths are resolved against the workspace, so run this action **after** `actions/checkout` when caching workspace-relative paths (e.g. `vendor/bundle`).
 

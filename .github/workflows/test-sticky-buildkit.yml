@@ -1,0 +1,82 @@
+name: Test / Sticky BuildKit
+
+on:
+  push:
+    branches:
+      - main
+      - v*
+      - feature/*
+      - fix/*
+      - auto/*
+  workflow_dispatch:
+
+jobs:
+  cold:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: pinned
+            version: v0.34.1
+          - id: latest
+            version: latest
+    runs-on: runs-on=${{ github.run_id }}/cpu=2/family=m7/image=ubuntu24-full-x64/snap=buildkit-${{ github.run_id }}-${{ matrix.id }}:20gb
+    steps:
+      - uses: actions/checkout@v6
+      - id: runs-on
+        uses: ./
+        with:
+          cache: buildkit
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+        with:
+          name: ${{ steps.runs-on.outputs.buildkit-builder }}
+          version: ${{ matrix.version }}
+          driver: docker-container
+          driver-opts: |
+            image=moby/buildkit:v0.31.1
+          buildkitd-config-inline: ${{ steps.runs-on.outputs.buildkit-inline-config }}
+          cleanup: false
+      - name: Populate BuildKit cache
+        shell: bash
+        run: |
+          mkdir -p /tmp/runs-on-buildkit-test
+          printf 'FROM busybox:1.36\nRUN dd if=/dev/zero of=/layer.bin bs=1M count=16\n' > /tmp/runs-on-buildkit-test/Dockerfile
+          docker buildx build --builder "${{ steps.runs-on.outputs.buildkit-builder }}" --progress=plain --load --tag runs-on-buildkit-test:cold /tmp/runs-on-buildkit-test
+
+  warm:
+    needs: cold
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: pinned
+            version: v0.34.1
+          - id: latest
+            version: latest
+    runs-on: runs-on=${{ github.run_id }}/cpu=2/family=m7/image=ubuntu24-full-x64/snap=buildkit-${{ github.run_id }}-${{ matrix.id }}:20gb
+    steps:
+      - uses: actions/checkout@v6
+      - id: runs-on
+        uses: ./
+        with:
+          cache: buildkit
+      - name: Verify restored state
+        env:
+          CACHE_HIT: ${{ steps.runs-on.outputs.cache-hit }}
+        run: test "$CACHE_HIT" = true
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+        with:
+          name: ${{ steps.runs-on.outputs.buildkit-builder }}
+          version: ${{ matrix.version }}
+          driver: docker-container
+          driver-opts: |
+            image=moby/buildkit:v0.31.1
+          buildkitd-config-inline: ${{ steps.runs-on.outputs.buildkit-inline-config }}
+          cleanup: false
+      - name: Verify cached build
+        shell: bash
+        run: |
+          mkdir -p /tmp/runs-on-buildkit-test
+          printf 'FROM busybox:1.36\nRUN dd if=/dev/zero of=/layer.bin bs=1M count=16\n' > /tmp/runs-on-buildkit-test/Dockerfile
+          docker buildx build --builder "${{ steps.runs-on.outputs.buildkit-builder }}" --progress=plain --load --tag runs-on-buildkit-test:warm /tmp/runs-on-buildkit-test 2>&1 | tee /tmp/runs-on-buildkit.log
+          grep -q 'CACHED' /tmp/runs-on-buildkit.log

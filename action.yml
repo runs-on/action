@@ -31,7 +31,7 @@ inputs:
     required: false
     default: ''
   cache:
-    description: 'Newline/comma separated list of cache modes to persist on the sticky disk (go, node, yarn, pnpm, ruby, rust, python, uv, poetry, apt, buildkit, git, gradle, maven, playwright). Requires a snap=<size> or snap=<name>:<size> label on the job; the optional name must come first, before the size and any volume settings. Linux and Windows (apt, buildkit and git modes are Linux only). Run this action after actions/checkout when caching workspace-relative paths. The git mode is the exception: it must run BEFORE actions/checkout, since it accelerates github.com fetches with git mirrors persisted on the sticky disk (combine both by running the action twice).'
+    description: 'Newline/comma separated list of cache modes to persist on the sticky disk (go, node, yarn, pnpm, ruby, rust, python, uv, poetry, apt, buildkit, git, gradle, maven, playwright). Requires a snap=<size> or snap=<name>:<size> label on the job; the optional name must come first, before the size and any volume settings. Linux and Windows (apt, buildkit and git modes are Linux only). Run this action after actions/checkout when caching workspace-relative paths. The git mode is the exception: it must run BEFORE actions/checkout. The buildkit mode must run BEFORE docker/setup-buildx-action, which must use the emitted builder name, inline config, docker-container driver, and cleanup=false.'
     required: false
     default: ''
   token:
@@ -54,3 +54,7 @@ inputs:
 outputs:
   cache-hit:
     description: 'Set to "true" when every requested cache path was restored from a previous snapshot, "false" otherwise'
+  buildkit-builder:
+    description: 'Stable Buildx builder name to pass to docker/setup-buildx-action and docker/build-push-action'
+  buildkit-inline-config:
+    description: 'BuildKit TOML for the RunsOn ECR Docker Hub pull-through mirror, or an empty string when unavailable'

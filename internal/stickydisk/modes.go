@@ -25,11 +25,17 @@ type CacheMode struct {
 	// Post runs after the paths have been bind-mounted (e.g. apt config fixups).
 	Post func(action *githubactions.Action) error
 	// Setup, when set, replaces the Paths bind-mount mechanism entirely: the
-	// mode owns its whole setup (e.g. buildkit runs a daemon off the disk).
+	// mode owns its whole setup (e.g. buildkit prepares a Docker volume).
 	Setup func(action *githubactions.Action, mountRoot string) (hit bool, err error)
+	// SetupFailureFatal is reserved for setup contracts that must not silently
+	// degrade to an uncached implementation.
+	SetupFailureFatal bool
 	// PostJob runs during the action's post step, before the sticky disk is
-	// unmounted and snapshotted (e.g. stop buildkitd for a consistent state).
+	// unmounted and snapshotted (e.g. stop the Buildx builder consistently).
 	PostJob func(action *githubactions.Action) error
+	// PostJobFailureFatal protects snapshot consistency when cleanup cannot be
+	// completed safely.
+	PostJobFailureFatal bool
 }
 
 var cacheModes = map[string]CacheMode{
@@ -43,7 +49,7 @@ var cacheModes = map[string]CacheMode{
 	"uv":         {Name: "uv", Paths: []string{"~/.cache/uv"}, WindowsPaths: []string{"~/AppData/Local/uv/cache"}},
 	"poetry":     {Name: "poetry", Paths: []string{"~/.cache/pypoetry"}, WindowsPaths: []string{"~/AppData/Local/pypoetry/Cache"}},
 	"apt":        {Name: "apt", Paths: []string{"/var/cache/apt/archives"}, Root: true, Post: configureApt},
-	"buildkit":   {Name: "buildkit", Setup: setupBuildkit, PostJob: stopBuildkit},
+	"buildkit":   {Name: "buildkit", Setup: setupBuildkit, SetupFailureFatal: true, PostJob: cleanupBuildkit, PostJobFailureFatal: true},
 	"git":        {Name: "git", Setup: setupGit, PostJob: stopGit},
 	"gradle":     {Name: "gradle", Paths: []string{"~/.gradle/caches", "~/.gradle/wrapper"}},
 	"maven":      {Name: "maven", Paths: []string{"~/.m2/repository"}},

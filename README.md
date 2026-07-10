@@ -359,13 +359,56 @@ Supported cache modes and the directories they persist:
 | `uv` | | `~/.cache/uv` |
 | `poetry` | | `~/.cache/pypoetry` |
 | `apt` | | `/var/cache/apt/archives` |
-| `buildkit` | `buildx` | BuildKit layer cache (dedicated `buildkitd` with state on the sticky disk, registered as the current buildx builder) |
+| `buildkit` | `buildx` | BuildKit layer cache (the official setup-buildx builder stores its state on the sticky disk) |
 | `git` | `checkout` | Git repository mirrors (local git proxy serving github.com fetches from the sticky disk) |
 | `gradle` | | `~/.gradle/caches`, `~/.gradle/wrapper` |
 | `maven` | | `~/.m2/repository` |
 | `playwright` | | `~/.cache/ms-playwright` |
 
-The `buildkit` mode follows the dedicated-builder pattern: it starts a `buildkitd` daemon whose state (and the buildkit binaries themselves) live on the sticky disk, and registers it as the current buildx builder. The docker daemon is never touched. Use `docker buildx build` (or `docker/build-push-action`); add `--load` when you need the built image available to the local docker daemon (e.g. for `docker run`). `docker pull` and plain `docker build` on the default builder are not cached by this mode.
+#### `buildkit` mode (Docker layer cache)
+
+The `buildkit` mode prepares the state volume used by Docker's official `setup-buildx-action`, backed by the sticky disk. RunsOn does not download or start its own BuildKit daemon. The actions must run in this order, with the fixed builder topology and cleanup settings shown below:
+
+```yaml
+jobs:
+  build:
+    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/snap=docker:20gb
+    steps:
+      - uses: actions/checkout@v4
+      - id: runs-on
+        uses: runs-on/action@v2
+        with:
+          cache: buildkit
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+        with:
+          name: ${{ steps.runs-on.outputs.buildkit-builder }}
+          version: v0.34.1
+          driver: docker-container
+          driver-opts: |
+            image=moby/buildkit:v0.31.1
+          buildkitd-config-inline: ${{ steps.runs-on.outputs.buildkit-inline-config }}
+          cleanup: false
+      - uses: docker/build-push-action@v7
+        with:
+          builder: ${{ steps.runs-on.outputs.buildkit-builder }}
+          context: .
+          load: true
+```
+
+Sticky BuildKit caching supports one `docker-container` node named by the `buildkit-builder` output. The RunsOn post step verifies that setup-buildx mounted the expected sticky volume, then stops and removes the builder before the disk is snapshotted. A missing setup step, reversed action order, different builder name, appended node, or setup-buildx cleanup causes a clear failure instead of silently using ephemeral cache storage.
+
+The action always emits `buildkit-builder` and `buildkit-inline-config`, even without a sticky disk. When the RunsOn `ecr-pull-through` extra transparently mirrors Docker Hub, the inline config contains the matching BuildKit registry mirror; otherwise it is empty. This also supports a regular non-sticky builder:
+
+```yaml
+- id: runs-on
+  uses: runs-on/action@v2
+- uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+  with:
+    name: ${{ steps.runs-on.outputs.buildkit-builder }}
+    buildkitd-config-inline: ${{ steps.runs-on.outputs.buildkit-inline-config }}
+```
+
+Use `docker buildx build` (or `docker/build-push-action`) with the emitted builder; add `--load` when you need the built image in the local Docker daemon. `docker pull` and plain `docker build` do not use this cache.
 
 #### `git` mode (fast checkouts)
 
@@ -394,14 +437,14 @@ Notes and limitations:
 
 Use the `path` input to persist arbitrary additional paths (newline separated). Relative paths are resolved against the workspace, so run this action **after** `actions/checkout` when caching workspace-relative paths (e.g. `vendor/bundle`).
 
-**Disk pressure:** the buildkit cache is bounded by BuildKit's own garbage collection (capped at ~75% of the volume, keeping 20% free; least-recently-used layers are pruned automatically during builds). Other cache modes have no native GC: when the volume drops below 20% free space (or 10% free inodes), the post step emits a warning and a job summary with a per-cache breakdown — increase the `snap=` label size to fix. If a volume is ever critically full at job start (<5% free space or inodes), all caches on it are automatically reset so the job runs cold instead of failing with "no space left on device", and the next snapshot starts clean.
+**Disk pressure:** the buildkit cache uses BuildKit's default garbage collection. Other cache modes have no native GC: when the volume drops below 20% free space (or 10% free inodes), the post step emits a warning and a job summary with a per-cache breakdown — increase the `snap=` label size to fix. If a volume is ever critically full at job start (<5% free space or inodes), all caches on it are automatically reset so the job runs cold instead of failing with "no space left on device", and the next snapshot starts clean.
 
 Other related inputs:
 
 * `wait_timeout` - how long to wait for the sticky disk to be ready (default `5m`)
 * `fail_on_missing` - fail the step when no sticky disk is available instead of continuing without cache (default `false`)
 
-The action sets a `cache-hit` output: `true` when every requested path was restored from a previous snapshot.
+The action sets a `cache-hit` output: `true` when every requested path was restored from a previous snapshot. It also sets `buildkit-builder` to the stable builder name and `buildkit-inline-config` to the ECR mirror TOML described above.
 
 ## Development
 

@@ -1,6 +1,7 @@
 package stickydisk
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"runtime"
@@ -127,6 +128,9 @@ func Configure(action *githubactions.Action, opts Options) error {
 		if mode.Setup != nil {
 			hit, err := mode.Setup(action, mountRoot)
 			if err != nil {
+				if mode.SetupFailureFatal {
+					return fmt.Errorf("failed to set up %s cache: %w", mode.Name, err)
+				}
 				action.Warningf("Failed to set up %s cache: %v", mode.Name, err)
 			}
 			results = append(results, mountResult{Target: mode.Name, Hit: hit && err == nil, Err: err})
@@ -223,22 +227,27 @@ func waitForReady(action *githubactions.Action, readyFile string, timeout time.D
 	}
 }
 
-// PostJob runs the post-step hooks of the requested cache modes (e.g. stop
-// buildkitd), before the sticky disk is unmounted and snapshotted by the
-// runner's job-completed hook.
-func PostJob(action *githubactions.Action, modeNames []string) {
+// PostJob runs the post-step hooks of the requested cache modes before the
+// sticky disk is unmounted and snapshotted by the runner's job-completed hook.
+func PostJob(action *githubactions.Action, modeNames []string) error {
 	if !supportedOS() {
-		return
+		return nil
 	}
+	var fatalErr error
 	modes, _ := ResolveModes(modeNames)
 	for _, mode := range modes {
 		if mode.PostJob == nil || !mode.supportedOn(runtime.GOOS) {
 			continue
 		}
 		if err := mode.PostJob(action); err != nil {
-			action.Warningf("Post-job hook for %s cache failed: %v", mode.Name, err)
+			if mode.PostJobFailureFatal {
+				fatalErr = errors.Join(fatalErr, fmt.Errorf("post-job hook for %s cache failed: %w", mode.Name, err))
+			} else {
+				action.Warningf("Post-job hook for %s cache failed: %v", mode.Name, err)
+			}
 		}
 	}
+	return fatalErr
 }
 
 // DisplayUsage prints sticky disk timings and per-mount disk usage. Intended

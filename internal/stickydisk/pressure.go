@@ -65,7 +65,6 @@ func checkCritical(action *githubactions.Action, mountRoot string) {
 		return
 	}
 	action.Warningf("Sticky disk is critically full (%s): resetting all caches on the volume so this and future jobs can run. Consider a larger snap= size.", stats)
-	// buildkit/bin is kept: it is small and saves a re-download.
 	for _, dir := range []string{filepath.Join(mountRoot, "mounts"), filepath.Join(mountRoot, "buildkit", "root"), gitMirrorDir(mountRoot)} {
 		if _, err := os.Stat(dir); os.IsNotExist(err) {
 			continue

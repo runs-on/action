@@ -73,17 +73,12 @@ func TestBuildkitMode(t *testing.T) {
 		if mode.Setup == nil || mode.PostJob == nil {
 			t.Errorf("expected buildkit mode to define Setup and PostJob")
 		}
+		if !mode.SetupFailureFatal || !mode.PostJobFailureFatal {
+			t.Errorf("expected buildkit setup and cleanup contract failures to be fatal")
+		}
 		if len(mode.Paths) != 0 {
 			t.Errorf("expected buildkit mode to have no bind-mount paths, got %v", mode.Paths)
 		}
-	}
-}
-
-func TestBuildkitTarballURL(t *testing.T) {
-	url := buildkitTarballURL("v0.31.1", "arm64")
-	expected := "https://github.com/moby/buildkit/releases/download/v0.31.1/buildkit-v0.31.1.linux-arm64.tar.gz"
-	if url != expected {
-		t.Errorf("got %q, want %q", url, expected)
 	}
 }
 
@@ -119,15 +114,6 @@ func TestStatDiskSmoke(t *testing.T) {
 	}
 	if stats.totalBytes == 0 {
 		t.Errorf("expected non-zero totalBytes")
-	}
-}
-
-func TestBuildkitGCConfig(t *testing.T) {
-	config := buildkitGCConfig()
-	for _, expected := range []string{"[worker.oci]", "gc = true", `maxUsedSpace = "75%"`, `minFreeSpace = "20%"`} {
-		if !strings.Contains(config, expected) {
-			t.Errorf("expected %q in config:\n%s", expected, config)
-		}
 	}
 }
 

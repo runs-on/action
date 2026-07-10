@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/sethvargo/go-githubactions"
 )
 
@@ -36,5 +37,60 @@ func TestDisplayMetricAllInvalidValuesShowsNoValidData(t *testing.T) {
 
 	if !strings.Contains(output.String(), "(no valid data yet)") {
 		t.Fatalf("expected no-valid-data message, got %q", output.String())
+	}
+}
+
+func TestDiskMetricDimensions(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		volumeID string
+		want     map[string]string
+	}{
+		{
+			name:     "with volume ID",
+			volumeID: "vol-0123456789abcdef0",
+			want: map[string]string{
+				"fstype":   "ext4",
+				"path":     "/tmp",
+				"VolumeId": "vol-0123456789abcdef0",
+			},
+		},
+		{
+			name: "without volume ID",
+			want: map[string]string{
+				"fstype": "ext4",
+				"path":   "/tmp",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := make(map[string]string)
+			for _, dimension := range diskMetricDimensions("/tmp", tt.volumeID) {
+				got[aws.ToString(dimension.Name)] = aws.ToString(dimension.Value)
+			}
+			if len(got) != len(tt.want) {
+				t.Fatalf("got %d dimensions, want %d: %#v", len(got), len(tt.want), got)
+			}
+			for name, wantValue := range tt.want {
+				if gotValue := got[name]; gotValue != wantValue {
+					t.Fatalf("dimension %s = %q, want %q", name, gotValue, wantValue)
+				}
+			}
+		})
+	}
+}
+
+func TestSavedVolumeID(t *testing.T) {
+	t.Setenv("STATE_"+volumeIDStateKey, "vol-0123456789abcdef0")
+
+	if got := savedVolumeID(); got != "vol-0123456789abcdef0" {
+		t.Fatalf("savedVolumeID() = %q, want %q", got, "vol-0123456789abcdef0")
 	}
 }

@@ -175,12 +175,17 @@ func GenerateMetricsSummary(action *githubactions.Action, metrics []string, form
 	// Get network interface and disk device based on config
 	networkInterface = getNetworkInterface(networkInterface)
 	diskDevice = getDiskDevice(diskDevice)
+	// The setup process saved the exact custom dimension published by CloudWatch Agent for this post process.
+	volumeID := savedVolumeID()
 
 	action.Infof("## CloudWatch Metrics Summary\n")
 	action.Infof("Enabled metrics: %s", strings.Join(metrics, ", "))
 	action.Infof("Namespace: %s", NAMESPACE)
 	action.Infof("Network interface: %s", networkInterface)
 	action.Infof("Disk device: %s", diskDevice)
+	if volumeID != "" {
+		action.Infof("Volume ID: %s", volumeID)
+	}
 	action.Infof("")
 	showLinks(action, metrics)
 
@@ -215,14 +220,6 @@ func GenerateMetricsSummary(action *githubactions.Action, metrics []string, form
 				}
 				if metricType == "disk" {
 					variants = []string{"/", "/tmp", "/var/lib/docker", "/home/runner"}
-					dimensions = append(dimensions, types.Dimension{
-						Name:  aws.String("fstype"),
-						Value: aws.String("ext4"),
-					})
-					dimensions = append(dimensions, types.Dimension{
-						Name:  aws.String("path"),
-						Value: aws.String("/"),
-					})
 				}
 				if metricType == "io" {
 					dimensions = append(dimensions, types.Dimension{
@@ -231,10 +228,11 @@ func GenerateMetricsSummary(action *githubactions.Action, metrics []string, form
 					})
 				}
 				for _, variant := range variants {
+					queryDimensions := dimensions
 					if metricType == "disk" {
-						dimensions[len(dimensions)-1].Value = aws.String(variant)
+						queryDimensions = diskMetricDimensions(variant, volumeID)
 					}
-					summary := collector.GetMetricSummary(measurement.RealName, NAMESPACE, measurement.Aggregation, dimensions, launchTime)
+					summary := collector.GetMetricSummary(measurement.RealName, NAMESPACE, measurement.Aggregation, queryDimensions, launchTime)
 					if metricType == "disk" && variant != "/" && summary == nil {
 						continue
 					}
@@ -243,6 +241,31 @@ func GenerateMetricsSummary(action *githubactions.Action, metrics []string, form
 			}
 		}
 	}
+}
+
+func savedVolumeID() string {
+	return os.Getenv("STATE_" + volumeIDStateKey)
+}
+
+func diskMetricDimensions(path, volumeID string) []types.Dimension {
+	dimensions := []types.Dimension{
+		{
+			Name:  aws.String("fstype"),
+			Value: aws.String("ext4"),
+		},
+		{
+			Name:  aws.String("path"),
+			Value: aws.String(path),
+		},
+	}
+	if volumeID != "" {
+		dimensions = append(dimensions, types.Dimension{
+			Name:  aws.String("VolumeId"),
+			Value: aws.String(volumeID),
+		})
+	}
+
+	return dimensions
 }
 
 // displayMetric shows a metric in the specified format (sparkline or chart)

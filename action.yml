@@ -30,3 +30,7 @@ inputs:
     description: 'Enable sccache. Can take either "s3" (RunsOn S3 cache bucket) or be empty (disabled). You still need to setup sccache in your workflow, for instance with mozilla-actions/sccache-action.'
     required: false
     default: ''
+
+outputs:
+  volume_id:
+    description: 'EBS volume ID backing the configured disk metrics, when available'

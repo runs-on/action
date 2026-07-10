@@ -326,7 +326,7 @@ echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
 
 ### `cache` / `path`
 
-Only available for Linux runners, on jobs with a `snap=<size>[:<name>]` label (sticky disk).
+Available for Linux and Windows runners on jobs with a sticky-disk label. Use `snap=<size>` for the default snapshot lineage or `snap=<name>:<size>` for a named lineage; the optional name must come first. Volume settings follow the size, for example `snap=go-cache:20gb:gp3:750mbs:6000iops`. The `apt`, `buildkit`, and `git` cache modes are Linux only.
 
 Persists package manager caches across jobs by bind-mounting them onto the job's sticky disk — a dedicated EBS volume that is snapshotted at job completion and restored (per repo, name, architecture, and branch) on the next job. No tarball upload/download: caches are available at native disk speed, with no size penalty on job duration.
 

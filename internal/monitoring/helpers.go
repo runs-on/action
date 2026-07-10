@@ -2,14 +2,22 @@ package monitoring
 
 import (
 	"bufio"
+	"fmt"
 	"math"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"regexp"
 	"strings"
 )
 
 const DEFAULT_NETWORK_INTERFACE = "enp39s0"
 const DEFAULT_DISK_DEVICE = "nvme0n1p1"
+
+var (
+	nvmeDevicePattern  = regexp.MustCompile(`^(nvme\d+n\d+)(?:p\d+)?$`)
+	ebsVolumeIDPattern = regexp.MustCompile(`^vol-?(?:[0-9a-f]{8}|[0-9a-f]{17})$`)
+)
 
 // detectPrimaryNetworkInterface finds the primary network interface (excluding loopback and docker)
 func detectPrimaryNetworkInterface() string {
@@ -108,6 +116,35 @@ func getDiskDevice(diskDevice string) string {
 		return detectRootDiskDevice()
 	}
 	return diskDevice
+}
+
+// getEBSVolumeID resolves the EBS volume backing a Nitro NVMe device.
+func getEBSVolumeID(sysBlockRoot, diskDevice string) (string, error) {
+	// Restrict the user-provided device name before joining it to a privileged sysfs path.
+	if diskDevice == "" || filepath.Base(diskDevice) != diskDevice {
+		return "", fmt.Errorf("invalid disk device %q", diskDevice)
+	}
+
+	matches := nvmeDevicePattern.FindStringSubmatch(diskDevice)
+	if matches == nil {
+		return "", fmt.Errorf("disk device %q is not a supported NVMe device", diskDevice)
+	}
+
+	serialPath := filepath.Join(sysBlockRoot, matches[1], "device", "serial")
+	serialBytes, err := os.ReadFile(serialPath)
+	if err != nil {
+		return "", fmt.Errorf("read EBS volume serial: %w", err)
+	}
+
+	serial := strings.ToLower(strings.Join(strings.Fields(string(serialBytes)), ""))
+	if !ebsVolumeIDPattern.MatchString(serial) {
+		return "", fmt.Errorf("unexpected EBS volume serial %q", serial)
+	}
+	if strings.HasPrefix(serial, "vol-") {
+		return serial, nil
+	}
+
+	return "vol-" + strings.TrimPrefix(serial, "vol"), nil
 }
 
 // calculateStats computes min, max, and average of a slice of floats

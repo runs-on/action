@@ -13,6 +13,11 @@ import (
 	"github.com/sethvargo/go-githubactions"
 )
 
+const (
+	sysBlockRoot     = "/sys/block"
+	volumeIDStateKey = "disk_volume_id"
+)
+
 // https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch-Agent-Configuration-File-Details.html
 func GenerateCloudWatchConfig(action *githubactions.Action, metrics []string, networkInterface, diskDevice string) error {
 	if len(metrics) == 0 {
@@ -27,11 +32,63 @@ func GenerateCloudWatchConfig(action *githubactions.Action, metrics []string, ne
 	// Get network interface and disk device based on config
 	primaryInterface := getNetworkInterface(networkInterface)
 	rootDisk := getDiskDevice(diskDevice)
+	volumeID := ""
+	for _, metric := range metrics {
+		if !strings.EqualFold(metric, "disk") {
+			continue
+		}
+
+		resolvedVolumeID, err := getEBSVolumeID(sysBlockRoot, rootDisk)
+		if err != nil {
+			action.Warningf("Failed to resolve EBS volume ID for disk device %s: %v", rootDisk, err)
+		} else {
+			volumeID = resolvedVolumeID
+			action.Infof("Using EBS volume ID: %s", volumeID)
+		}
+		break
+	}
 
 	action.Infof("Using network interface: %s", primaryInterface)
 	action.Infof("Using disk device: %s", rootDisk)
 
-	config := CloudWatchConfig{
+	config := buildCloudWatchConfig(metrics, primaryInterface, rootDisk, volumeID)
+
+	// Write config file
+	configFile, err := os.CreateTemp("", "runs-on-metrics-*.json")
+	if err != nil {
+		return fmt.Errorf("failed to create temp file: %w", err)
+	}
+	configPath := configFile.Name()
+	defer configFile.Close()
+
+	configJSON, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal config: %w", err)
+	}
+
+	if err := os.WriteFile(configPath, configJSON, 0644); err != nil {
+		return fmt.Errorf("failed to write config file: %w", err)
+	}
+
+	action.Infof("Generated CloudWatch config with metrics: %v", metrics)
+	action.Infof("Config file: %s", configPath)
+	action.Infof("Config content: %s", string(configJSON))
+
+	if err := applyCloudWatchConfig(action, configPath); err != nil {
+		return err
+	}
+
+	if volumeID != "" {
+		action.SetOutput("volume_id", volumeID)
+		// GitHub action setup and post run in separate processes, so persist the exact published dimension.
+		action.SaveState(volumeIDStateKey, volumeID)
+	}
+
+	return nil
+}
+
+func buildCloudWatchConfig(metrics []string, primaryInterface, rootDisk, volumeID string) CloudWatchConfig {
+	cloudWatchConfig := CloudWatchConfig{
 		Metrics: MetricsConfig{
 			Namespace:        NAMESPACE,
 			MetricsCollected: make(map[string]interface{}),
@@ -58,7 +115,7 @@ func GenerateCloudWatchConfig(action *githubactions.Action, metrics []string, ne
 			for _, measurement := range measurements {
 				cpuConfig["measurement"] = append(cpuConfig["measurement"].([]string), measurement.Name)
 			}
-			config.Metrics.MetricsCollected["cpu"] = cpuConfig
+			cloudWatchConfig.Metrics.MetricsCollected["cpu"] = cpuConfig
 		case "network":
 			netConfig := map[string]interface{}{
 				"drop_original_metrics": true,
@@ -68,7 +125,7 @@ func GenerateCloudWatchConfig(action *githubactions.Action, metrics []string, ne
 			for _, measurement := range measurements {
 				netConfig["measurement"] = append(netConfig["measurement"].([]string), measurement.Name)
 			}
-			config.Metrics.MetricsCollected["net"] = netConfig
+			cloudWatchConfig.Metrics.MetricsCollected["net"] = netConfig
 		case "memory":
 			memConfig := map[string]interface{}{
 				"drop_original_metrics": true,
@@ -77,7 +134,7 @@ func GenerateCloudWatchConfig(action *githubactions.Action, metrics []string, ne
 			for _, measurement := range measurements {
 				memConfig["measurement"] = append(memConfig["measurement"].([]string), measurement.Name)
 			}
-			config.Metrics.MetricsCollected["mem"] = memConfig
+			cloudWatchConfig.Metrics.MetricsCollected["mem"] = memConfig
 		case "disk":
 			diskConfig := map[string]interface{}{
 				"drop_original_metrics": true,
@@ -91,7 +148,12 @@ func GenerateCloudWatchConfig(action *githubactions.Action, metrics []string, ne
 			for _, measurement := range measurements {
 				diskConfig["measurement"] = append(diskConfig["measurement"].([]string), measurement.Name)
 			}
-			config.Metrics.MetricsCollected["disk"] = diskConfig
+			if volumeID != "" {
+				diskConfig["append_dimensions"] = map[string]string{
+					"VolumeId": volumeID,
+				}
+			}
+			cloudWatchConfig.Metrics.MetricsCollected["disk"] = diskConfig
 		case "io":
 			diskioConfig := map[string]interface{}{
 				"drop_original_metrics": true,
@@ -101,33 +163,11 @@ func GenerateCloudWatchConfig(action *githubactions.Action, metrics []string, ne
 			for _, measurement := range measurements {
 				diskioConfig["measurement"] = append(diskioConfig["measurement"].([]string), measurement.Name)
 			}
-			config.Metrics.MetricsCollected["diskio"] = diskioConfig
+			cloudWatchConfig.Metrics.MetricsCollected["diskio"] = diskioConfig
 		}
 	}
 
-	// Write config file
-	configFile, err := os.CreateTemp("", "runs-on-metrics-*.json")
-	if err != nil {
-		return fmt.Errorf("failed to create temp file: %w", err)
-	}
-	configPath := configFile.Name()
-	defer configFile.Close()
-
-	configJSON, err := json.MarshalIndent(config, "", "  ")
-	if err != nil {
-		return fmt.Errorf("failed to marshal config: %w", err)
-	}
-
-	if err := os.WriteFile(configPath, configJSON, 0644); err != nil {
-		return fmt.Errorf("failed to write config file: %w", err)
-	}
-
-	action.Infof("Generated CloudWatch config with metrics: %v", metrics)
-	action.Infof("Config file: %s", configPath)
-	action.Infof("Config content: %s", string(configJSON))
-
-	// Apply the config to the CloudWatch agent (start if needed, or append if already running)
-	return applyCloudWatchConfig(action, configPath)
+	return cloudWatchConfig
 }
 
 const agentCtl = "/opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl"

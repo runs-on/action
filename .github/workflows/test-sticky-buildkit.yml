@@ -22,7 +22,7 @@ jobs:
             version: v0.34.1
           - id: latest
             version: latest
-    runs-on: runs-on=${{ github.run_id }}/cpu=2/family=m7/image=ubuntu24-full-x64/snap=buildkit-${{ github.run_id }}:20gb
+    runs-on: runs-on=${{ github.run_id }}/cpu=2/family=m7/image=ubuntu24-full-x64/sticky=buildkit-${{ github.run_id }}:20gb
     steps:
       - uses: actions/checkout@v6
       - id: runs-on
@@ -67,7 +67,7 @@ jobs:
             version: v0.34.1
           - id: latest
             version: latest
-    runs-on: runs-on=${{ github.run_id }}/cpu=2/family=m7/image=ubuntu24-full-x64/snap=buildkit-${{ github.run_id }}:20gb
+    runs-on: runs-on=${{ github.run_id }}/cpu=2/family=m7/image=ubuntu24-full-x64/sticky=buildkit-${{ github.run_id }}:20gb
     steps:
       - uses: actions/checkout@v6
       - id: runs-on

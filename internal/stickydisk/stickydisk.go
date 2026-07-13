@@ -45,7 +45,7 @@ type mountResult struct {
 }
 
 // Configure bind-mounts the requested cache directories onto the job's sticky
-// disk. It requires a `snap=<size>[:<name>]` label on the job. Mount failures
+// disk. It requires a `sticky=[<name>:]<size>` label on the job. Mount failures
 // are reported as warnings; only a missing/unready sticky disk combined with
 // fail-on-missing policy returns an error.
 func Configure(action *githubactions.Action, opts Options) error {
@@ -68,7 +68,7 @@ func Configure(action *githubactions.Action, opts Options) error {
 
 	if os.Getenv("RUNS_ON_STICKYDISK_DIR") == "" {
 		if _, err := os.Stat(readyFile); os.IsNotExist(err) {
-			return missing(action, required, "No sticky disk detected. Add a snap=<size>[:<name>] label to your runs-on labels to enable the cache.")
+			return missing(action, required, "No sticky disk detected. Add a sticky=[<name>:]<size> label to your runs-on labels to enable the cache.")
 		}
 	}
 

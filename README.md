@@ -326,7 +326,7 @@ echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
 
 ### `sticky_cache`
 
-Available for Linux and Windows runners on jobs with a sticky-disk label. Use `snap=<size>` for the default snapshot lineage or `snap=<name>:<size>` for a named lineage; the optional name must come first. Volume settings follow the size, for example `snap=go-cache:20gb:gp3:750mbs:6000iops`. The `apt`, `buildkit`, and `git` cache modes are Linux only.
+Available for Linux and Windows runners on jobs with a sticky-disk label. Use `sticky=<size>` for the default snapshot lineage or `sticky=<name>:<size>` for a named lineage; the optional name must come first. Volume settings follow the size, for example `sticky=go-cache:20gb:gp3:750mbs:6000iops`. The `apt`, `buildkit`, and `git` cache modes are Linux only.
 
 Persists package manager caches across jobs by bind-mounting them onto the job's sticky disk — a dedicated EBS volume that is snapshotted at job completion and restored (per repo, name, architecture, and branch) on the next job. No tarball upload/download: caches are available at native disk speed, with no size penalty on job duration.
 
@@ -335,7 +335,7 @@ Example:
 ```yaml
 jobs:
   build:
-    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/snap=20gb
+    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/sticky=20gb
     steps:
       - uses: actions/checkout@v4
       - uses: runs-on/action@v2
@@ -393,7 +393,7 @@ The `buildkit` mode prepares the state volume used by Docker's official `setup-b
 ```yaml
 jobs:
   build:
-    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/snap=docker:20gb
+    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/sticky=docker:20gb
     steps:
       - uses: actions/checkout@v4
       - id: runs-on
@@ -440,7 +440,7 @@ Unlike other modes, the `git` mode must run **before** `actions/checkout`:
 ```yaml
 jobs:
   build:
-    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/snap=20gb
+    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/sticky=20gb
     steps:
       - uses: runs-on/action@v2
         with:
@@ -458,7 +458,7 @@ Notes and limitations:
 
 Use `custom,path=...` records to persist arbitrary additional paths. Relative paths are resolved against the workspace, so run this action **after** `actions/checkout` when caching workspace-relative paths (e.g. `custom,path=vendor/bundle`).
 
-**Disk pressure:** the buildkit cache uses BuildKit's default garbage collection. Other cache modes have no native GC: when the volume drops below 20% free space (or 10% free inodes), the post step emits a warning and a job summary with a per-cache breakdown — increase the `snap=` label size to fix. If a volume is ever critically full at job start (<5% free space or inodes), all caches on it are automatically reset so the job runs cold instead of failing with "no space left on device", and the next snapshot starts clean.
+**Disk pressure:** the buildkit cache uses BuildKit's default garbage collection. Other cache modes have no native GC: when the volume drops below 20% free space (or 10% free inodes), the post step emits a warning and a job summary with a per-cache breakdown — increase the `sticky=` label size to fix. If a volume is ever critically full at job start (<5% free space or inodes), all caches on it are automatically reset so the job runs cold instead of failing with "no space left on device", and the next snapshot starts clean.
 
 Other related inputs:
 

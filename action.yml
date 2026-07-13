@@ -31,7 +31,7 @@ inputs:
     required: false
     default: ''
   sticky_cache:
-    description: 'Newline-separated sticky-disk cache records. Each line is a mode followed by comma-separated key=value options, for example buildkit,fail-on-missing=true or custom,path=vendor/cache. Supported modes: go, node, yarn, pnpm, ruby, rust, python, uv, poetry, apt, buildkit, git, gradle, maven, playwright, custom. Requires a snap=<size> or snap=<name>:<size> label. Linux and Windows (apt, buildkit and git modes are Linux only). Run after actions/checkout for workspace-relative custom paths; git must run before checkout; buildkit must run before docker/setup-buildx-action.'
+    description: 'Newline-separated sticky-disk cache records. Each line is a mode followed by comma-separated key=value options, for example buildkit,fail-on-missing=true or custom,path=vendor/cache. Supported modes: go, node, yarn, pnpm, ruby, rust, python, uv, poetry, apt, buildkit, git, gradle, maven, playwright, custom. Requires a sticky=<size> or sticky=<name>:<size> label. Linux and Windows (apt, buildkit and git modes are Linux only). Run after actions/checkout for workspace-relative custom paths; git must run before checkout; buildkit must run before docker/setup-buildx-action.'
     required: false
     default: ''
   token:

@@ -2,7 +2,6 @@ package stickydisk
 
 import (
 	"sort"
-	"strings"
 
 	"github.com/sethvargo/go-githubactions"
 )
@@ -91,31 +90,4 @@ func ValidModes() []string {
 	}
 	sort.Strings(names)
 	return names
-}
-
-// ResolveModes maps user-provided mode names (already split into a list) to
-// their canonical CacheMode definitions, deduplicating and preserving order.
-// Unknown modes are returned separately so callers can warn about them.
-func ResolveModes(inputs []string) (modes []CacheMode, unknown []string) {
-	seen := map[string]bool{}
-	for _, input := range inputs {
-		name := strings.ToLower(strings.TrimSpace(input))
-		if name == "" {
-			continue
-		}
-		if canonical, ok := modeAliases[name]; ok {
-			name = canonical
-		}
-		mode, ok := cacheModes[name]
-		if !ok {
-			unknown = append(unknown, input)
-			continue
-		}
-		if seen[name] {
-			continue
-		}
-		seen[name] = true
-		modes = append(modes, mode)
-	}
-	return modes, unknown
 }

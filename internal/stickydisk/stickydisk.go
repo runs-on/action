@@ -32,14 +32,10 @@ func supportedOS() bool {
 
 // Options configures the sticky disk cache setup.
 type Options struct {
-	// Modes is the list of cache modes from the `cache` input.
-	Modes []string
-	// Paths is the list of arbitrary paths from the `path` input.
-	Paths []string
-	// WaitTimeout bounds how long to wait for the sticky disk to be ready.
-	WaitTimeout time.Duration
-	// FailOnMissing makes the action fail when no sticky disk is available.
-	FailOnMissing bool
+	// StickyCache is the newline-delimited list of sticky_cache records.
+	StickyCache []string
+	// StickyWaitTimeout bounds how long to wait for the sticky disk to be ready.
+	StickyWaitTimeout time.Duration
 }
 
 type mountResult struct {
@@ -51,8 +47,14 @@ type mountResult struct {
 // Configure bind-mounts the requested cache directories onto the job's sticky
 // disk. It requires a `snap=<size>[:<name>]` label on the job. Mount failures
 // are reported as warnings; only a missing/unready sticky disk combined with
-// FailOnMissing returns an error.
+// fail-on-missing policy returns an error.
 func Configure(action *githubactions.Action, opts Options) error {
+	requests, err := ParseCacheRequests(opts.StickyCache)
+	if err != nil {
+		return err
+	}
+	required := requiredCacheNames(requests)
+
 	if !supportedOS() {
 		action.Warningf("Sticky disk cache is only supported on Linux and Windows runners, skipping.")
 		action.SetOutput("cache-hit", "false")
@@ -66,17 +68,17 @@ func Configure(action *githubactions.Action, opts Options) error {
 
 	if os.Getenv("RUNS_ON_STICKYDISK_DIR") == "" {
 		if _, err := os.Stat(readyFile); os.IsNotExist(err) {
-			return missing(action, opts, "No sticky disk detected. Add a snap=<size>[:<name>] label to your runs-on labels to enable the cache.")
+			return missing(action, required, "No sticky disk detected. Add a snap=<size>[:<name>] label to your runs-on labels to enable the cache.")
 		}
 	}
 
-	timeout := opts.WaitTimeout
+	timeout := opts.StickyWaitTimeout
 	if timeout <= 0 {
 		timeout = defaultWaitTimeout
 	}
 	mountRoot, err := waitForReady(action, readyFile, timeout)
 	if err != nil {
-		return missing(action, opts, err.Error())
+		return missing(action, required, err.Error())
 	}
 	action.Infof("Sticky disk ready at %s (name: %s)", mountRoot, os.Getenv("RUNS_ON_STICKYDISK_NAME"))
 
@@ -97,11 +99,6 @@ func Configure(action *githubactions.Action, opts Options) error {
 		workspace, _ = os.Getwd()
 	}
 
-	modes, unknown := ResolveModes(opts.Modes)
-	for _, name := range unknown {
-		action.Warningf("Unknown cache mode '%s'. Valid modes: %s", name, strings.Join(ValidModes(), ", "))
-	}
-
 	// Resolve all targets, deduplicating by absolute path.
 	type mountSpec struct {
 		target string
@@ -119,7 +116,14 @@ func Configure(action *githubactions.Action, opts Options) error {
 		seen[resolved] = true
 		specs = append(specs, mountSpec{target: resolved, root: root})
 	}
-	for _, mode := range modes {
+	for _, request := range requests {
+		if request.Custom {
+			for _, path := range request.Paths {
+				addTarget(path, false)
+			}
+			continue
+		}
+		mode := request.Mode
 		if !mode.supportedOn(runtime.GOOS) {
 			action.Warningf("Cache mode '%s' is not supported on Windows runners, skipping.", mode.Name)
 			continue
@@ -143,13 +147,6 @@ func Configure(action *githubactions.Action, opts Options) error {
 			posts = append(posts, mode.Post)
 		}
 	}
-	for _, path := range opts.Paths {
-		if strings.TrimSpace(path) == "" {
-			continue
-		}
-		addTarget(strings.TrimSpace(path), false)
-	}
-
 	if len(specs) == 0 && len(results) == 0 {
 		action.Warningf("No cache paths to set up.")
 		action.SetOutput("cache-hit", "false")
@@ -189,11 +186,11 @@ func Configure(action *githubactions.Action, opts Options) error {
 }
 
 // missing handles the no-sticky-disk case: a warning by default, an error
-// when FailOnMissing is set.
-func missing(action *githubactions.Action, opts Options, msg string) error {
+// when at least one requested cache requires the sticky disk.
+func missing(action *githubactions.Action, required []string, msg string) error {
 	action.SetOutput("cache-hit", "false")
-	if opts.FailOnMissing {
-		return fmt.Errorf("%s", msg)
+	if len(required) > 0 {
+		return fmt.Errorf("%s Required sticky caches: %s", msg, strings.Join(required, ", "))
 	}
 	action.Warningf("%s Continuing without cache.", msg)
 	return nil
@@ -229,13 +226,20 @@ func waitForReady(action *githubactions.Action, readyFile string, timeout time.D
 
 // PostJob runs the post-step hooks of the requested cache modes before the
 // sticky disk is unmounted and snapshotted by the runner's job-completed hook.
-func PostJob(action *githubactions.Action, modeNames []string) error {
+func PostJob(action *githubactions.Action, cacheEntries []string) error {
 	if !supportedOS() {
 		return nil
 	}
+	requests, err := ParseCacheRequests(cacheEntries)
+	if err != nil {
+		return err
+	}
 	var fatalErr error
-	modes, _ := ResolveModes(modeNames)
-	for _, mode := range modes {
+	for _, request := range requests {
+		if request.Custom {
+			continue
+		}
+		mode := request.Mode
 		if mode.PostJob == nil || !mode.supportedOn(runtime.GOOS) {
 			continue
 		}

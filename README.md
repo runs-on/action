@@ -324,7 +324,7 @@ echo "SCCACHE_S3_KEY_PREFIX=cache/sccache" >> $GITHUB_ENV
 echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
 ```
 
-### `cache` / `path`
+### `sticky_cache`
 
 Available for Linux and Windows runners on jobs with a sticky-disk label. Use `snap=<size>` for the default snapshot lineage or `snap=<name>:<size>` for a named lineage; the optional name must come first. Volume settings follow the size, for example `snap=go-cache:20gb:gp3:750mbs:6000iops`. The `apt`, `buildkit`, and `git` cache modes are Linux only.
 
@@ -340,10 +340,30 @@ jobs:
       - uses: actions/checkout@v4
       - uses: runs-on/action@v2
         with:
-          cache: |
+          sticky_cache: |
             go
             node
 ```
+
+Each non-empty line is one cache record. A record starts with a mode and may
+include comma-separated `key=value` options. Use one line per mode; the old
+comma-separated mode list is not supported.
+
+```yaml
+with:
+  sticky_cache: |
+    go
+    node
+    buildkit,fail-on-missing=true
+    custom,path=vendor/custom-cache,path=~/.cache/my-tool
+```
+
+Every mode accepts `fail-on-missing=true|false` (default `false`). When true,
+the action fails if the sticky disk is absent or does not become ready before
+`sticky_wait_timeout`. The `custom` mode requires one or more `path=` options;
+repeat the record or option to persist several paths. Relative paths resolve
+from `GITHUB_WORKSPACE`, `~/` resolves from the runner home, and absolute paths
+are preserved. Literal commas in paths are unsupported.
 
 Supported cache modes and the directories they persist:
 
@@ -364,6 +384,7 @@ Supported cache modes and the directories they persist:
 | `gradle` | | `~/.gradle/caches`, `~/.gradle/wrapper` |
 | `maven` | | `~/.m2/repository` |
 | `playwright` | | `~/.cache/ms-playwright` |
+| `custom` | | One or more paths supplied with `path=` |
 
 #### `buildkit` mode (Docker layer cache)
 
@@ -378,7 +399,7 @@ jobs:
       - id: runs-on
         uses: runs-on/action@v2
         with:
-          cache: buildkit
+          sticky_cache: buildkit,fail-on-missing=true
       - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
         with:
           name: ${{ steps.runs-on.outputs.buildkit-builder }}
@@ -423,11 +444,11 @@ jobs:
     steps:
       - uses: runs-on/action@v2
         with:
-          cache: git
+          sticky_cache: git
       - uses: actions/checkout@v4
 ```
 
-To combine it with workspace-relative `path:` caching (which must run after checkout), run the action twice — the second invocation reuses the already-running proxy.
+To combine it with workspace-relative `custom,path=...` caching (which must run after checkout), run the action twice — the second invocation reuses the already-running proxy.
 
 Notes and limitations:
 
@@ -435,14 +456,13 @@ Notes and limitations:
 * `git push` is pinned to upstream (`pushInsteadOf`) and never goes through the proxy; Git LFS and anything else the proxy cannot serve is transparently forwarded to github.com. If mirroring fails for any reason, fetches fall back to upstream — the mode never breaks a build.
 * SSH remotes (`git@github.com:`) are not rewritten, and container jobs (`container:`) are not accelerated (the proxy listens on the host's loopback). GitHub Enterprise Server is not supported. Linux only.
 
-Use the `path` input to persist arbitrary additional paths (newline separated). Relative paths are resolved against the workspace, so run this action **after** `actions/checkout` when caching workspace-relative paths (e.g. `vendor/bundle`).
+Use `custom,path=...` records to persist arbitrary additional paths. Relative paths are resolved against the workspace, so run this action **after** `actions/checkout` when caching workspace-relative paths (e.g. `custom,path=vendor/bundle`).
 
 **Disk pressure:** the buildkit cache uses BuildKit's default garbage collection. Other cache modes have no native GC: when the volume drops below 20% free space (or 10% free inodes), the post step emits a warning and a job summary with a per-cache breakdown — increase the `snap=` label size to fix. If a volume is ever critically full at job start (<5% free space or inodes), all caches on it are automatically reset so the job runs cold instead of failing with "no space left on device", and the next snapshot starts clean.
 
 Other related inputs:
 
-* `wait_timeout` - how long to wait for the sticky disk to be ready (default `5m`)
-* `fail_on_missing` - fail the step when no sticky disk is available instead of continuing without cache (default `false`)
+* `sticky_wait_timeout` - how long to wait for the sticky disk to be ready, as a Go duration (default `5m`)
 
 The action sets a `cache-hit` output: `true` when every requested path was restored from a previous snapshot. It also sets `buildkit-builder` to the stable builder name and `buildkit-inline-config` to the ECR mirror TOML described above.
 

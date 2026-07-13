@@ -12,6 +12,7 @@ on:
 
 jobs:
   cold:
+    if: github.event_name == 'workflow_dispatch'
     strategy:
       fail-fast: false
       max-parallel: 1
@@ -21,7 +22,7 @@ jobs:
             version: v0.34.1
           - id: latest
             version: latest
-    runs-on: runs-on/fleet=benchmark-posthog-sticky/env=dev
+    runs-on: runs-on=${{ github.run_id }}/cpu=2/family=m7/image=ubuntu24-full-x64/snap=buildkit-${{ github.run_id }}:20gb
     steps:
       - uses: actions/checkout@v6
       - id: runs-on
@@ -48,8 +49,15 @@ jobs:
           printf 'FROM busybox:1.36\nRUN dd if=/dev/zero of=/layer.bin bs=1M count=16\n' > /tmp/runs-on-buildkit-test/Dockerfile
           docker buildx build --builder "${{ steps.runs-on.outputs.buildkit-builder }}" --progress=plain --load --tag runs-on-buildkit-test:cold /tmp/runs-on-buildkit-test
 
-  warm:
+  wait-for-snapshot:
     needs: cold
+    runs-on: ubuntu-slim
+    steps:
+      - name: Wait for the cold snapshot to become selectable
+        run: sleep 45
+
+  warm:
+    needs: wait-for-snapshot
     strategy:
       fail-fast: false
       max-parallel: 1
@@ -59,7 +67,7 @@ jobs:
             version: v0.34.1
           - id: latest
             version: latest
-    runs-on: runs-on/fleet=benchmark-posthog-sticky/env=dev
+    runs-on: runs-on=${{ github.run_id }}/cpu=2/family=m7/image=ubuntu24-full-x64/snap=buildkit-${{ github.run_id }}:20gb
     steps:
       - uses: actions/checkout@v6
       - id: runs-on

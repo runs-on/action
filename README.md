@@ -354,12 +354,11 @@ with:
   sticky_cache: |
     go
     node
-    buildkit,fail-on-missing=true
+    buildkit
     custom,path=vendor/custom-cache,path=~/.cache/my-tool
 ```
 
-Every mode accepts `fail-on-missing=true|false` (default `false`). When true,
-the action fails if the sticky disk is absent or does not become ready before
+The action fails if the sticky disk is absent or does not become ready before
 `sticky_wait_timeout`. The `custom` mode requires one or more `path=` options;
 repeat the record or option to persist several paths. Relative paths resolve
 from `GITHUB_WORKSPACE`, `~/` resolves from the runner home, and absolute paths
@@ -399,7 +398,7 @@ jobs:
       - id: runs-on
         uses: runs-on/action@v2
         with:
-          sticky_cache: buildkit,fail-on-missing=true
+          sticky_cache: buildkit
       - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
         with:
           name: ${{ steps.runs-on.outputs.buildkit-builder }}

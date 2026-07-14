@@ -8,7 +8,7 @@ import (
 )
 
 func TestStickyCacheInputs(t *testing.T) {
-	t.Setenv("INPUT_STICKY_CACHE", " go \n\n buildkit,fail-on-missing=true \n custom,path=vendor/cache ")
+	t.Setenv("INPUT_STICKY_CACHE", " go \n\n buildkit \n custom,path=vendor/cache ")
 	t.Setenv("INPUT_STICKY_WAIT_TIMEOUT", "90s")
 
 	cfg, err := NewConfigFromInputs(githubactions.New())
@@ -18,7 +18,7 @@ func TestStickyCacheInputs(t *testing.T) {
 	if len(cfg.StickyCache) != 3 {
 		t.Fatalf("StickyCache = %#v, want three records", cfg.StickyCache)
 	}
-	if got, want := cfg.StickyCache[1], "buildkit,fail-on-missing=true"; got != want {
+	if got, want := cfg.StickyCache[1], "buildkit"; got != want {
 		t.Fatalf("StickyCache[1] = %q, want %q", got, want)
 	}
 	if got, want := cfg.StickyWaitTimeout, 90*time.Second; got != want {

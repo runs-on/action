@@ -29,8 +29,8 @@ jobs:
         uses: ./
         with:
           sticky_cache: |
-            buildkit,fail-on-missing=true
-            custom,path=.runs-on-custom-cache/${{ matrix.id }},fail-on-missing=true
+            buildkit
+            custom,path=.runs-on-custom-cache/${{ matrix.id }}
       - name: Populate custom cache
         run: echo "${{ matrix.id }}" > .runs-on-custom-cache/${{ matrix.id }}/marker
       - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
@@ -74,8 +74,8 @@ jobs:
         uses: ./
         with:
           sticky_cache: |
-            buildkit,fail-on-missing=true
-            custom,path=.runs-on-custom-cache/${{ matrix.id }},fail-on-missing=true
+            buildkit
+            custom,path=.runs-on-custom-cache/${{ matrix.id }}
       - name: Verify restored state
         env:
           CACHE_HIT: ${{ steps.runs-on.outputs.cache-hit }}
@@ -99,16 +99,16 @@ jobs:
           docker buildx build --builder "${{ steps.runs-on.outputs.buildkit-builder }}" --progress=plain --load --tag runs-on-buildkit-test:warm /tmp/runs-on-buildkit-test 2>&1 | tee /tmp/runs-on-buildkit.log
           grep -q 'CACHED' /tmp/runs-on-buildkit.log
 
-  missing-required-cache:
+  missing-sticky-disk:
     runs-on: runs-on=${{ github.run_id }}/cpu=2/family=m7/image=ubuntu24-full-x64
     steps:
       - uses: actions/checkout@v6
-      - id: required_cache
+      - id: sticky_cache
         continue-on-error: true
         uses: ./
         with:
-          sticky_cache: buildkit,fail-on-missing=true
-      - name: Verify missing required cache failed
+          sticky_cache: buildkit
+      - name: Verify missing sticky disk failed
         env:
-          OUTCOME: ${{ steps.required_cache.outcome }}
+          OUTCOME: ${{ steps.sticky_cache.outcome }}
         run: test "$OUTCOME" = failure

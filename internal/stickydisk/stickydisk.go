@@ -46,14 +46,13 @@ type mountResult struct {
 
 // Configure bind-mounts the requested cache directories onto the job's sticky
 // disk. It requires a `sticky=[<name>:]<size>` label on the job. Mount failures
-// are reported as warnings; only a missing/unready sticky disk combined with
-// fail-on-missing policy returns an error.
+// are reported as warnings. A missing or unready sticky disk returns an error
+// because sticky_cache explicitly requires persistent storage.
 func Configure(action *githubactions.Action, opts Options) error {
 	requests, err := ParseCacheRequests(opts.StickyCache)
 	if err != nil {
 		return err
 	}
-	required := requiredCacheNames(requests)
 
 	if !supportedOS() {
 		action.Warningf("Sticky disk cache is only supported on Linux and Windows runners, skipping.")
@@ -68,7 +67,7 @@ func Configure(action *githubactions.Action, opts Options) error {
 
 	if os.Getenv("RUNS_ON_STICKYDISK_DIR") == "" {
 		if _, err := os.Stat(readyFile); os.IsNotExist(err) {
-			return missing(action, required, "No sticky disk detected. Add a sticky=[<name>:]<size> label to your runs-on labels to enable the cache.")
+			return missing(action, "No sticky disk detected. Add a sticky=[<name>:]<size> label to your runs-on labels to enable the cache.")
 		}
 	}
 
@@ -78,7 +77,7 @@ func Configure(action *githubactions.Action, opts Options) error {
 	}
 	mountRoot, err := waitForReady(action, readyFile, timeout)
 	if err != nil {
-		return missing(action, required, err.Error())
+		return missing(action, err.Error())
 	}
 	action.Infof("Sticky disk ready at %s (name: %s)", mountRoot, os.Getenv("RUNS_ON_STICKYDISK_NAME"))
 
@@ -185,15 +184,11 @@ func Configure(action *githubactions.Action, opts Options) error {
 	return nil
 }
 
-// missing handles the no-sticky-disk case: a warning by default, an error
-// when at least one requested cache requires the sticky disk.
-func missing(action *githubactions.Action, required []string, msg string) error {
+// missing handles the no-sticky-disk case. Requesting sticky_cache is an
+// explicit persistence contract, so absence or readiness timeout is fatal.
+func missing(action *githubactions.Action, msg string) error {
 	action.SetOutput("cache-hit", "false")
-	if len(required) > 0 {
-		return fmt.Errorf("%s Required sticky caches: %s", msg, strings.Join(required, ", "))
-	}
-	action.Warningf("%s Continuing without cache.", msg)
-	return nil
+	return errors.New(msg)
 }
 
 // waitForReady polls the ready file until it exists or the timeout elapses,

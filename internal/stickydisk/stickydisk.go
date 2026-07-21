@@ -26,6 +26,15 @@ func defaultReadyFile() string {
 	return "/runs-on/stickydisk.ready"
 }
 
+// defaultUnavailableFile mirrors the agent fallback path; normally the agent
+// publishes RUNS_ON_STICKYDISK_UNAVAILABLE_FILE in the runner environment.
+func defaultUnavailableFile() string {
+	if runtime.GOOS == "windows" {
+		return `C:\runs-on\stickydisk.unavailable`
+	}
+	return "/runs-on/stickydisk.unavailable"
+}
+
 func supportedOS() bool {
 	return runtime.GOOS == "linux" || runtime.GOOS == "windows"
 }
@@ -64,8 +73,15 @@ func Configure(action *githubactions.Action, opts Options) error {
 	if readyFile == "" {
 		readyFile = defaultReadyFile()
 	}
+	unavailableFile := os.Getenv("RUNS_ON_STICKYDISK_UNAVAILABLE_FILE")
+	if unavailableFile == "" {
+		unavailableFile = defaultUnavailableFile()
+	}
 
 	if os.Getenv("RUNS_ON_STICKYDISK_DIR") == "" {
+		if _, err := os.Stat(unavailableFile); err == nil {
+			return missing(action, fmt.Sprintf("sticky disk is unavailable (marker: %s)", unavailableFile))
+		}
 		if _, err := os.Stat(readyFile); os.IsNotExist(err) {
 			return missing(action, "No sticky disk detected. Add a sticky=[<name>:]<size> label to your runs-on labels to enable the cache.")
 		}
@@ -75,7 +91,7 @@ func Configure(action *githubactions.Action, opts Options) error {
 	if timeout <= 0 {
 		timeout = defaultWaitTimeout
 	}
-	mountRoot, err := waitForReady(action, readyFile, timeout)
+	mountRoot, err := waitForReady(action, readyFile, unavailableFile, timeout)
 	if err != nil {
 		return missing(action, err.Error())
 	}
@@ -191,12 +207,15 @@ func missing(action *githubactions.Action, msg string) error {
 	return errors.New(msg)
 }
 
-// waitForReady polls the ready file until it exists or the timeout elapses,
-// returning the sticky disk mount root.
-func waitForReady(action *githubactions.Action, readyFile string, timeout time.Duration) (string, error) {
+// waitForReady polls until the agent publishes either the mounted-ready marker
+// or the terminal-unavailable marker, bounded by timeout.
+func waitForReady(action *githubactions.Action, readyFile string, unavailableFile string, timeout time.Duration) (string, error) {
 	deadline := time.Now().Add(timeout)
 	logged := false
 	for {
+		if _, err := os.Stat(unavailableFile); err == nil {
+			return "", fmt.Errorf("sticky disk is unavailable (marker: %s)", unavailableFile)
+		}
 		content, err := os.ReadFile(readyFile)
 		if err == nil {
 			mountRoot := strings.TrimSpace(string(content))

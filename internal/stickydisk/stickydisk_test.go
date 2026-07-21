@@ -1,6 +1,8 @@
 package stickydisk
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -98,9 +100,27 @@ func TestMissingDiskIsFatal(t *testing.T) {
 
 func TestWaitForReadyTimesOut(t *testing.T) {
 	action := githubactions.New()
-	_, err := waitForReady(action, t.TempDir()+"/missing", time.Millisecond)
+	_, err := waitForReady(action, t.TempDir()+"/missing", t.TempDir()+"/unavailable", time.Millisecond)
 	if err == nil || !strings.Contains(err.Error(), "sticky disk was not ready") {
 		t.Fatalf("unexpected timeout error: %v", err)
+	}
+}
+
+func TestWaitForReadyFailsImmediatelyWhenDiskIsUnavailable(t *testing.T) {
+	root := t.TempDir()
+	unavailableFile := filepath.Join(root, "stickydisk.unavailable")
+	if err := os.WriteFile(unavailableFile, []byte("sticky disk unavailable\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	action := githubactions.New()
+	started := time.Now()
+	_, err := waitForReady(action, filepath.Join(root, "stickydisk.ready"), unavailableFile, time.Minute)
+	if err == nil || !strings.Contains(err.Error(), "sticky disk is unavailable") {
+		t.Fatalf("unexpected unavailable error: %v", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("unavailable marker was not handled immediately: %s", elapsed)
 	}
 }
 

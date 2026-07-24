@@ -86,6 +86,33 @@ func TestParseCacheRequestsRejectsInvalidRecords(t *testing.T) {
 	}
 }
 
+func TestValidateCacheOrdering(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		entries []string
+		wantErr bool
+	}{
+		{name: "git with home cache", entries: []string{"git", "go"}},
+		{name: "git with absolute custom cache", entries: []string{"git", "custom,path=/opt/cache"}},
+		{name: "git with ruby workspace cache", entries: []string{"git", "ruby"}, wantErr: true},
+		{name: "git with relative custom cache", entries: []string{"git", "custom,path=vendor/cache"}, wantErr: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			requests, err := ParseCacheRequests(tt.entries)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = validateCacheOrdering(requests, "linux")
+			if tt.wantErr && (err == nil || !strings.Contains(err.Error(), "second runs-on/action step")) {
+				t.Fatalf("validation error = %v", err)
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("validation failed: %v", err)
+			}
+		})
+	}
+}
+
 func TestMissingDiskIsFatal(t *testing.T) {
 	t.Setenv("GITHUB_OUTPUT", t.TempDir()+"/output")
 	action := githubactions.New()

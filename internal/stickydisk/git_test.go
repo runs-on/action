@@ -2,6 +2,7 @@ package stickydisk
 
 import (
 	"encoding/base64"
+	"errors"
 	"os"
 	"os/exec"
 	"strings"
@@ -55,6 +56,33 @@ func TestConfigureAndRemoveGitProxyRewrites(t *testing.T) {
 		if strings.Contains(cfg, gone) {
 			t.Errorf("global config still contains %q after cleanup:\n%s", gone, cfg)
 		}
+	}
+}
+
+func TestConfigureGitProxyRewritesRollsBackPartialConfig(t *testing.T) {
+	t.Setenv("INPUT_TOKEN", "test-token")
+	action := githubactions.New(githubactions.WithWriter(os.Stderr))
+
+	setCalls := 0
+	rollbackCalls := 0
+	set := func(string, string) error {
+		setCalls++
+		if setCalls == 2 {
+			return os.ErrPermission
+		}
+		return nil
+	}
+	rollback := func() error {
+		rollbackCalls++
+		return nil
+	}
+
+	err := configureGitProxyRewritesWith(action, 8123, set, rollback)
+	if !errors.Is(err, os.ErrPermission) {
+		t.Fatalf("configure error = %v", err)
+	}
+	if rollbackCalls != 1 {
+		t.Fatalf("rollback calls = %d, want 1", rollbackCalls)
 	}
 }
 

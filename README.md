@@ -447,7 +447,7 @@ jobs:
       - uses: actions/checkout@v4
 ```
 
-To combine it with workspace-relative `custom,path=...` caching (which must run after checkout), run the action twice — the second invocation reuses the already-running proxy.
+To combine it with any workspace-relative cache, including `ruby` (`vendor/bundle`) or a relative `custom,path=...`, run the action twice: use `git` before checkout, then run the workspace-relative cache after checkout. The second invocation reuses the already-running proxy. Combining them in one invocation fails early so a workspace mount cannot interfere with checkout.
 
 Notes and limitations:
 

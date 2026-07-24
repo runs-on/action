@@ -2,6 +2,7 @@ package stickydisk
 
 import (
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -135,17 +136,31 @@ func gitProxyHealthy(port int) bool {
 //     rewrite, checkout's own http.https://github.com/.extraheader no longer
 //     matches the effective URL.
 func configureGitProxyRewrites(action *githubactions.Action, port int) error {
+	return configureGitProxyRewritesWith(action, port, gitConfigSet, removeGitProxyRewrites)
+}
+
+func configureGitProxyRewritesWith(action *githubactions.Action, port int, set func(string, string) error, rollback func() error) (err error) {
 	proxyBase := fmt.Sprintf("http://127.0.0.1:%d/", port)
-	if err := gitConfigSet(fmt.Sprintf("url.%sgithub.com/.insteadOf", proxyBase), "https://github.com/"); err != nil {
+	applied := false
+	defer func() {
+		if err != nil && applied {
+			if rollbackErr := rollback(); rollbackErr != nil {
+				err = errors.Join(err, fmt.Errorf("roll back partial git proxy rewrites: %w", rollbackErr))
+			}
+		}
+	}()
+
+	if err := set(fmt.Sprintf("url.%sgithub.com/.insteadOf", proxyBase), "https://github.com/"); err != nil {
 		return err
 	}
-	if err := gitConfigSet("url.https://github.com/.pushInsteadOf", "https://github.com/"); err != nil {
+	applied = true
+	if err := set("url.https://github.com/.pushInsteadOf", "https://github.com/"); err != nil {
 		return err
 	}
 	if token := action.GetInput("token"); token != "" {
 		b64 := base64.StdEncoding.EncodeToString([]byte("x-access-token:" + token))
 		action.AddMask(b64)
-		if err := gitConfigSet(fmt.Sprintf("http.%s.extraheader", proxyBase), "AUTHORIZATION: basic "+b64); err != nil {
+		if err := set(fmt.Sprintf("http.%s.extraheader", proxyBase), "AUTHORIZATION: basic "+b64); err != nil {
 			return err
 		}
 	} else {

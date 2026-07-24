@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -223,6 +224,15 @@ func (m *Mirror) syncRepo(ctx context.Context, repoPath, upstreamURL, authHeader
 // HasObject reports whether the mirror repo contains the given object.
 func (m *Mirror) HasObject(ctx context.Context, repoPath, oid string) bool {
 	return exec.CommandContext(ctx, "git", "--git-dir", repoPath, "cat-file", "-e", oid).Run() == nil
+}
+
+// IsUsable reports whether repoPath is a valid bare repository. A failed
+// info/refs mirror clone is followed by a want-less protocol-v2 ls-refs POST,
+// so upload-pack must check the repository itself rather than relying only on
+// wanted-object checks.
+func (m *Mirror) IsUsable(ctx context.Context, repoPath string) bool {
+	out, err := exec.CommandContext(ctx, "git", "--git-dir", repoPath, "rev-parse", "--is-bare-repository").Output()
+	return err == nil && strings.TrimSpace(string(out)) == "true"
 }
 
 // optimizeRepo runs maintenance tasks: bitmaps and commit-graphs make

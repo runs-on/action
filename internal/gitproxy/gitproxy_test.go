@@ -338,5 +338,21 @@ func TestServerFallbacks(t *testing.T) {
 		if len(requests) == 0 || requests[len(requests)-1].path != "/missing/repo/info/refs" {
 			t.Errorf("upstream saw %+v", requests)
 		}
+
+		// Protocol v2 follows info/refs with a want-less ls-refs command. The
+		// absent mirror must not be handed to git http-backend.
+		requests = nil
+		lsRefs := pkt("command=ls-refs") + "0001" + pkt("peel\n") + "0000"
+		resp, err = http.Post(ts.URL+"/github.com/missing/repo/git-upload-pack", "application/x-git-upload-pack-request", strings.NewReader(lsRefs))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		if got := resp.Header.Get(statusHeader); got != "upstream-mirror-unavailable" {
+			t.Errorf("%s = %q", statusHeader, got)
+		}
+		if len(requests) != 1 || requests[0].path != "/missing/repo/git-upload-pack" || requests[0].body != lsRefs {
+			t.Errorf("upstream saw %+v", requests)
+		}
 	})
 }

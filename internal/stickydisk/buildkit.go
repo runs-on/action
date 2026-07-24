@@ -209,25 +209,28 @@ func cleanupBuildkit(action *githubactions.Action) error {
 	}
 
 	container, err := inspectBuildkitContainer()
-	if err != nil {
-		return errors.Join(topologyErr, err)
-	}
-	if !containerUsesBuildkitVolume(container) {
-		return errors.Join(topologyErr, fmt.Errorf("Buildx container %s did not mount expected volume %s at %s; the pinned Buildx volume contract may have changed", buildkitContainerName, buildkitStateVolumeName, buildkitStateTarget))
+	verificationErr := err
+	if err == nil {
+		if !containerUsesBuildkitVolume(container) {
+			verificationErr = fmt.Errorf("Buildx container %s did not mount expected volume %s at %s; the pinned Buildx volume contract may have changed", buildkitContainerName, buildkitStateVolumeName, buildkitStateTarget)
+		} else {
+			action.Infof("Verified sticky BuildKit state mount: %s -> %s", stateRoot, buildkitStateTarget)
+		}
 	}
 
-	action.Infof("Verified sticky BuildKit state mount: %s -> %s", stateRoot, buildkitStateTarget)
+	// Inspection failures must not skip shutdown: snapshot consistency still
+	// requires best-effort removal of the builder, container, and volume.
 	stopErr := runLogged(action, "docker", "stop", "--time", fmt.Sprintf("%.0f", buildkitStopWait.Seconds()), buildkitContainerName)
-	if err := removeBuildkitBuilder(action); err != nil {
-		return fmt.Errorf("remove BuildKit builder: %w", err)
-	}
-	if err := removeDockerVolume(buildkitStateVolumeName); err != nil {
-		return errors.Join(topologyErr, err)
-	}
+	builderErr := removeBuildkitBuilder(action)
+	volumeErr := removeDockerVolume(buildkitStateVolumeName)
+
 	if stopErr != nil {
-		return errors.Join(topologyErr, fmt.Errorf("BuildKit did not stop cleanly before forced cleanup: %w", stopErr))
+		stopErr = fmt.Errorf("BuildKit did not stop cleanly before forced cleanup: %w", stopErr)
 	}
-	return topologyErr
+	if builderErr != nil {
+		builderErr = fmt.Errorf("remove BuildKit builder: %w", builderErr)
+	}
+	return errors.Join(topologyErr, verificationErr, stopErr, builderErr, volumeErr)
 }
 
 func removeBuildkitBuilder(action *githubactions.Action) error {

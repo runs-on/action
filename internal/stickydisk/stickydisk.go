@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -67,6 +68,9 @@ func Configure(action *githubactions.Action, opts Options) error {
 		action.Warningf("Sticky disk cache is only supported on Linux and Windows runners, skipping.")
 		action.SetOutput("cache-hit", "false")
 		return nil
+	}
+	if err := validateCacheOrdering(requests, runtime.GOOS); err != nil {
+		return err
 	}
 
 	// Self-hosted runners reuse /tmp across jobs, so clear a cancelled prior
@@ -203,6 +207,39 @@ func Configure(action *githubactions.Action, opts Options) error {
 		action.Infof("  %-10s %s", status, res.Target)
 	}
 	action.SetOutput("cache-hit", strconv.FormatBool(allHit))
+	return nil
+}
+
+func validateCacheOrdering(requests []CacheRequest, goos string) error {
+	if goos == "windows" {
+		return nil
+	}
+
+	hasGit := false
+	var workspaceModes []string
+	for _, request := range requests {
+		if !request.Custom && request.Mode.Name == "git" {
+			hasGit = true
+			continue
+		}
+
+		paths := request.Paths
+		name := "custom"
+		if !request.Custom {
+			name = request.Mode.Name
+			paths = request.Mode.pathsFor(goos)
+		}
+		for _, path := range paths {
+			if !filepath.IsAbs(path) && path != "~" && !strings.HasPrefix(path, "~/") {
+				workspaceModes = append(workspaceModes, name)
+				break
+			}
+		}
+	}
+
+	if hasGit && len(workspaceModes) > 0 {
+		return fmt.Errorf("git cache mode cannot be combined with workspace-relative cache modes (%s) in one invocation; run git before checkout, then run workspace-relative caches in a second runs-on/action step after checkout", strings.Join(workspaceModes, ", "))
+	}
 	return nil
 }
 

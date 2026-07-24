@@ -1,7 +1,6 @@
 package config
 
 import (
-	"fmt"
 	"os"
 	"runtime"
 	"strconv"
@@ -66,16 +65,6 @@ func NewConfigFromInputs(action *githubactions.Action) (*Config, error) {
 	}
 
 	cfg.Sccache = action.GetInput("sccache")
-
-	var legacyInputs []string
-	for _, name := range []string{"cache", "path", "wait_timeout", "fail_on_missing"} {
-		if action.GetInput(name) != "" {
-			legacyInputs = append(legacyInputs, name)
-		}
-	}
-	if len(legacyInputs) > 0 {
-		return nil, fmt.Errorf("legacy input(s) %s are no longer supported; use sticky_cache and sticky_wait_timeout (sticky cache requests now always fail when the disk is unavailable)", strings.Join(legacyInputs, ", "))
-	}
 
 	stickyCacheInput := action.GetInput("sticky_cache")
 	if stickyCacheInput != "" {

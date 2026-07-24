@@ -36,11 +36,20 @@ func TestStickyWaitTimeoutDefaultsToFiveMinutes(t *testing.T) {
 	}
 }
 
-func TestLegacyStickyCacheInputsFailLoudly(t *testing.T) {
+func TestUndeclaredLegacyInputsRemainIgnored(t *testing.T) {
 	t.Setenv("INPUT_CACHE", "go,buildkit")
 	t.Setenv("INPUT_PATH", "vendor/cache")
+	t.Setenv("INPUT_WAIT_TIMEOUT", "1s")
+	t.Setenv("INPUT_FAIL_ON_MISSING", "true")
 
-	if _, err := NewConfigFromInputs(githubactions.New()); err == nil {
-		t.Fatal("expected removed cache and path inputs to return an error")
+	cfg, err := NewConfigFromInputs(githubactions.New())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.StickyCache) != 0 {
+		t.Fatalf("StickyCache = %#v, want undeclared legacy inputs ignored", cfg.StickyCache)
+	}
+	if got, want := cfg.StickyWaitTimeout, 5*time.Minute; got != want {
+		t.Fatalf("StickyWaitTimeout = %s, want %s", got, want)
 	}
 }

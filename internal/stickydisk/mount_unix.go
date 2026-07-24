@@ -22,6 +22,10 @@ func isMountpoint(path string) bool {
 // The returned hit indicates whether the source directory already had content
 // (i.e. was restored from a previous snapshot).
 func cacheMount(action *githubactions.Action, mountRoot, target string, rootOwned bool) (hit bool, err error) {
+	if err := validateCacheDirectory(target); err != nil {
+		return false, err
+	}
+
 	src := filepath.Join(mountRoot, "mounts", sourceDirName(target))
 	hit = dirNonEmpty(src)
 

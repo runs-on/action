@@ -1,6 +1,8 @@
 package stickydisk
 
 import (
+	"os"
+	"path/filepath"
 	"sort"
 
 	"github.com/sethvargo/go-githubactions"
@@ -41,7 +43,7 @@ var cacheModes = map[string]CacheMode{
 	"go":         {Name: "go", Paths: []string{"~/.cache/go-build", "~/go/pkg/mod"}, WindowsPaths: []string{"~/AppData/Local/go-build", "~/go/pkg/mod"}},
 	"node":       {Name: "node", Paths: []string{"~/.npm"}, WindowsPaths: []string{"~/AppData/Local/npm-cache"}},
 	"yarn":       {Name: "yarn", Paths: []string{"~/.cache/yarn"}, WindowsPaths: []string{"~/AppData/Local/Yarn/Cache"}},
-	"pnpm":       {Name: "pnpm", Paths: []string{"~/.pnpm-store"}, WindowsPaths: []string{"~/AppData/Local/pnpm/store"}},
+	"pnpm":       {Name: "pnpm", Paths: []string{"~/.local/share/pnpm/store"}, WindowsPaths: []string{"~/AppData/Local/pnpm/store"}},
 	"ruby":       {Name: "ruby", Paths: []string{"~/.bundle", "vendor/bundle"}},
 	"rust":       {Name: "rust", Paths: []string{"~/.cargo/registry", "~/.cargo/git"}},
 	"python":     {Name: "python", Paths: []string{"~/.cache/pip"}, WindowsPaths: []string{"~/AppData/Local/pip/cache"}},
@@ -69,6 +71,11 @@ var modeAliases = map[string]string{
 func (m CacheMode) pathsFor(goos string) []string {
 	if goos == "windows" && len(m.WindowsPaths) > 0 {
 		return m.WindowsPaths
+	}
+	if m.Name == "pnpm" {
+		if dataHome := os.Getenv("XDG_DATA_HOME"); dataHome != "" {
+			return []string{filepath.Join(dataHome, "pnpm", "store")}
+		}
 	}
 	return m.Paths
 }

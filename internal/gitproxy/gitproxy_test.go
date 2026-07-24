@@ -67,6 +67,7 @@ func newTestServer(t *testing.T, upstreamBase string) *Server {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(server.Close)
 	if upstreamBase != "" {
 		server.upstreamBase = func(host string) string { return upstreamBase }
 	}
@@ -161,6 +162,7 @@ func TestMirrorEnsureRepo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer mirror.Close()
 	upstreamURL := upstreamBase + "/owner/repo.git"
 	ctx := t.Context()
 

@@ -163,6 +163,23 @@ func TestSourceDirName(t *testing.T) {
 	}
 }
 
+func TestValidateCacheDirectoryRejectsFiles(t *testing.T) {
+	root := t.TempDir()
+	file := filepath.Join(root, ".eslintcache")
+	if err := os.WriteFile(file, []byte("cache"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateCacheDirectory(file); err == nil || !strings.Contains(err.Error(), "not a directory") {
+		t.Fatalf("file validation error = %v", err)
+	}
+	if err := validateCacheDirectory(root); err != nil {
+		t.Fatalf("directory validation failed: %v", err)
+	}
+	if err := validateCacheDirectory(filepath.Join(root, "missing")); err != nil {
+		t.Fatalf("missing directory validation failed: %v", err)
+	}
+}
+
 func TestBuildkitMode(t *testing.T) {
 	for _, name := range []string{"buildkit", "buildx"} {
 		requests, err := ParseCacheRequests([]string{name})
@@ -230,6 +247,7 @@ func TestValidModesContainsCore(t *testing.T) {
 }
 
 func TestModePathsForWindows(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", "")
 	golang := cacheModes["go"]
 	linuxPaths := strings.Join(golang.pathsFor("linux"), ",")
 	if !strings.Contains(linuxPaths, "~/.cache/go-build") {
@@ -243,6 +261,14 @@ func TestModePathsForWindows(t *testing.T) {
 	rust := cacheModes["rust"]
 	if strings.Join(rust.pathsFor("windows"), ",") != strings.Join(rust.Paths, ",") {
 		t.Errorf("rust paths should be identical on windows")
+	}
+	pnpm := cacheModes["pnpm"]
+	if got := strings.Join(pnpm.pathsFor("linux"), ","); !strings.Contains(got, "~/.local/share/pnpm/store") {
+		t.Errorf("unexpected pnpm Linux paths: %s", got)
+	}
+	t.Setenv("XDG_DATA_HOME", "/tmp/xdg")
+	if got, want := strings.Join(pnpm.pathsFor("linux"), ","), "/tmp/xdg/pnpm/store"; got != want {
+		t.Errorf("pnpm XDG path = %s, want %s", got, want)
 	}
 }
 

@@ -63,6 +63,7 @@ func runFromEnv(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	defer server.Close()
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

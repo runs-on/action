@@ -38,9 +38,14 @@ type Mirror struct {
 	root       string
 	staleAfter time.Duration
 	log        *slog.Logger
+	ctx        context.Context
+	cancel     context.CancelFunc
 
 	group      singleflight.Group
 	maintGroup singleflight.Group
+	maintMu    sync.Mutex
+	maintWG    sync.WaitGroup
+	closed     bool
 	lastSync   sync.Map // map[repoKey]time.Time
 }
 
@@ -52,7 +57,8 @@ func NewMirror(root string, staleAfter time.Duration, log *slog.Logger) (*Mirror
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return nil, fmt.Errorf("create mirror root: %w", err)
 	}
-	return &Mirror{root: root, staleAfter: staleAfter, log: log}, nil
+	ctx, cancel := context.WithCancel(context.Background())
+	return &Mirror{root: root, staleAfter: staleAfter, log: log, ctx: ctx, cancel: cancel}, nil
 }
 
 // RepoPath returns the filesystem path for a repo mirror.
@@ -247,12 +253,33 @@ func (m *Mirror) optimizeRepo(ctx context.Context, repoPath string, full bool) {
 // scheduleOptimize runs optimizeRepo in the background with a per-repo
 // singleflight to avoid concurrent maintenance.
 func (m *Mirror) scheduleOptimize(repoPath string, full bool) {
+	m.maintMu.Lock()
+	if m.closed {
+		m.maintMu.Unlock()
+		return
+	}
+	m.maintWG.Add(1)
+	m.maintMu.Unlock()
+
 	go func() {
+		defer m.maintWG.Done()
 		m.maintGroup.Do(repoPath, func() (interface{}, error) {
-			m.optimizeRepo(context.Background(), repoPath, full)
+			m.optimizeRepo(m.ctx, repoPath, full)
 			return nil, nil
 		})
 	}()
+}
+
+// Close cancels and joins background repository maintenance so no git child
+// can keep writing to the sticky disk after the proxy exits for snapshotting.
+func (m *Mirror) Close() {
+	m.maintMu.Lock()
+	if !m.closed {
+		m.closed = true
+		m.cancel()
+	}
+	m.maintMu.Unlock()
+	m.maintWG.Wait()
 }
 
 // gitEnv returns the environment for git commands talking to upstream. The

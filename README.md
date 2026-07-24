@@ -371,7 +371,7 @@ Supported cache modes and the directories they persist:
 | `go` | `golang` | `~/.cache/go-build`, `~/go/pkg/mod` |
 | `node` | `npm` | `~/.npm` |
 | `yarn` | | `~/.cache/yarn` |
-| `pnpm` | | `~/.pnpm-store` |
+| `pnpm` | | `~/.local/share/pnpm/store` (or `$XDG_DATA_HOME/pnpm/store`) |
 | `ruby` | `bundler` | `~/.bundle`, `vendor/bundle` |
 | `rust` | `cargo` | `~/.cargo/registry`, `~/.cargo/git` |
 | `python` | `pip` | `~/.cache/pip` |
@@ -455,7 +455,7 @@ Notes and limitations:
 * `git push` is pinned to upstream (`pushInsteadOf`) and never goes through the proxy; Git LFS and anything else the proxy cannot serve is transparently forwarded to github.com. If mirroring fails for any reason, fetches fall back to upstream — the mode never breaks a build.
 * SSH remotes (`git@github.com:`) are not rewritten, and container jobs (`container:`) are not accelerated (the proxy listens on the host's loopback). GitHub Enterprise Server is not supported. Linux only.
 
-Use `custom,path=...` records to persist arbitrary additional paths. Relative paths are resolved against the workspace, so run this action **after** `actions/checkout` when caching workspace-relative paths (e.g. `custom,path=vendor/bundle`).
+Use `custom,path=...` records to persist additional directories. Relative paths are resolved against the workspace, so run this action **after** `actions/checkout` when caching workspace-relative directories (e.g. `custom,path=vendor/bundle`). Custom file caches are not supported.
 
 **Disk pressure:** the buildkit cache uses BuildKit's default garbage collection. Other cache modes have no native GC: when the volume drops below 20% free space (or 10% free inodes), the post step emits a warning and a job summary with a per-cache breakdown — increase the `sticky=` label size to fix. If a volume is ever critically full at job start (<5% free space or inodes), all caches on it are automatically reset so the job runs cold instead of failing with "no space left on device", and the next snapshot starts clean.
 

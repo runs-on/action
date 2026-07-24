@@ -47,6 +47,11 @@ type Server struct {
 	upstreamBase func(host string) string
 }
 
+// Close stops background mirror maintenance and waits for its git children.
+func (s *Server) Close() {
+	s.mirror.Close()
+}
+
 // NewServer creates the proxy server, verifying git is available.
 func NewServer(opts Options) (*Server, error) {
 	if opts.Logger == nil {

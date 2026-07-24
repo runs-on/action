@@ -47,6 +47,20 @@ func dirNonEmpty(path string) bool {
 	return err == nil && len(entries) > 0
 }
 
+func validateCacheDirectory(target string) error {
+	info, err := os.Stat(target)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("inspect cache path %s: %w", target, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("cache path %s is not a directory; custom file caches are not supported", target)
+	}
+	return nil
+}
+
 func runLogged(action *githubactions.Action, name string, args ...string) error {
 	action.Infof("Running: %s %s", name, strings.Join(args, " "))
 	out, err := exec.Command(name, args...).CombinedOutput()

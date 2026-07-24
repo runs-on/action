@@ -23,6 +23,10 @@ import (
 func cacheMount(action *githubactions.Action, mountRoot, target string, rootOwned bool) (hit bool, err error) {
 	_ = rootOwned // no root-owned cache modes on Windows
 
+	if err := validateCacheDirectory(target); err != nil {
+		return false, err
+	}
+
 	src := filepath.Join(mountRoot, "mounts", sourceDirName(target))
 	hit = dirNonEmpty(src)
 

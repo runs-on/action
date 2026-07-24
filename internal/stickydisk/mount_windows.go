@@ -62,7 +62,11 @@ func cacheMount(action *githubactions.Action, mountRoot, target string, rootOwne
 			}
 		} else {
 			backup = strings.TrimRight(target, `\/`) + ".before-stickydisk"
-			_ = os.RemoveAll(backup)
+			if _, err := os.Lstat(backup); err == nil {
+				return hit, fmt.Errorf("cannot move existing cache path %s aside: backup path %s already exists", target, backup)
+			} else if !os.IsNotExist(err) {
+				return hit, fmt.Errorf("inspect cache backup path %s: %w", backup, err)
+			}
 			if err := os.Rename(target, backup); err != nil {
 				return hit, fmt.Errorf("failed to move existing %s aside: %w", target, err)
 			}

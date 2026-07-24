@@ -91,9 +91,6 @@ func Configure(action *githubactions.Action, opts Options) error {
 		if _, err := os.Stat(unavailableFile); err == nil {
 			return missing(action, fmt.Sprintf("sticky disk is unavailable (marker: %s)", unavailableFile))
 		}
-		if _, err := os.Stat(readyFile); os.IsNotExist(err) {
-			return missing(action, "No sticky disk detected. Add a sticky=[<name>:]<size> label to your runs-on labels to enable the cache.")
-		}
 	}
 
 	timeout := opts.StickyWaitTimeout

@@ -191,6 +191,24 @@ func TestWaitForReadyTimesOut(t *testing.T) {
 	}
 }
 
+func TestWaitForReadyWaitsForFallbackMarker(t *testing.T) {
+	root := t.TempDir()
+	readyFile := filepath.Join(root, "stickydisk.ready")
+	mountRoot := filepath.Join(root, "mount")
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		_ = os.WriteFile(readyFile, []byte(mountRoot), 0o644)
+	}()
+
+	got, err := waitForReady(githubactions.New(), readyFile, filepath.Join(root, "unavailable"), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != mountRoot {
+		t.Fatalf("mount root = %q, want %q", got, mountRoot)
+	}
+}
+
 func TestWaitForReadyFailsImmediatelyWhenDiskIsUnavailable(t *testing.T) {
 	root := t.TempDir()
 	unavailableFile := filepath.Join(root, "stickydisk.unavailable")

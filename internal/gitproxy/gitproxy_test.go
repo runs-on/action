@@ -181,9 +181,23 @@ func TestMirrorEnsureRepo(t *testing.T) {
 	upstreamURL := upstreamBase + "/owner/repo.git"
 	ctx := t.Context()
 
+	// A cancelled clone can leave a directory that exists but is not a bare
+	// repository. The next job must replace it instead of persisting a
+	// permanently unusable cache entry.
+	partialPath := mirror.RepoPath("github.com", "owner", "repo")
+	if err := os.MkdirAll(partialPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(partialPath, "partial"), []byte("incomplete"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
 	repoPath, status, err := mirror.EnsureRepo(ctx, "github.com", "owner", "repo", upstreamURL, "")
 	if err != nil || status != StatusClone {
 		t.Fatalf("first EnsureRepo: status=%s err=%v", status, err)
+	}
+	if _, err := os.Stat(filepath.Join(repoPath, "partial")); !os.IsNotExist(err) {
+		t.Fatalf("partial mirror content survived reclone: %v", err)
 	}
 
 	// The clone must allow exact-SHA and filtered fetches: actions/checkout
@@ -204,6 +218,17 @@ func TestMirrorEnsureRepo(t *testing.T) {
 		t.Errorf("stale EnsureRepo: status=%s, want %s", status, StatusSync)
 	}
 
+	upstreamRepo := filepath.Join(strings.TrimPrefix(upstreamBase, "file://"), "owner", "repo.git")
+	gitCmd(t, t.TempDir(), "--git-dir", upstreamRepo, "branch", "trunk", headSHA)
+	gitCmd(t, t.TempDir(), "--git-dir", upstreamRepo, "symbolic-ref", "HEAD", "refs/heads/trunk")
+	time.Sleep(60 * time.Millisecond)
+	if _, status, err = mirror.EnsureRepo(ctx, "github.com", "owner", "repo", upstreamURL, ""); err != nil || status != StatusSync {
+		t.Fatalf("default branch sync: status=%s err=%v", status, err)
+	}
+	if got := strings.TrimSpace(gitCmd(t, t.TempDir(), "--git-dir", repoPath, "symbolic-ref", "HEAD")); got != "refs/heads/trunk" {
+		t.Fatalf("mirror HEAD = %q, want refs/heads/trunk", got)
+	}
+
 	if !mirror.HasObject(ctx, repoPath, headSHA) {
 		t.Errorf("HasObject(%s) = false, want true", headSHA)
 	}
@@ -213,9 +238,7 @@ func TestMirrorEnsureRepo(t *testing.T) {
 
 	// A local sync failure must reach the HTTP handler so it can forward the
 	// ref advertisement upstream instead of serving stale public refs.
-	if err := os.WriteFile(filepath.Join(repoPath, "config"), []byte("[broken"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	gitCmd(t, repoPath, "config", "remote.origin.url", "file:///missing-upstream")
 	time.Sleep(60 * time.Millisecond)
 	if _, status, err = mirror.EnsureRepo(ctx, "github.com", "owner", "repo", upstreamURL, ""); err == nil || status != "" {
 		t.Fatalf("broken public mirror sync: status=%s err=%v, want propagated error", status, err)

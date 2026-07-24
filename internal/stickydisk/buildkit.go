@@ -137,9 +137,17 @@ func prepareBuildkitVolume(action *githubactions.Action, stateRoot string) error
 		} else {
 			// Matching bind metadata is insufficient on a reused runner: a
 			// surviving container can still pin the detached prior filesystem
-			// at the same path. Remove the action-owned builder before reuse.
-			if err := removeBuildkitBuilder(action); err != nil {
+			// at the same path. Preserve the prepared state volume while
+			// removing the action-owned builder, then verify Buildx kept it.
+			if err := removeBuildkitBuilderKeepState(action); err != nil {
 				return fmt.Errorf("remove surviving RunsOn Buildx builder: %w", err)
+			}
+			volume, found, err = inspectDockerVolume(buildkitStateVolumeName)
+			if err != nil {
+				return err
+			}
+			if !found || !dockerVolumeMatches(volume, stateRoot) {
+				return fmt.Errorf("Buildx removed or changed sticky state volume %s while removing stale builder", buildkitStateVolumeName)
 			}
 			action.Infof("Reusing sticky BuildKit state volume '%s'.", buildkitStateVolumeName)
 			return nil
@@ -151,6 +159,10 @@ func prepareBuildkitVolume(action *githubactions.Action, stateRoot string) error
 		return fmt.Errorf("create sticky BuildKit state volume: %w", err)
 	}
 	return nil
+}
+
+func removeBuildkitBuilderKeepState(action *githubactions.Action) error {
+	return runLogged(action, "docker", "buildx", "rm", "--force", "--keep-state", buildkitBuilderName)
 }
 
 func buildkitVolumeCreateArgs(stateRoot string) []string {

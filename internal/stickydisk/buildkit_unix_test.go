@@ -21,8 +21,8 @@ if [ "$1 $2" = "volume inspect" ]; then
   printf '[{"Driver":"local","Labels":{"runs-on.stickydisk":"buildkit"},"Options":{"type":"none","o":"bind","device":"%s"}}]\n' "$STATE_ROOT"
   exit 0
 fi
-if [ "$1 $2 $3 $4" = "buildx rm --force runs-on" ]; then
-  exit 0
+if [ "$1 $2 $3 $4 $5" = "buildx rm --force --keep-state runs-on" ]; then
+	exit 0
 fi
 exit 1
 `
@@ -41,7 +41,7 @@ exit 1
 		t.Fatal(err)
 	}
 	got := string(log)
-	if !strings.Contains(got, "buildx rm --force "+buildkitBuilderName) {
+	if !strings.Contains(got, "buildx rm --force --keep-state "+buildkitBuilderName) {
 		t.Fatalf("surviving builder was not removed before volume reuse:\n%s", got)
 	}
 	if strings.Contains(got, "volume create") {

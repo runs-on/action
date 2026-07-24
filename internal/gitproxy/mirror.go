@@ -78,12 +78,23 @@ func (m *Mirror) EnsureRepo(ctx context.Context, host, owner, repo, upstreamURL,
 	// Clone goes through singleflight so a concurrent request never sees a
 	// half-created directory: it waits for the in-flight clone instead.
 	result, err, _ := m.group.Do("clone:"+key, func() (interface{}, error) {
-		if _, err := os.Stat(repoPath); os.IsNotExist(err) {
+		_, statErr := os.Stat(repoPath)
+		if statErr == nil && !m.IsUsable(ctx, repoPath) {
+			m.log.Warn("removing unusable persisted mirror", "repo", key, "path", repoPath)
+			if err := os.RemoveAll(repoPath); err != nil {
+				return StatusClone, fmt.Errorf("remove unusable mirror: %w", err)
+			}
+			statErr = os.ErrNotExist
+		}
+		if os.IsNotExist(statErr) {
 			if err := m.cloneRepo(ctx, repoPath, upstreamURL, authHeader); err != nil {
 				return StatusClone, err
 			}
 			m.lastSync.Store(key, time.Now())
 			return StatusClone, nil
+		}
+		if statErr != nil {
+			return StatusHit, fmt.Errorf("inspect mirror: %w", statErr)
 		}
 		return StatusHit, nil
 	})
@@ -230,7 +241,33 @@ func (m *Mirror) syncRepo(ctx context.Context, repoPath, upstreamURL, authHeader
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("git fetch failed: %w\noutput: %s", err, output)
 	}
+	if err := syncMirrorHEAD(ctx, repoPath, upstreamURL, authHeader); err != nil {
+		return err
+	}
 	m.log.Debug("sync complete", "path", repoPath, "duration_ms", time.Since(start).Milliseconds())
+	return nil
+}
+
+func syncMirrorHEAD(ctx context.Context, repoPath, upstreamURL, authHeader string) error {
+	cmd := exec.CommandContext(ctx, "git", "ls-remote", "--symref", upstreamURL, "HEAD")
+	cmd.Env = gitEnv(authHeader)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("resolve upstream HEAD: %w\noutput: %s", err, out)
+	}
+	var headRef string
+	for _, line := range strings.Split(string(out), "\n") {
+		if fields := strings.Fields(line); len(fields) == 3 && fields[0] == "ref:" && fields[2] == "HEAD" {
+			headRef = fields[1]
+			break
+		}
+	}
+	if !strings.HasPrefix(headRef, "refs/heads/") {
+		return fmt.Errorf("resolve upstream HEAD: no branch symref in output")
+	}
+	if out, err := exec.CommandContext(ctx, "git", "--git-dir", repoPath, "symbolic-ref", "HEAD", headRef).CombinedOutput(); err != nil {
+		return fmt.Errorf("update mirror HEAD to %s: %w\noutput: %s", headRef, err, out)
+	}
 	return nil
 }
 

@@ -19,6 +19,9 @@ import (
 
 // handleMainExecution contains the original main logic.
 func handleMainExecution(action *githubactions.Action, ctx context.Context) {
+	if err := stickydisk.RestoreStaleGitProxyRewrites(); err != nil {
+		action.Fatalf("Failed to restore stale Git proxy configuration: %v", err)
+	}
 	cfg, err := config.NewConfigFromInputs(action)
 	if err != nil {
 		action.Fatalf("Failed to load configuration: %v", err)

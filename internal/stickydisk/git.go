@@ -334,6 +334,13 @@ func restoreGitProxyRewrites() error {
 	return restoreGitProxyRewritesAt(gitRewriteStateFile)
 }
 
+// RestoreStaleGitProxyRewrites repairs global Git configuration left by an
+// interrupted prior job. It must run for every action invocation, even when
+// the current job does not request the Git cache mode.
+func RestoreStaleGitProxyRewrites() error {
+	return restoreGitProxyRewrites()
+}
+
 func restoreGitProxyRewritesAt(stateFile string) error {
 	data, err := os.ReadFile(stateFile)
 	if os.IsNotExist(err) {

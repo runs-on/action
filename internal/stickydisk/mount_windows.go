@@ -3,6 +3,7 @@
 package stickydisk
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -48,6 +49,7 @@ func cacheMount(action *githubactions.Action, mountRoot, target string, rootOwne
 		}
 	}
 
+	var backup string
 	if fi, statErr := os.Lstat(target); statErr == nil {
 		if fi.Mode()&(os.ModeSymlink|os.ModeIrregular) != 0 {
 			if _, err := os.Stat(target); err == nil {
@@ -59,7 +61,7 @@ func cacheMount(action *githubactions.Action, mountRoot, target string, rootOwne
 				return hit, fmt.Errorf("failed to remove existing link %s: %w", target, err)
 			}
 		} else {
-			backup := strings.TrimRight(target, `\/`) + ".before-stickydisk"
+			backup = strings.TrimRight(target, `\/`) + ".before-stickydisk"
 			_ = os.RemoveAll(backup)
 			if err := os.Rename(target, backup); err != nil {
 				return hit, fmt.Errorf("failed to move existing %s aside: %w", target, err)
@@ -71,6 +73,13 @@ func cacheMount(action *githubactions.Action, mountRoot, target string, rootOwne
 	}
 
 	if err := runLogged(action, "cmd", "/c", "mklink", "/J", target, src); err != nil {
+		// A mount failure must not hide the runner image or checkout content
+		// that was moved aside to make room for the junction.
+		if backup != "" {
+			if restoreErr := os.Rename(backup, target); restoreErr != nil {
+				return hit, errors.Join(err, fmt.Errorf("restore existing cache path %s from %s: %w", target, backup, restoreErr))
+			}
+		}
 		return hit, err
 	}
 	return hit, nil

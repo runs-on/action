@@ -79,15 +79,15 @@ func setupGit(action *githubactions.Action, mountRoot string) (hit bool, err err
 // healthy, and waits for it to publish its state file.
 func ensureGitProxy(action *githubactions.Action, mirrorDir string) (gitproxy.State, error) {
 	owner := gitProxyOwner()
-	if state, err := gitproxy.ReadStateFile(gitProxyStateFile); err == nil && gitProxyHealthy(state.Port) {
-		if gitProxyStateMatches(state, mirrorDir, owner) {
+	if state, err := gitproxy.ReadStateFile(gitProxyStateFile); err == nil {
+		if gitProxyHealthy(state.Port) && gitProxyStateMatches(state, mirrorDir, owner) {
 			action.Infof("Reusing running git proxy on port %d", state.Port)
 			return state, nil
 		}
-		// A healthy proxy with another mirror root belongs to an interrupted
-		// job and may reference a detached sticky volume. Stop it before the
-		// current job publishes a replacement state file.
-		action.Warningf("Stopping stale git proxy on port %d: its job identity or mirror root does not match the current job.", state.Port)
+		// Any recorded proxy that cannot be safely reused may still have live
+		// maintenance children writing to a detached sticky volume. Terminate
+		// it before removing the only state file that identifies its PID.
+		action.Warningf("Stopping stale or unhealthy git proxy on port %d before starting a replacement.", state.Port)
 		if err := terminateGitProxy(action, state.PID); err != nil {
 			return gitproxy.State{}, fmt.Errorf("stop stale git proxy: %w", err)
 		}

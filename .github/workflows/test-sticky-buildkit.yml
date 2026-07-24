@@ -100,7 +100,7 @@ jobs:
           grep -q 'CACHED' /tmp/runs-on-buildkit.log
 
   missing-sticky-disk:
-    runs-on: runs-on=${{ github.run_id }}/cpu=2/family=m7/image=ubuntu24-full-x64
+    runs-on: runs-on=${{ github.run_id }}/env=bootstrap/cpu=2/family=m7/image=ubuntu24-full-x64
     steps:
       - uses: actions/checkout@v6
       - id: sticky_cache

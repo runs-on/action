@@ -177,6 +177,13 @@ func Configure(action *githubactions.Action, opts Options) error {
 			posts = append(posts, mode.Post)
 		}
 	}
+	targets := make([]string, 0, len(specs))
+	for _, spec := range specs {
+		targets = append(targets, spec.target)
+	}
+	if err := validateNoOverlappingTargets(targets); err != nil {
+		return err
+	}
 	if len(specs) == 0 && len(results) == 0 {
 		action.Warningf("No cache paths to set up.")
 		action.SetOutput("cache-hit", "false")
@@ -210,6 +217,22 @@ func Configure(action *githubactions.Action, opts Options) error {
 	}
 	action.SetOutput("cache-hit", strconv.FormatBool(allHit))
 	return nil
+}
+
+func validateNoOverlappingTargets(targets []string) error {
+	for i := range targets {
+		for j := i + 1; j < len(targets); j++ {
+			if pathContains(targets[i], targets[j]) || pathContains(targets[j], targets[i]) {
+				return fmt.Errorf("sticky cache paths overlap: %s and %s; combine them into one cache target", targets[i], targets[j])
+			}
+		}
+	}
+	return nil
+}
+
+func pathContains(parent, child string) bool {
+	rel, err := filepath.Rel(filepath.Clean(parent), filepath.Clean(child))
+	return err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 func allCacheResultsHit(results []mountResult) bool {

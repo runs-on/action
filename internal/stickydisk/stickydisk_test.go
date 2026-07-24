@@ -115,6 +115,15 @@ func TestValidateCacheOrdering(t *testing.T) {
 	}
 }
 
+func TestValidateNoOverlappingTargets(t *testing.T) {
+	if err := validateNoOverlappingTargets([]string{"/workspace/vendor", "/workspace/vendor/cache"}); err == nil {
+		t.Fatal("nested cache targets were accepted")
+	}
+	if err := validateNoOverlappingTargets([]string{"/workspace/vendor", "/home/runner/.cache"}); err != nil {
+		t.Fatalf("independent cache targets were rejected: %v", err)
+	}
+}
+
 func TestValidateStickyMount(t *testing.T) {
 	root := t.TempDir()
 	if err := validateStickyMountWith(root, func(string) bool { return true }); err != nil {

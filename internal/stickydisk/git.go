@@ -1,6 +1,7 @@
 package stickydisk
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -56,7 +57,7 @@ func setupGit(action *githubactions.Action, mountRoot string) (hit bool, err err
 
 	mirrorDir := gitMirrorDir(mountRoot)
 	if repo := os.Getenv("GITHUB_REPOSITORY"); repo != "" {
-		hit = dirNonEmpty(filepath.Join(mirrorDir, "github.com", repo+".git"))
+		hit = gitMirrorCacheHit(mirrorDir, repo)
 	}
 
 	state, err := ensureGitProxy(action, mirrorDir)
@@ -72,6 +73,10 @@ func setupGit(action *githubactions.Action, mountRoot string) (hit bool, err err
 
 	action.Infof("Git mirror proxy ready on 127.0.0.1:%d (mirrors: %s). github.com fetches are served from the sticky disk; run this action BEFORE actions/checkout to accelerate it.", state.Port, mirrorDir)
 	return hit, nil
+}
+
+func gitMirrorCacheHit(mirrorDir, repo string) bool {
+	return gitproxy.IsUsableRepo(context.Background(), filepath.Join(mirrorDir, "github.com", repo+".git"))
 }
 
 // ensureGitProxy starts the proxy (re-executing this binary with the hidden
@@ -338,7 +343,15 @@ func restoreGitProxyRewrites() error {
 // interrupted prior job. It must run for every action invocation, even when
 // the current job does not request the Git cache mode.
 func RestoreStaleGitProxyRewrites() error {
+	if state, err := gitproxy.ReadStateFile(gitProxyStateFile); err == nil &&
+		!shouldRestoreGitProxyRewrites(state, gitProxyOwner(), gitProxyHealthy(state.Port)) {
+		return nil
+	}
 	return restoreGitProxyRewrites()
+}
+
+func shouldRestoreGitProxyRewrites(state gitproxy.State, owner string, healthy bool) bool {
+	return state.Owner != owner || !healthy
 }
 
 func restoreGitProxyRewritesAt(stateFile string) error {

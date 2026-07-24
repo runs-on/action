@@ -86,6 +86,13 @@ func (m *Mirror) EnsureRepo(ctx context.Context, host, owner, repo, upstreamURL,
 			}
 			statErr = os.ErrNotExist
 		}
+		if statErr == nil {
+			if _, seen := m.lastSync.Load(key); !seen {
+				if err := configureMirrorUploadPack(ctx, repoPath); err != nil {
+					return StatusHit, err
+				}
+			}
+		}
 		if os.IsNotExist(statErr) {
 			if err := m.cloneRepo(ctx, repoPath, upstreamURL, authHeader); err != nil {
 				return StatusClone, err
@@ -203,14 +210,8 @@ func (m *Mirror) cloneRepo(ctx context.Context, repoPath, upstreamURL, authHeade
 	// actions/checkout fetches exact commit SHAs and sparse checkouts fetch
 	// with --filter=blob:none; upload-pack rejects both unless the mirror
 	// repo config allows them.
-	for _, kv := range [][2]string{
-		{"uploadpack.allowAnySHA1InWant", "true"},
-		{"uploadpack.allowFilter", "true"},
-	} {
-		cmd := exec.CommandContext(ctx, "git", "-C", repoPath, "config", kv[0], kv[1])
-		if output, err := cmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("git config %s failed: %w\noutput: %s", kv[0], err, output)
-		}
+	if err := configureMirrorUploadPack(ctx, repoPath); err != nil {
+		return err
 	}
 
 	if authHeader != "" {
@@ -220,6 +221,19 @@ func (m *Mirror) cloneRepo(ctx context.Context, repoPath, upstreamURL, authHeade
 	}
 
 	m.scheduleOptimize(repoPath, true)
+	return nil
+}
+
+func configureMirrorUploadPack(ctx context.Context, repoPath string) error {
+	for _, kv := range [][2]string{
+		{"uploadpack.allowAnySHA1InWant", "true"},
+		{"uploadpack.allowFilter", "true"},
+	} {
+		cmd := exec.CommandContext(ctx, "git", "-C", repoPath, "config", kv[0], kv[1])
+		if output, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("git config %s failed: %w\noutput: %s", kv[0], err, output)
+		}
+	}
 	return nil
 }
 
@@ -281,6 +295,10 @@ func (m *Mirror) HasObject(ctx context.Context, repoPath, oid string) bool {
 // so upload-pack must check the repository itself rather than relying only on
 // wanted-object checks.
 func (m *Mirror) IsUsable(ctx context.Context, repoPath string) bool {
+	return IsUsableRepo(ctx, repoPath)
+}
+
+func IsUsableRepo(ctx context.Context, repoPath string) bool {
 	out, err := exec.CommandContext(ctx, "git", "--git-dir", repoPath, "rev-parse", "--is-bare-repository").Output()
 	return err == nil && strings.TrimSpace(string(out)) == "true"
 }

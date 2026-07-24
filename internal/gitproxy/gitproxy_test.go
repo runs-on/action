@@ -209,6 +209,19 @@ func TestMirrorEnsureRepo(t *testing.T) {
 		}
 	}
 
+	for _, key := range []string{"uploadpack.allowanysha1inwant", "uploadpack.allowfilter"} {
+		gitCmd(t, repoPath, "config", "--unset-all", key)
+	}
+	mirror.lastSync.Delete("github.com/owner/repo")
+	if _, _, err := mirror.EnsureRepo(ctx, "github.com", "owner", "repo", upstreamURL, ""); err != nil {
+		t.Fatalf("repair restored mirror settings: %v", err)
+	}
+	for _, key := range []string{"uploadpack.allowanysha1inwant", "uploadpack.allowfilter"} {
+		if got := strings.TrimSpace(gitCmd(t, repoPath, "config", key)); got != "true" {
+			t.Fatalf("repaired %s = %q, want true", key, got)
+		}
+	}
+
 	if _, status, _ = mirror.EnsureRepo(ctx, "github.com", "owner", "repo", upstreamURL, ""); status != StatusHit {
 		t.Errorf("fresh EnsureRepo: status=%s, want %s", status, StatusHit)
 	}

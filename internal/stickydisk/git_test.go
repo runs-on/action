@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -178,6 +179,36 @@ func TestGitProxyStateMatchesMirrorRoot(t *testing.T) {
 	}
 	if gitProxyStateMatches(gitproxy.State{}, "/mnt/sticky/git/mirrors", "123/1/build") {
 		t.Fatal("legacy state without mirror root was accepted")
+	}
+}
+
+func TestShouldRestoreGitProxyRewrites(t *testing.T) {
+	state := gitproxy.State{Owner: "123/1/build"}
+	if shouldRestoreGitProxyRewrites(state, "123/1/build", true) {
+		t.Fatal("healthy current-job proxy rewrites were treated as stale")
+	}
+	if !shouldRestoreGitProxyRewrites(state, "other/1/build", true) {
+		t.Fatal("prior-job proxy rewrites were retained")
+	}
+	if !shouldRestoreGitProxyRewrites(state, "123/1/build", false) {
+		t.Fatal("unhealthy current-job proxy rewrites were retained")
+	}
+}
+
+func TestGitMirrorCacheHitRequiresBareRepository(t *testing.T) {
+	mirrorDir := t.TempDir()
+	repoPath := filepath.Join(mirrorDir, "github.com", "owner", "repo.git")
+	if err := os.MkdirAll(repoPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if gitMirrorCacheHit(mirrorDir, "owner/repo") {
+		t.Fatal("non-repository mirror reported a cache hit")
+	}
+	if out, err := exec.Command("git", "init", "--bare", repoPath).CombinedOutput(); err != nil {
+		t.Fatalf("git init --bare failed: %v\n%s", err, out)
+	}
+	if !gitMirrorCacheHit(mirrorDir, "owner/repo") {
+		t.Fatal("valid bare mirror did not report a cache hit")
 	}
 }
 

@@ -35,3 +35,12 @@ func TestStickyWaitTimeoutDefaultsToFiveMinutes(t *testing.T) {
 		t.Fatalf("StickyWaitTimeout = %s, want %s", got, want)
 	}
 }
+
+func TestLegacyStickyCacheInputsFailLoudly(t *testing.T) {
+	t.Setenv("INPUT_CACHE", "go,buildkit")
+	t.Setenv("INPUT_PATH", "vendor/cache")
+
+	if _, err := NewConfigFromInputs(githubactions.New()); err == nil {
+		t.Fatal("expected removed cache and path inputs to return an error")
+	}
+}

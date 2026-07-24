@@ -259,3 +259,21 @@ func TestModeSupportedOn(t *testing.T) {
 		t.Error("go mode must be supported on windows")
 	}
 }
+
+func TestResetBuildkitPreparedState(t *testing.T) {
+	stateFile := filepath.Join(t.TempDir(), "prepared")
+	if err := os.WriteFile(stateFile, []byte("stale"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	requests, err := ParseCacheRequests([]string{"buildkit"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := resetBuildkitPreparedState(requests, stateFile); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(stateFile); !os.IsNotExist(err) {
+		t.Fatalf("prepared state still exists: %v", err)
+	}
+}

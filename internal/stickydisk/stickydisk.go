@@ -69,6 +69,12 @@ func Configure(action *githubactions.Action, opts Options) error {
 		return nil
 	}
 
+	// Self-hosted runners reuse /tmp across jobs, so clear a cancelled prior
+	// invocation's marker before any early return can reach this job's post step.
+	if err := resetBuildkitPreparedState(requests, buildkitPreparedStateFile); err != nil {
+		return fmt.Errorf("clear stale BuildKit prepared state: %w", err)
+	}
+
 	readyFile := os.Getenv("RUNS_ON_STICKYDISK_READY_FILE")
 	if readyFile == "" {
 		readyFile = defaultReadyFile()
@@ -197,6 +203,18 @@ func Configure(action *githubactions.Action, opts Options) error {
 		action.Infof("  %-10s %s", status, res.Target)
 	}
 	action.SetOutput("cache-hit", strconv.FormatBool(allHit))
+	return nil
+}
+
+func resetBuildkitPreparedState(requests []CacheRequest, stateFile string) error {
+	for _, request := range requests {
+		if !request.Custom && request.Mode.Name == "buildkit" {
+			if err := os.Remove(stateFile); err != nil && !os.IsNotExist(err) {
+				return err
+			}
+			return nil
+		}
+	}
 	return nil
 }
 

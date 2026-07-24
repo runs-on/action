@@ -51,6 +51,16 @@ func TestBuildkitInlineConfigFromEnv(t *testing.T) {
 		}
 	})
 
+	t.Run("ECR repository prefix", func(t *testing.T) {
+		t.Setenv("RUNS_ON_ECR_PULL_THROUGH_CACHE", "https://123456789012.dkr.ecr.us-east-1.amazonaws.com/docker-hub/")
+		t.Setenv("RUNS_ON_ECR_PULL_THROUGH_CACHE_DOCKER_HUB_MIRROR", "true")
+		got, err := buildkitInlineConfigFromEnv()
+		want := "[registry.\"docker.io\"]\n  mirrors = [\"123456789012.dkr.ecr.us-east-1.amazonaws.com/docker-hub\"]\n"
+		if err != nil || got != want {
+			t.Fatalf("config = %q, want %q, err = %v", got, want, err)
+		}
+	})
+
 	t.Run("missing registry", func(t *testing.T) {
 		t.Setenv("RUNS_ON_ECR_PULL_THROUGH_CACHE", "")
 		t.Setenv("RUNS_ON_ECR_PULL_THROUGH_CACHE_DOCKER_HUB_MIRROR", "true")
@@ -64,10 +74,10 @@ func TestNormalizeBuildkitMirrorRejectsUnsafeValues(t *testing.T) {
 	for _, value := range []string{
 		"http://mirror.example",
 		"https://user:pass@mirror.example",
-		"https://mirror.example/path",
 		"https://mirror.example?query=1",
 		"https://mirror.example/#fragment",
 		"mirror.example\nother.example",
+		"https://mirror.example/docker%0Ahub",
 	} {
 		if got, err := normalizeBuildkitMirror(value); err == nil {
 			t.Errorf("normalizeBuildkitMirror(%q) = %q, expected error", value, got)
@@ -107,6 +117,40 @@ func TestDockerVolumeMatches(t *testing.T) {
 	matching.Options["device"] = "/tmp/not-sticky"
 	if dockerVolumeMatches(matching, stateRoot) {
 		t.Fatal("expected mismatched device to be rejected")
+	}
+}
+
+func TestDockerVolumeOwnedByRunsOn(t *testing.T) {
+	volume := dockerVolumeInspect{Labels: map[string]string{buildkitVolumeLabelKey: buildkitVolumeLabelValue}}
+	if !dockerVolumeOwnedByRunsOn(volume) {
+		t.Fatal("expected RunsOn-labelled volume to be owned")
+	}
+	volume.Labels[buildkitVolumeLabelKey] = "other"
+	if dockerVolumeOwnedByRunsOn(volume) {
+		t.Fatal("expected foreign volume to be rejected")
+	}
+}
+
+func TestValidateBuildkitNodes(t *testing.T) {
+	if err := validateBuildkitNodes([]string{buildkitNodeName}); err != nil {
+		t.Fatalf("single sticky node failed validation: %v", err)
+	}
+	for _, nodes := range [][]string{
+		nil,
+		{"other"},
+		{buildkitNodeName, "runs-on1"},
+	} {
+		if err := validateBuildkitNodes(nodes); err == nil {
+			t.Errorf("nodes %v passed validation", nodes)
+		}
+	}
+}
+
+func TestUniqueBuildxNodes(t *testing.T) {
+	got := uniqueBuildxNodes([]string{buildkitNodeName, buildkitNodeName, "runs-on1", "runs-on1"})
+	want := []string{buildkitNodeName, "runs-on1"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("nodes = %v, want %v", got, want)
 	}
 }
 

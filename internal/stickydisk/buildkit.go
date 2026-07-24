@@ -2,6 +2,7 @@ package stickydisk
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -21,7 +22,9 @@ const (
 	buildkitStateTarget       = "/var/lib/buildkit"
 	buildkitPreparedStateFile = "/tmp/runs-on-buildkit-volume"
 	buildkitStopWait          = 20 * time.Second
-	buildkitVolumeLabel       = "runs-on.stickydisk=buildkit"
+	buildkitVolumeLabelKey    = "runs-on.stickydisk"
+	buildkitVolumeLabelValue  = "buildkit"
+	buildkitVolumeLabel       = buildkitVolumeLabelKey + "=" + buildkitVolumeLabelValue
 )
 
 type dockerVolumeInspect struct {
@@ -79,13 +82,13 @@ func normalizeBuildkitMirror(value string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("invalid ECR registry %q: %w", value, err)
 	}
-	if parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || (parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" || parsed.Fragment != "" {
-		return "", fmt.Errorf("invalid ECR registry %q: expected an HTTPS registry host without credentials, path, query, or fragment", value)
+	if parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", fmt.Errorf("invalid ECR registry %q: expected an HTTPS registry host or repository prefix without credentials, query, or fragment", value)
 	}
-	if strings.ContainsAny(parsed.Host, "\r\n\t \"'") {
-		return "", fmt.Errorf("invalid ECR registry host %q", parsed.Host)
+	if strings.ContainsAny(parsed.Host+parsed.Path, "\r\n\t \"'") {
+		return "", fmt.Errorf("invalid ECR registry or repository prefix %q", value)
 	}
-	return parsed.Host, nil
+	return parsed.Host + strings.TrimSuffix(parsed.EscapedPath(), "/"), nil
 }
 
 // setupBuildkit pre-creates the state volume expected by Buildx's single-node
@@ -118,10 +121,20 @@ func prepareBuildkitVolume(action *githubactions.Action, stateRoot string) error
 	}
 	if found {
 		if !dockerVolumeMatches(volume, stateRoot) {
-			return fmt.Errorf("Docker volume %s already exists but is not backed by %s; run runs-on/action before docker/setup-buildx-action", buildkitStateVolumeName, stateRoot)
+			if !dockerVolumeOwnedByRunsOn(volume) {
+				return fmt.Errorf("Docker volume %s already exists but is not backed by %s; run runs-on/action before docker/setup-buildx-action", buildkitStateVolumeName, stateRoot)
+			}
+			// A cancelled prior job can leave our labelled bind volume pointing
+			// at that job's detached sticky disk. Docker refuses this removal if
+			// a live Buildx container still uses it, preserving ordering safety.
+			action.Warningf("Recreating stale RunsOn BuildKit volume '%s'.", buildkitStateVolumeName)
+			if err := removeDockerVolume(buildkitStateVolumeName); err != nil {
+				return fmt.Errorf("remove stale RunsOn BuildKit volume: %w", err)
+			}
+		} else {
+			action.Infof("Reusing sticky BuildKit state volume '%s'.", buildkitStateVolumeName)
+			return nil
 		}
-		action.Infof("Reusing sticky BuildKit state volume '%s'.", buildkitStateVolumeName)
-		return nil
 	}
 
 	args := buildkitVolumeCreateArgs(stateRoot)
@@ -169,6 +182,10 @@ func dockerVolumeMatches(volume dockerVolumeInspect, stateRoot string) bool {
 		filepath.Clean(volume.Options["device"]) == filepath.Clean(stateRoot)
 }
 
+func dockerVolumeOwnedByRunsOn(volume dockerVolumeInspect) bool {
+	return volume.Labels[buildkitVolumeLabelKey] == buildkitVolumeLabelValue
+}
+
 // cleanupBuildkit verifies that the official setup action used the prepared
 // volume, then owns final shutdown because the sticky disk must not be
 // snapshotted while BuildKit is still writing to it.
@@ -183,12 +200,17 @@ func cleanupBuildkit(action *githubactions.Action) error {
 	defer os.Remove(buildkitPreparedStateFile)
 	stateRoot := strings.TrimSpace(string(stateRootBytes))
 
+	nodes, topologyErr := inspectBuildxNodes()
+	if topologyErr == nil {
+		topologyErr = validateBuildkitNodes(nodes)
+	}
+
 	container, err := inspectBuildkitContainer()
 	if err != nil {
-		return err
+		return errors.Join(topologyErr, err)
 	}
 	if !containerUsesBuildkitVolume(container) {
-		return fmt.Errorf("Buildx container %s did not mount expected volume %s at %s; the pinned Buildx volume contract may have changed", buildkitContainerName, buildkitStateVolumeName, buildkitStateTarget)
+		return errors.Join(topologyErr, fmt.Errorf("Buildx container %s did not mount expected volume %s at %s; the pinned Buildx volume contract may have changed", buildkitContainerName, buildkitStateVolumeName, buildkitStateTarget))
 	}
 
 	action.Infof("Verified sticky BuildKit state mount: %s -> %s", stateRoot, buildkitStateTarget)
@@ -201,10 +223,38 @@ func cleanupBuildkit(action *githubactions.Action) error {
 		}
 	}
 	if err := removeDockerVolume(buildkitStateVolumeName); err != nil {
-		return err
+		return errors.Join(topologyErr, err)
 	}
 	if stopErr != nil {
-		return fmt.Errorf("BuildKit did not stop cleanly before forced cleanup: %w", stopErr)
+		return errors.Join(topologyErr, fmt.Errorf("BuildKit did not stop cleanly before forced cleanup: %w", stopErr))
+	}
+	return topologyErr
+}
+
+func inspectBuildxNodes() ([]string, error) {
+	format := fmt.Sprintf(`{{if eq .Builder.Name %q}}{{range .Builder.Nodes}}{{println .Name}}{{end}}{{end}}`, buildkitBuilderName)
+	out, err := exec.Command("docker", "buildx", "ls", "--format", format).CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("inspect Buildx builder %s nodes: %w: %s", buildkitBuilderName, err, strings.TrimSpace(string(out)))
+	}
+	return uniqueBuildxNodes(strings.Fields(string(out))), nil
+}
+
+func uniqueBuildxNodes(nodes []string) []string {
+	unique := make([]string, 0, len(nodes))
+	seen := make(map[string]bool, len(nodes))
+	for _, node := range nodes {
+		if !seen[node] {
+			seen[node] = true
+			unique = append(unique, node)
+		}
+	}
+	return unique
+}
+
+func validateBuildkitNodes(nodes []string) error {
+	if len(nodes) != 1 || nodes[0] != buildkitNodeName {
+		return fmt.Errorf("Buildx builder %s must contain exactly one node named %s; found %v (appended nodes cannot use the sticky cache)", buildkitBuilderName, buildkitNodeName, nodes)
 	}
 	return nil
 }

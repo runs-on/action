@@ -125,9 +125,12 @@ func prepareBuildkitVolume(action *githubactions.Action, stateRoot string) error
 				return fmt.Errorf("Docker volume %s already exists but is not backed by %s; run runs-on/action before docker/setup-buildx-action", buildkitStateVolumeName, stateRoot)
 			}
 			// A cancelled prior job can leave our labelled bind volume pointing
-			// at that job's detached sticky disk. Docker refuses this removal if
-			// a live Buildx container still uses it, preserving ordering safety.
+			// at that job's detached sticky disk, possibly still held by the
+			// action-owned builder. Remove that builder before recreating state.
 			action.Warningf("Recreating stale RunsOn BuildKit volume '%s'.", buildkitStateVolumeName)
+			if err := removeBuildkitBuilder(action); err != nil {
+				return fmt.Errorf("remove stale RunsOn Buildx builder: %w", err)
+			}
 			if err := removeDockerVolume(buildkitStateVolumeName); err != nil {
 				return fmt.Errorf("remove stale RunsOn BuildKit volume: %w", err)
 			}
@@ -215,12 +218,8 @@ func cleanupBuildkit(action *githubactions.Action) error {
 
 	action.Infof("Verified sticky BuildKit state mount: %s -> %s", stateRoot, buildkitStateTarget)
 	stopErr := runLogged(action, "docker", "stop", "--time", fmt.Sprintf("%.0f", buildkitStopWait.Seconds()), buildkitContainerName)
-	rmErr := runLogged(action, "docker", "buildx", "rm", "--force", buildkitBuilderName)
-	if rmErr != nil {
-		action.Warningf("Buildx cleanup failed, removing its container directly: %v", rmErr)
-		if fallbackErr := runLogged(action, "docker", "rm", "--force", buildkitContainerName); fallbackErr != nil {
-			return fmt.Errorf("remove BuildKit container after Buildx cleanup failed: %w", fallbackErr)
-		}
+	if err := removeBuildkitBuilder(action); err != nil {
+		return fmt.Errorf("remove BuildKit builder: %w", err)
 	}
 	if err := removeDockerVolume(buildkitStateVolumeName); err != nil {
 		return errors.Join(topologyErr, err)
@@ -229,6 +228,20 @@ func cleanupBuildkit(action *githubactions.Action) error {
 		return errors.Join(topologyErr, fmt.Errorf("BuildKit did not stop cleanly before forced cleanup: %w", stopErr))
 	}
 	return topologyErr
+}
+
+func removeBuildkitBuilder(action *githubactions.Action) error {
+	if err := runLogged(action, "docker", "buildx", "rm", "--force", buildkitBuilderName); err == nil {
+		return nil
+	} else {
+		action.Warningf("Buildx cleanup failed, removing its container directly: %v", err)
+	}
+
+	out, err := exec.Command("docker", "rm", "--force", buildkitContainerName).CombinedOutput()
+	if err != nil && !strings.Contains(strings.ToLower(string(out)), "no such container") {
+		return fmt.Errorf("remove BuildKit container %s: %w: %s", buildkitContainerName, err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 func inspectBuildxNodes() ([]string, error) {

@@ -54,7 +54,9 @@ jobs:
     runs-on: ubuntu-slim
     steps:
       - name: Wait for the cold snapshot to become selectable
-        run: sleep 45
+        # Snapshot creation starts asynchronously after the cold runner exits.
+        # Leave enough time for both finalization and EC2 snapshot selection.
+        run: sleep 120
 
   warm:
     needs: wait-for-snapshot

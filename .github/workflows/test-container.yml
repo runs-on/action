@@ -100,18 +100,18 @@ jobs:
           restore-keys: |
             github-${{github.run_id}}-actions-cache-${{strategy.job-index}}-${{ env.BLOCKS }}MiB-
       - name: Save to cache (runs-on/cache)
-        uses: runs-on/cache/save@v4
+        uses: runs-on/cache/save@v5
         with:
           path: ${{ env.FILENAME }}
           key: github-${{github.run_id}}-runs-on-cache-${{strategy.job-index}}-${{ env.BLOCKS }}MiB-${{ env.FILENAME }}
       - name: Restore from cache (runs-on/cache)
-        uses: runs-on/cache/restore@v4
+        uses: runs-on/cache/restore@v5
         with:
           fail-on-cache-miss: true
           path: ${{ env.FILENAME }}
           key: github-${{github.run_id}}-runs-on-cache-${{strategy.job-index}}-${{ env.BLOCKS }}MiB-${{ env.FILENAME }}
       - name: Restore from cache (runs-on/cache, restoreKeys)
-        uses: runs-on/cache/restore@v4
+        uses: runs-on/cache/restore@v5
         with:
           fail-on-cache-miss: true
           path: ${{ env.FILENAME }}

@@ -1,6 +1,7 @@
 package stickydisk
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -94,6 +95,7 @@ func TestValidateCacheOrdering(t *testing.T) {
 	}{
 		{name: "git with home cache", entries: []string{"git", "go"}},
 		{name: "git with absolute custom cache", entries: []string{"git", "custom,path=/opt/cache"}},
+		{name: "git with absolute workspace cache", entries: []string{"git", "custom,path=/home/runner/work/repo/repo/vendor/cache"}, wantErr: true},
 		{name: "git with ruby workspace cache", entries: []string{"git", "ruby"}, wantErr: true},
 		{name: "git with relative custom cache", entries: []string{"git", "custom,path=vendor/cache"}, wantErr: true},
 	} {
@@ -102,7 +104,7 @@ func TestValidateCacheOrdering(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			err = validateCacheOrdering(requests, "linux")
+			err = validateCacheOrdering(requests, "linux", "/home/runner/work/repo/repo")
 			if tt.wantErr && (err == nil || !strings.Contains(err.Error(), "second runs-on/action step")) {
 				t.Fatalf("validation error = %v", err)
 			}
@@ -110,6 +112,62 @@ func TestValidateCacheOrdering(t *testing.T) {
 				t.Fatalf("validation failed: %v", err)
 			}
 		})
+	}
+}
+
+func TestValidateStickyMount(t *testing.T) {
+	root := t.TempDir()
+	if err := validateStickyMountWith(root, func(string) bool { return true }); err != nil {
+		t.Fatalf("active mount rejected: %v", err)
+	}
+	if err := validateStickyMountWith(root, func(string) bool { return false }); err == nil || !strings.Contains(err.Error(), "not an active mount") {
+		t.Fatalf("inactive mount error = %v", err)
+	}
+	if err := validateStickyMountWith(filepath.Join(root, "missing"), func(string) bool { return true }); err == nil {
+		t.Fatal("missing sticky path was accepted")
+	}
+}
+
+func TestSameDirectory(t *testing.T) {
+	first := t.TempDir()
+	second := t.TempDir()
+	if !sameDirectory(first, first) {
+		t.Fatal("same directory was not recognized")
+	}
+	if sameDirectory(first, second) {
+		t.Fatal("different directories were treated as the same")
+	}
+}
+
+func TestUnsupportedModeMakesCacheResultMiss(t *testing.T) {
+	results := []mountResult{
+		{Target: "node", Hit: true},
+		{Target: "apt", Err: errors.New("not supported on Windows")},
+	}
+	if allCacheResultsHit(results) {
+		t.Fatal("unsupported mode was treated as a cache hit")
+	}
+}
+
+func TestSeedColdCacheCopiesExistingContents(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "target")
+	src := filepath.Join(root, "src")
+	if err := os.MkdirAll(filepath.Join(target, "nested"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "nested", "marker"), []byte("seeded"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := seedColdCache(githubactions.New(), target, src, false); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(src, "nested", "marker"))
+	if err != nil || string(data) != "seeded" {
+		t.Fatalf("seeded marker = %q, err = %v", data, err)
 	}
 }
 

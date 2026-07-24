@@ -18,14 +18,17 @@ import (
 const (
 	EnvMirrorDir = "RUNS_ON_GIT_PROXY_MIRROR_DIR"
 	EnvStateFile = "RUNS_ON_GIT_PROXY_STATE_FILE"
+	EnvOwner     = "RUNS_ON_GIT_PROXY_OWNER"
 	EnvDebug     = "RUNS_ON_GIT_PROXY_DEBUG"
 )
 
 // State is what the proxy publishes once it is listening; the action's setup
 // step polls the state file, and the post step uses it to find pid and port.
 type State struct {
-	Port int `json:"port"`
-	PID  int `json:"pid"`
+	Port      int    `json:"port"`
+	PID       int    `json:"pid"`
+	MirrorDir string `json:"mirrorDir"`
+	Owner     string `json:"owner"`
 }
 
 // ReadStateFile loads a previously published proxy state.
@@ -49,6 +52,7 @@ func ReadStateFile(path string) (State, error) {
 func runFromEnv(ctx context.Context) error {
 	mirrorDir := os.Getenv(EnvMirrorDir)
 	stateFile := os.Getenv(EnvStateFile)
+	owner := os.Getenv(EnvOwner)
 	if mirrorDir == "" || stateFile == "" {
 		return fmt.Errorf("%s and %s must be set", EnvMirrorDir, EnvStateFile)
 	}
@@ -71,7 +75,7 @@ func runFromEnv(ctx context.Context) error {
 	}
 	port := ln.Addr().(*net.TCPAddr).Port
 
-	if err := writeStateFile(stateFile, State{Port: port, PID: os.Getpid()}); err != nil {
+	if err := writeStateFile(stateFile, State{Port: port, PID: os.Getpid(), MirrorDir: mirrorDir, Owner: owner}); err != nil {
 		ln.Close()
 		return err
 	}

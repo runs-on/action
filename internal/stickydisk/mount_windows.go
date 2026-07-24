@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -34,10 +35,26 @@ func cacheMount(action *githubactions.Action, mountRoot, target string, rootOwne
 		return hit, fmt.Errorf("failed to create source dir %s: %w", src, err)
 	}
 
+	if sameDirectory(target, src) {
+		action.Infof("Path %s already points at the expected sticky source", target)
+		return hit, nil
+	}
+
+	// Seed a cold junction target before moving it aside, otherwise checkout
+	// or image-provided files disappear behind the new junction.
+	if !hit && dirNonEmpty(target) {
+		if err := seedColdCache(action, target, src, false); err != nil {
+			return false, err
+		}
+	}
+
 	if fi, statErr := os.Lstat(target); statErr == nil {
 		if fi.Mode()&(os.ModeSymlink|os.ModeIrregular) != 0 {
-			// Stale junction from a previous job on a reused instance (its
-			// sticky disk is gone): replace it.
+			if _, err := os.Stat(target); err == nil {
+				return false, fmt.Errorf("cache path %s is already an unrelated junction; expected sticky source %s", target, src)
+			}
+			// A broken junction can only reference a detached prior volume;
+			// remove it before linking the current sticky source.
 			if err := os.Remove(target); err != nil {
 				return hit, fmt.Errorf("failed to remove existing link %s: %w", target, err)
 			}
@@ -57,6 +74,26 @@ func cacheMount(action *githubactions.Action, mountRoot, target string, rootOwne
 		return hit, err
 	}
 	return hit, nil
+}
+
+// isMountpoint uses mountvol so an ordinary directory on the system drive
+// cannot satisfy a stale sticky-disk ready marker.
+func isMountpoint(path string) bool {
+	mountPath := strings.TrimRight(path, `\/`) + `\`
+	return exec.Command("cmd", "/c", "mountvol", mountPath, "/L").Run() == nil
+}
+
+func seedColdCache(_ *githubactions.Action, target, src string, _ bool) error {
+	cmd := exec.Command("robocopy", target, src, "/E", "/COPY:DAT", "/DCOPY:DAT", "/XJ", "/R:1", "/W:1")
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		return nil
+	}
+	// Robocopy exit codes 0-7 are success states (including files copied).
+	if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() <= 7 {
+		return nil
+	}
+	return fmt.Errorf("seed cold cache %s from %s: %w: %s", src, target, err, strings.TrimSpace(string(out)))
 }
 
 // removeCacheDir deletes a cache directory on the sticky disk. Everything on

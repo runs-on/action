@@ -2,6 +2,7 @@ package stickydisk
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -16,11 +17,17 @@ import (
 )
 
 const (
-	gitProxyStateFile = "/tmp/runs-on/git-proxy/state.json"
-	gitProxyLogFile   = "/tmp/runs-on-git-proxy.log"
-	gitProxyStartWait = 10 * time.Second
-	gitProxyStopWait  = 10 * time.Second
+	gitProxyStateFile   = "/tmp/runs-on/git-proxy/state.json"
+	gitRewriteStateFile = "/tmp/runs-on/git-proxy/rewrites.json"
+	gitProxyLogFile     = "/tmp/runs-on-git-proxy.log"
+	gitProxyStartWait   = 10 * time.Second
+	gitProxyStopWait    = 10 * time.Second
 )
+
+type gitConfigSnapshot struct {
+	Key    string   `json:"key"`
+	Values []string `json:"values,omitempty"`
+}
 
 // gitMirrorDir is where repo mirrors live on the sticky disk, so they are
 // snapshotted with the rest of the volume.
@@ -35,6 +42,13 @@ func gitMirrorDir(mountRoot string) string {
 // anything the proxy cannot serve (LFS, receive-pack) is forwarded to
 // github.com, so nothing breaks when the mirror is cold or unavailable.
 func setupGit(action *githubactions.Action, mountRoot string) (hit bool, err error) {
+	// A cancelled job can leave both rewrites and their recovery snapshot in
+	// /tmp. Restore them before making any current-job decision, including a
+	// GHES skip, so runner reuse never leaks Git configuration across jobs.
+	if err := restoreGitProxyRewrites(); err != nil {
+		return false, fmt.Errorf("restore stale git proxy rewrites: %w", err)
+	}
+
 	if serverURL := os.Getenv("GITHUB_SERVER_URL"); serverURL != "" && serverURL != "https://github.com" {
 		action.Infof("git cache mode only supports github.com (GITHUB_SERVER_URL=%s), skipping.", serverURL)
 		return false, nil
@@ -64,9 +78,19 @@ func setupGit(action *githubactions.Action, mountRoot string) (hit bool, err err
 // --git-proxy-serve flag) unless a previous instance from this job is still
 // healthy, and waits for it to publish its state file.
 func ensureGitProxy(action *githubactions.Action, mirrorDir string) (gitproxy.State, error) {
+	owner := gitProxyOwner()
 	if state, err := gitproxy.ReadStateFile(gitProxyStateFile); err == nil && gitProxyHealthy(state.Port) {
-		action.Infof("Reusing running git proxy on port %d", state.Port)
-		return state, nil
+		if gitProxyStateMatches(state, mirrorDir, owner) {
+			action.Infof("Reusing running git proxy on port %d", state.Port)
+			return state, nil
+		}
+		// A healthy proxy with another mirror root belongs to an interrupted
+		// job and may reference a detached sticky volume. Stop it before the
+		// current job publishes a replacement state file.
+		action.Warningf("Stopping stale git proxy on port %d: its job identity or mirror root does not match the current job.", state.Port)
+		if err := terminateGitProxy(action, state.PID); err != nil {
+			return gitproxy.State{}, fmt.Errorf("stop stale git proxy: %w", err)
+		}
 	}
 
 	self, err := os.Executable()
@@ -85,6 +109,7 @@ func ensureGitProxy(action *githubactions.Action, mirrorDir string) (gitproxy.St
 	cmd.Env = append(os.Environ(),
 		gitproxy.EnvMirrorDir+"="+mirrorDir,
 		gitproxy.EnvStateFile+"="+gitProxyStateFile,
+		gitproxy.EnvOwner+"="+owner,
 	)
 	if os.Getenv("RUNNER_DEBUG") == "1" {
 		cmd.Env = append(cmd.Env, gitproxy.EnvDebug+"=1")
@@ -103,7 +128,7 @@ func ensureGitProxy(action *githubactions.Action, mirrorDir string) (gitproxy.St
 
 	deadline := time.Now().Add(gitProxyStartWait)
 	for {
-		if state, err := gitproxy.ReadStateFile(gitProxyStateFile); err == nil && gitProxyHealthy(state.Port) {
+		if state, err := gitproxy.ReadStateFile(gitProxyStateFile); err == nil && gitProxyStateMatches(state, mirrorDir, owner) && gitProxyHealthy(state.Port) {
 			return state, nil
 		}
 		if time.Now().After(deadline) {
@@ -112,6 +137,20 @@ func ensureGitProxy(action *githubactions.Action, mirrorDir string) (gitproxy.St
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
+}
+
+func gitProxyOwner() string {
+	return strings.Join([]string{
+		os.Getenv("GITHUB_RUN_ID"),
+		os.Getenv("GITHUB_RUN_ATTEMPT"),
+		os.Getenv("GITHUB_JOB"),
+	}, "/")
+}
+
+func gitProxyStateMatches(state gitproxy.State, mirrorDir, owner string) bool {
+	return state.MirrorDir != "" &&
+		filepath.Clean(state.MirrorDir) == filepath.Clean(mirrorDir) &&
+		state.Owner == owner
 }
 
 func gitProxyHealthy(port int) bool {
@@ -136,7 +175,28 @@ func gitProxyHealthy(port int) bool {
 //     rewrite, checkout's own http.https://github.com/.extraheader no longer
 //     matches the effective URL.
 func configureGitProxyRewrites(action *githubactions.Action, port int) error {
-	return configureGitProxyRewritesWith(action, port, gitConfigSet, removeGitProxyRewrites)
+	return configureGitProxyRewritesAt(action, port, gitRewriteStateFile)
+}
+
+func configureGitProxyRewritesAt(action *githubactions.Action, port int, stateFile string) error {
+	snapshot, err := snapshotGitProxyRewrites(action, port)
+	if err != nil {
+		return err
+	}
+	if err := writeGitRewriteState(stateFile, snapshot); err != nil {
+		return err
+	}
+
+	err = configureGitProxyRewritesWith(action, port, gitConfigSet, func() error {
+		return restoreGitConfig(snapshot)
+	})
+	if err != nil {
+		if restoreErr := restoreGitConfig(snapshot); restoreErr != nil {
+			return errors.Join(err, fmt.Errorf("retry git rewrite rollback: %w", restoreErr))
+		}
+		_ = os.Remove(stateFile)
+	}
+	return err
 }
 
 func configureGitProxyRewritesWith(action *githubactions.Action, port int, set func(string, string) error, rollback func() error) (err error) {
@@ -178,13 +238,125 @@ func gitConfigSet(key, value string) error {
 	return nil
 }
 
+func snapshotGitProxyRewrites(action *githubactions.Action, port int) ([]gitConfigSnapshot, error) {
+	proxyBase := fmt.Sprintf("http://127.0.0.1:%d/", port)
+	keys := []string{
+		fmt.Sprintf("url.%sgithub.com/.insteadOf", proxyBase),
+		"url.https://github.com/.pushInsteadOf",
+	}
+	if action.GetInput("token") != "" {
+		keys = append(keys, fmt.Sprintf("http.%s.extraheader", proxyBase))
+	}
+
+	snapshot := make([]gitConfigSnapshot, 0, len(keys))
+	for _, key := range keys {
+		values, err := gitConfigGetAll(key)
+		if err != nil {
+			return nil, err
+		}
+		snapshot = append(snapshot, gitConfigSnapshot{Key: key, Values: values})
+	}
+	return snapshot, nil
+}
+
+func gitConfigGetAll(key string) ([]string, error) {
+	out, err := exec.Command("git", "config", "--global", "--get-all", key).Output()
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("git config --get-all %s failed: %w", key, err)
+	}
+	return strings.Split(strings.TrimSuffix(string(out), "\n"), "\n"), nil
+}
+
+func gitConfigUnset(key string) error {
+	output, err := exec.Command("git", "config", "--global", "--unset-all", key).CombinedOutput()
+	if err == nil {
+		return nil
+	}
+	if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 5 {
+		return nil
+	}
+	return fmt.Errorf("git config --unset-all %s failed: %w\noutput: %s", key, err, output)
+}
+
+func gitConfigAdd(key, value string) error {
+	if output, err := exec.Command("git", "config", "--global", "--add", key, value).CombinedOutput(); err != nil {
+		return fmt.Errorf("git config --add %s failed: %w\noutput: %s", key, err, output)
+	}
+	return nil
+}
+
+func restoreGitConfig(snapshot []gitConfigSnapshot) error {
+	var restoreErr error
+	for _, entry := range snapshot {
+		if err := gitConfigUnset(entry.Key); err != nil {
+			restoreErr = errors.Join(restoreErr, err)
+			continue
+		}
+		for _, value := range entry.Values {
+			if err := gitConfigAdd(entry.Key, value); err != nil {
+				restoreErr = errors.Join(restoreErr, err)
+			}
+		}
+	}
+	return restoreErr
+}
+
+// writeGitRewriteState stores pre-existing values with owner-only permissions
+// because an existing extraheader may contain credentials. Atomic publication
+// lets the post step recover after interruption without reading partial JSON.
+func writeGitRewriteState(path string, snapshot []gitConfigSnapshot) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("create git rewrite state directory: %w", err)
+	}
+	data, err := json.Marshal(snapshot)
+	if err != nil {
+		return fmt.Errorf("encode git rewrite state: %w", err)
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		return fmt.Errorf("write git rewrite state: %w", err)
+	}
+	if err := os.Chmod(tmp, 0o600); err != nil {
+		return fmt.Errorf("protect git rewrite state: %w", err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return fmt.Errorf("publish git rewrite state: %w", err)
+	}
+	return nil
+}
+
+func restoreGitProxyRewrites() error {
+	return restoreGitProxyRewritesAt(gitRewriteStateFile)
+}
+
+func restoreGitProxyRewritesAt(stateFile string) error {
+	data, err := os.ReadFile(stateFile)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read git rewrite state: %w", err)
+	}
+	var snapshot []gitConfigSnapshot
+	if err := json.Unmarshal(data, &snapshot); err != nil {
+		return fmt.Errorf("decode git rewrite state: %w", err)
+	}
+	if err := restoreGitConfig(snapshot); err != nil {
+		return err
+	}
+	return os.Remove(stateFile)
+}
+
 // stopGit removes the URL rewrites then stops the proxy, in that order: git
 // config must never point at a dead proxy. Runs in the post step, before the
 // runner's job-completed hook unmounts and snapshots the sticky disk.
 func stopGit(action *githubactions.Action) error {
 	var errs []string
 
-	if err := removeGitProxyRewrites(); err != nil {
+	if err := restoreGitProxyRewrites(); err != nil {
 		errs = append(errs, err.Error())
 	}
 
@@ -199,25 +371,6 @@ func stopGit(action *githubactions.Action) error {
 	}
 	if len(errs) > 0 {
 		return fmt.Errorf("git cache mode cleanup: %s", strings.Join(errs, "; "))
-	}
-	return nil
-}
-
-// removeGitProxyRewrites clears every config entry pointing at the proxy,
-// discovered by scanning for the loopback URL rather than trusting the state
-// file, plus the push pin.
-func removeGitProxyRewrites() error {
-	out, _ := exec.Command("git", "config", "--global", "--name-only", "--get-regexp", `^(url|http)\.http://127\.0\.0\.1:`).Output()
-	for _, name := range strings.Fields(string(out)) {
-		if output, err := exec.Command("git", "config", "--global", "--unset-all", name).CombinedOutput(); err != nil {
-			return fmt.Errorf("git config --unset-all %s failed: %w\noutput: %s", name, err, output)
-		}
-	}
-	// Exit code 5 means the key was not set; anything else is a real error.
-	if output, err := exec.Command("git", "config", "--global", "--unset-all", "url.https://github.com/.pushInsteadOf").CombinedOutput(); err != nil {
-		if exitErr, ok := err.(*exec.ExitError); !ok || exitErr.ExitCode() != 5 {
-			return fmt.Errorf("git config --unset-all pushInsteadOf failed: %w\noutput: %s", err, output)
-		}
 	}
 	return nil
 }

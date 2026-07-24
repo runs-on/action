@@ -29,14 +29,25 @@ func cacheMount(action *githubactions.Action, mountRoot, target string, rootOwne
 	src := filepath.Join(mountRoot, "mounts", sourceDirName(target))
 	hit = dirNonEmpty(src)
 
-	if isMountpoint(target) {
-		action.Warningf("Path %s is already a mountpoint, skipping", target)
-		return hit, nil
-	}
-
 	// The sticky disk root is owned by the runner user, so no sudo needed here.
 	if err := os.MkdirAll(src, 0755); err != nil {
 		return hit, fmt.Errorf("failed to create source dir %s: %w", src, err)
+	}
+
+	if isMountpoint(target) {
+		if sameDirectory(target, src) {
+			action.Infof("Path %s is already mounted from the expected sticky source", target)
+			return hit, nil
+		}
+		return false, fmt.Errorf("cache path %s is already an unrelated mountpoint; expected sticky source %s", target, src)
+	}
+
+	// A cold source must inherit files already created by checkout or the
+	// runner image before the bind mount hides the target directory.
+	if !hit && dirNonEmpty(target) {
+		if err := seedColdCache(action, target, src, rootOwned); err != nil {
+			return false, err
+		}
 	}
 	if rootOwned {
 		if err := runLogged(action, "sudo", "chown", "root:root", src); err != nil {
@@ -77,6 +88,17 @@ func cacheMount(action *githubactions.Action, mountRoot, target string, rootOwne
 	}
 
 	return hit, nil
+}
+
+func seedColdCache(action *githubactions.Action, target, src string, rootOwned bool) error {
+	args := []string{"cp", "-a", "--", strings.TrimRight(target, "/") + "/.", src}
+	if rootOwned {
+		args = append([]string{"sudo"}, args...)
+	}
+	if err := runLogged(action, args[0], args[1:]...); err != nil {
+		return fmt.Errorf("seed cold cache %s from %s: %w", src, target, err)
+	}
+	return nil
 }
 
 // removeCacheDir deletes a cache directory on the sticky disk. Contents may be

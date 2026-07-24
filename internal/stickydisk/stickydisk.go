@@ -69,7 +69,12 @@ func Configure(action *githubactions.Action, opts Options) error {
 		action.SetOutput("cache-hit", "false")
 		return nil
 	}
-	if err := validateCacheOrdering(requests, runtime.GOOS); err != nil {
+
+	workspace := os.Getenv("GITHUB_WORKSPACE")
+	if workspace == "" {
+		workspace, _ = os.Getwd()
+	}
+	if err := validateCacheOrdering(requests, runtime.GOOS, workspace); err != nil {
 		return err
 	}
 
@@ -105,6 +110,9 @@ func Configure(action *githubactions.Action, opts Options) error {
 	if err != nil {
 		return missing(action, err.Error())
 	}
+	if err := validateStickyMount(mountRoot); err != nil {
+		return missing(action, err.Error())
+	}
 	action.Infof("Sticky disk ready at %s (name: %s)", mountRoot, os.Getenv("RUNS_ON_STICKYDISK_NAME"))
 
 	// Self-heal a critically full volume before cache-hit detection: wiped
@@ -119,11 +127,6 @@ func Configure(action *githubactions.Action, opts Options) error {
 			home = "/home/runner"
 		}
 	}
-	workspace := os.Getenv("GITHUB_WORKSPACE")
-	if workspace == "" {
-		workspace, _ = os.Getwd()
-	}
-
 	// Resolve all targets, deduplicating by absolute path.
 	type mountSpec struct {
 		target string
@@ -151,6 +154,10 @@ func Configure(action *githubactions.Action, opts Options) error {
 		mode := request.Mode
 		if !mode.supportedOn(runtime.GOOS) {
 			action.Warningf("Cache mode '%s' is not supported on Windows runners, skipping.", mode.Name)
+			results = append(results, mountResult{
+				Target: mode.Name,
+				Err:    fmt.Errorf("cache mode %s is not supported on Windows", mode.Name),
+			})
 			continue
 		}
 		// Modes with a Setup function own their whole setup (no bind mounts).
@@ -192,7 +199,7 @@ func Configure(action *githubactions.Action, opts Options) error {
 		}
 	}
 
-	allHit := true
+	allHit := allCacheResultsHit(results)
 	action.Infof("Sticky disk cache summary:")
 	for _, res := range results {
 		status := "restored"
@@ -201,16 +208,22 @@ func Configure(action *githubactions.Action, opts Options) error {
 		} else if !res.Hit {
 			status = "empty"
 		}
-		if !res.Hit {
-			allHit = false
-		}
 		action.Infof("  %-10s %s", status, res.Target)
 	}
 	action.SetOutput("cache-hit", strconv.FormatBool(allHit))
 	return nil
 }
 
-func validateCacheOrdering(requests []CacheRequest, goos string) error {
+func allCacheResultsHit(results []mountResult) bool {
+	for _, result := range results {
+		if !result.Hit {
+			return false
+		}
+	}
+	return true
+}
+
+func validateCacheOrdering(requests []CacheRequest, goos, workspace string) error {
 	if goos == "windows" {
 		return nil
 	}
@@ -230,7 +243,7 @@ func validateCacheOrdering(requests []CacheRequest, goos string) error {
 			paths = request.Mode.pathsFor(goos)
 		}
 		for _, path := range paths {
-			if !filepath.IsAbs(path) && path != "~" && !strings.HasPrefix(path, "~/") {
+			if isWorkspaceCachePath(path, workspace) {
 				workspaceModes = append(workspaceModes, name)
 				break
 			}
@@ -241,6 +254,17 @@ func validateCacheOrdering(requests []CacheRequest, goos string) error {
 		return fmt.Errorf("git cache mode cannot be combined with workspace-relative cache modes (%s) in one invocation; run git before checkout, then run workspace-relative caches in a second runs-on/action step after checkout", strings.Join(workspaceModes, ", "))
 	}
 	return nil
+}
+
+func isWorkspaceCachePath(path, workspace string) bool {
+	if !filepath.IsAbs(path) {
+		return path != "~" && !strings.HasPrefix(path, "~/")
+	}
+	if workspace == "" {
+		return false
+	}
+	rel, err := filepath.Rel(filepath.Clean(workspace), filepath.Clean(path))
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 func resetBuildkitPreparedState(requests []CacheRequest, stateFile string) error {

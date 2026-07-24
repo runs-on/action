@@ -61,6 +61,33 @@ func validateCacheDirectory(target string) error {
 	return nil
 }
 
+func sameDirectory(a, b string) bool {
+	aInfo, aErr := os.Stat(a)
+	bInfo, bErr := os.Stat(b)
+	return aErr == nil && bErr == nil && os.SameFile(aInfo, bInfo)
+}
+
+// validateStickyMountWith prevents stale ready markers from redirecting cache
+// writes onto the runner's ordinary filesystem. The OS-specific mount check is
+// injected in tests because temporary directories are intentionally not mounts.
+func validateStickyMountWith(mountRoot string, mounted func(string) bool) error {
+	info, err := os.Stat(mountRoot)
+	if err != nil {
+		return fmt.Errorf("sticky disk path %s is unavailable: %w", mountRoot, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("sticky disk path %s is not a directory", mountRoot)
+	}
+	if !mounted(mountRoot) {
+		return fmt.Errorf("sticky disk path %s is not an active mount; the ready marker may be stale", mountRoot)
+	}
+	return nil
+}
+
+func validateStickyMount(mountRoot string) error {
+	return validateStickyMountWith(mountRoot, isMountpoint)
+}
+
 func runLogged(action *githubactions.Action, name string, args ...string) error {
 	action.Infof("Running: %s %s", name, strings.Join(args, " "))
 	out, err := exec.Command(name, args...).CombinedOutput()

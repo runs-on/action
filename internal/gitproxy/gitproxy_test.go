@@ -112,6 +112,21 @@ func TestResolveTarget(t *testing.T) {
 	}
 }
 
+func TestStateFileRoundTripIncludesOwnership(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	want := State{Port: 8123, PID: 456, MirrorDir: "/mnt/sticky/git/mirrors", Owner: "123/1/build"}
+	if err := writeStateFile(path, want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ReadStateFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("state = %#v, want %#v", got, want)
+	}
+}
+
 // pkt builds a pkt-line for the given payload.
 func pkt(payload string) string {
 	return fmt.Sprintf("%04x%s", len(payload)+4, payload)

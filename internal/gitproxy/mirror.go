@@ -31,7 +31,6 @@ const (
 	StatusHit   Status = "mirror-hit"   // served from an existing fresh mirror
 	StatusClone Status = "mirror-clone" // had to clone a new mirror
 	StatusSync  Status = "mirror-sync"  // had to sync a stale mirror
-	StatusStale Status = "mirror-stale" // sync failed, serving stale data
 )
 
 // Mirror manages bare git repository mirrors under a root directory.
@@ -100,13 +99,13 @@ func (m *Mirror) EnsureRepo(ctx context.Context, host, owner, repo, upstreamURL,
 			return nil, m.syncRepo(ctx, repoPath, upstreamURL, authHeader)
 		})
 		if err != nil {
-			// For repos cloned with auth, a sync failure likely means the
-			// token is bad: surface it rather than serving stale private data.
 			if m.requiresAuth(repoPath) {
 				return "", "", fmt.Errorf("authentication required: %w", err)
 			}
-			m.log.Warn("sync failed, serving stale", "repo", key, "err", err)
-			return repoPath, StatusStale, nil
+			// Serving a stale advertisement can make newly created refs fail
+			// before the client sends wants, so let the HTTP handler forward
+			// the complete request upstream instead.
+			return "", "", fmt.Errorf("sync public mirror: %w", err)
 		}
 		m.lastSync.Store(key, time.Now())
 		m.scheduleOptimize(repoPath, false)

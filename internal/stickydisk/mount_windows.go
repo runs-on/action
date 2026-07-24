@@ -102,7 +102,11 @@ func seedColdCache(_ *githubactions.Action, target, src string, _ bool) error {
 	if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() <= 7 {
 		return nil
 	}
-	return fmt.Errorf("seed cold cache %s from %s: %w: %s", src, target, err, strings.TrimSpace(string(out)))
+	copyErr := fmt.Errorf("seed cold cache %s from %s: %w: %s", src, target, err, strings.TrimSpace(string(out)))
+	if cleanupErr := os.RemoveAll(src); cleanupErr != nil {
+		return errors.Join(copyErr, fmt.Errorf("remove partial cache source %s: %w", src, cleanupErr))
+	}
+	return copyErr
 }
 
 // removeCacheDir deletes a cache directory on the sticky disk. Everything on

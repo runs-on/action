@@ -135,6 +135,12 @@ func prepareBuildkitVolume(action *githubactions.Action, stateRoot string) error
 				return fmt.Errorf("remove stale RunsOn BuildKit volume: %w", err)
 			}
 		} else {
+			// Matching bind metadata is insufficient on a reused runner: a
+			// surviving container can still pin the detached prior filesystem
+			// at the same path. Remove the action-owned builder before reuse.
+			if err := removeBuildkitBuilder(action); err != nil {
+				return fmt.Errorf("remove surviving RunsOn Buildx builder: %w", err)
+			}
 			action.Infof("Reusing sticky BuildKit state volume '%s'.", buildkitStateVolumeName)
 			return nil
 		}

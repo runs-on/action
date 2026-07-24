@@ -3,6 +3,7 @@
 package stickydisk
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -96,7 +97,13 @@ func seedColdCache(action *githubactions.Action, target, src string, rootOwned b
 		args = append([]string{"sudo"}, args...)
 	}
 	if err := runLogged(action, args[0], args[1:]...); err != nil {
-		return fmt.Errorf("seed cold cache %s from %s: %w", src, target, err)
+		copyErr := fmt.Errorf("seed cold cache %s from %s: %w", src, target, err)
+		// A later job uses a non-empty source as its hit signal, so a partial
+		// copy must never survive and masquerade as a restorable cache.
+		if cleanupErr := removeCacheDir(action, src); cleanupErr != nil {
+			return errors.Join(copyErr, fmt.Errorf("remove partial cache source %s: %w", src, cleanupErr))
+		}
+		return copyErr
 	}
 	return nil
 }

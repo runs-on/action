@@ -210,6 +210,16 @@ func TestMirrorEnsureRepo(t *testing.T) {
 	if mirror.HasObject(ctx, repoPath, strings.Repeat("0", 40)) {
 		t.Errorf("HasObject(zeros) = true, want false")
 	}
+
+	// A local sync failure must reach the HTTP handler so it can forward the
+	// ref advertisement upstream instead of serving stale public refs.
+	if err := os.WriteFile(filepath.Join(repoPath, "config"), []byte("[broken"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(60 * time.Millisecond)
+	if _, status, err = mirror.EnsureRepo(ctx, "github.com", "owner", "repo", upstreamURL, ""); err == nil || status != "" {
+		t.Fatalf("broken public mirror sync: status=%s err=%v, want propagated error", status, err)
+	}
 }
 
 // TestServerServesGitClients exercises the full stack (router → mirror →

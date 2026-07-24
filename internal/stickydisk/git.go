@@ -187,7 +187,7 @@ func configureGitProxyRewritesAt(action *githubactions.Action, port int, stateFi
 		return err
 	}
 
-	err = configureGitProxyRewritesWith(action, port, gitConfigSet, func() error {
+	err = configureGitProxyRewritesWith(action, port, gitConfigSet, gitConfigAdd, func() error {
 		return restoreGitConfig(snapshot)
 	})
 	if err != nil {
@@ -199,7 +199,7 @@ func configureGitProxyRewritesAt(action *githubactions.Action, port int, stateFi
 	return err
 }
 
-func configureGitProxyRewritesWith(action *githubactions.Action, port int, set func(string, string) error, rollback func() error) (err error) {
+func configureGitProxyRewritesWith(action *githubactions.Action, port int, set, add func(string, string) error, rollback func() error) (err error) {
 	proxyBase := fmt.Sprintf("http://127.0.0.1:%d/", port)
 	applied := false
 	defer func() {
@@ -214,7 +214,9 @@ func configureGitProxyRewritesWith(action *githubactions.Action, port int, set f
 		return err
 	}
 	applied = true
-	if err := set("url.https://github.com/.pushInsteadOf", "https://github.com/"); err != nil {
+	// pushInsteadOf is a shared user key, so append our identity mapping
+	// without replacing runner- or workflow-provided transport mappings.
+	if err := add("url.https://github.com/.pushInsteadOf", "https://github.com/"); err != nil {
 		return err
 	}
 	if token := action.GetInput("token"); token != "" {
@@ -378,6 +380,10 @@ func stopGit(action *githubactions.Action) error {
 // terminateGitProxy asks the proxy to shut down gracefully and escalates to
 // SIGKILL if it lingers.
 func terminateGitProxy(action *githubactions.Action, pid int) error {
+	if !processIsGitProxy(pid) {
+		action.Warningf("Recorded git proxy pid %d no longer identifies a --git-proxy-serve process; leaving it untouched.", pid)
+		return nil
+	}
 	proc, err := os.FindProcess(pid)
 	if err != nil {
 		return nil
@@ -396,6 +402,15 @@ func terminateGitProxy(action *githubactions.Action, pid int) error {
 	}
 	action.Warningf("git proxy did not stop within %s, killing it", gitProxyStopWait)
 	return proc.Kill()
+}
+
+func commandLineHasGitProxyServe(command string) bool {
+	for _, arg := range strings.Fields(strings.ReplaceAll(command, "\x00", " ")) {
+		if arg == "--git-proxy-serve" {
+			return true
+		}
+	}
+	return false
 }
 
 func logProxyTail(action *githubactions.Action) {

@@ -3,7 +3,10 @@
 package stickydisk
 
 import (
+	"fmt"
 	"os"
+	"os/exec"
+	"strconv"
 	"syscall"
 )
 
@@ -20,4 +23,12 @@ func signalTerm(proc *os.Process) error {
 // processAlive probes the process with signal 0.
 func processAlive(proc *os.Process) bool {
 	return proc.Signal(syscall.Signal(0)) == nil
+}
+
+func processIsGitProxy(pid int) bool {
+	if cmdline, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid)); err == nil {
+		return commandLineHasGitProxyServe(string(cmdline))
+	}
+	out, err := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "command=").Output()
+	return err == nil && commandLineHasGitProxyServe(string(out))
 }

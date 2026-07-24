@@ -220,6 +220,9 @@ func TestMirrorEnsureRepo(t *testing.T) {
 	if _, status, err = mirror.EnsureRepo(ctx, "github.com", "owner", "repo", upstreamURL, ""); err == nil || status != "" {
 		t.Fatalf("broken public mirror sync: status=%s err=%v, want propagated error", status, err)
 	}
+	if !mirror.SyncFailed("github.com", "owner", "repo") {
+		t.Fatal("public mirror sync failure was not retained for protocol-v2 follow-ups")
+	}
 }
 
 // TestServerServesGitClients exercises the full stack (router → mirror →
@@ -340,6 +343,25 @@ func TestServerFallbacks(t *testing.T) {
 			t.Errorf("%s = %q", statusHeader, got)
 		}
 		if len(requests) != 1 || requests[0].path != "/owner/repo.git/git-upload-pack" || requests[0].body != body {
+			t.Errorf("upstream saw %+v", requests)
+		}
+	})
+
+	t.Run("failed sync keeps protocol v2 upstream", func(t *testing.T) {
+		requests = nil
+		server.mirror.syncFailed.Store("github.com/owner/repo", true)
+		defer server.mirror.syncFailed.Delete("github.com/owner/repo")
+
+		lsRefs := pkt("command=ls-refs") + "0001" + pkt("peel\n") + "0000"
+		resp, err := http.Post(ts.URL+"/github.com/owner/repo.git/git-upload-pack", "application/x-git-upload-pack-request", strings.NewReader(lsRefs))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		if got := resp.Header.Get(statusHeader); got != "upstream-mirror-sync-failed" {
+			t.Errorf("%s = %q", statusHeader, got)
+		}
+		if len(requests) != 1 || requests[0].path != "/owner/repo.git/git-upload-pack" || requests[0].body != lsRefs {
 			t.Errorf("upstream saw %+v", requests)
 		}
 	})

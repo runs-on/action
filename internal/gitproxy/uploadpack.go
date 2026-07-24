@@ -36,6 +36,12 @@ func (s *Server) handleUploadPack(w http.ResponseWriter, r *http.Request, t targ
 		restored = io.MultiReader(restored, overflow)
 	}
 
+	if s.mirror.SyncFailed(t.host, t.owner, t.repo) {
+		s.log.Warn("mirror sync previously failed, forwarding upload-pack upstream", "repo", t.repoKey())
+		s.forwardUpstream(w, r, t, restored, "mirror-sync-failed")
+		return
+	}
+
 	if !s.mirror.IsUsable(r.Context(), repoPath) {
 		s.log.Warn("mirror unavailable for upload-pack, forwarding upstream", "repo", t.repoKey())
 		s.forwardUpstream(w, r, t, restored, "mirror-unavailable")

@@ -65,7 +65,28 @@ func checkCritical(action *githubactions.Action, mountRoot string) {
 		return
 	}
 	action.Warningf("Sticky disk is critically full (%s): resetting all caches on the volume so this and future jobs can run. Consider a larger sticky= size.", stats)
+	gitSafe := true
+	if _, err := os.Stat(gitProxyStateFile); err == nil {
+		if err := stopGit(action); err != nil {
+			gitSafe = false
+			action.Warningf("Failed to stop active git cache before pressure reset: %v", err)
+		}
+	}
+	buildkitSafe := true
+	if _, err := os.Stat(buildkitPreparedStateFile); err == nil {
+		if err := cleanupBuildkit(action); err != nil {
+			buildkitSafe = false
+			action.Warningf("Failed to stop active BuildKit cache before pressure reset: %v", err)
+		}
+	}
+
 	for _, dir := range []string{filepath.Join(mountRoot, "mounts"), filepath.Join(mountRoot, "buildkit", "root"), gitMirrorDir(mountRoot)} {
+		if dir == gitMirrorDir(mountRoot) && !gitSafe {
+			continue
+		}
+		if dir == filepath.Join(mountRoot, "buildkit", "root") && !buildkitSafe {
+			continue
+		}
 		if _, err := os.Stat(dir); os.IsNotExist(err) {
 			continue
 		}

@@ -51,3 +51,37 @@ func TestCacheMountRestoresTargetWhenJunctionCreationFails(t *testing.T) {
 		t.Fatalf("backup remains after successful rollback: %v", err)
 	}
 }
+
+func TestCacheMountRemovesBackupAfterJunctionCreation(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "target")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "marker"), []byte("original"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	mountRoot := filepath.Join(root, "sticky")
+	src := filepath.Join(mountRoot, "mounts", sourceDirName(target))
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "cached"), []byte("cached"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "cmd.bat"), []byte("@exit /b 0\r\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+
+	action := githubactions.New(githubactions.WithWriter(os.Stderr))
+	if _, err := cacheMount(action, mountRoot, target, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(target + ".before-stickydisk"); !os.IsNotExist(err) {
+		t.Fatalf("backup remains after successful junction creation: %v", err)
+	}
+}

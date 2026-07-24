@@ -78,12 +78,6 @@ func Configure(action *githubactions.Action, opts Options) error {
 		return err
 	}
 
-	// Self-hosted runners reuse /tmp across jobs, so clear a cancelled prior
-	// invocation's marker before any early return can reach this job's post step.
-	if err := resetBuildkitPreparedState(requests, buildkitPreparedStateFile); err != nil {
-		return fmt.Errorf("clear stale BuildKit prepared state: %w", err)
-	}
-
 	readyFile := os.Getenv("RUNS_ON_STICKYDISK_READY_FILE")
 	if readyFile == "" {
 		readyFile = defaultReadyFile()
@@ -118,6 +112,13 @@ func Configure(action *githubactions.Action, opts Options) error {
 	// Self-heal a critically full volume before cache-hit detection: wiped
 	// caches report a miss and the next snapshot starts clean.
 	checkCritical(action, mountRoot)
+
+	// Self-hosted runners reuse /tmp across jobs. Clear a cancelled prior
+	// invocation's marker only after pressure recovery has had a chance to
+	// stop its active builder before deleting cache data.
+	if err := resetBuildkitPreparedState(requests, buildkitPreparedStateFile); err != nil {
+		return fmt.Errorf("clear stale BuildKit prepared state: %w", err)
+	}
 
 	home, err := os.UserHomeDir()
 	if err != nil {

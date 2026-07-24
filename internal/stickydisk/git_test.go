@@ -88,11 +88,18 @@ func TestGitProxyRewritesRestorePreExistingValues(t *testing.T) {
 	if info.Mode().Perm() != 0o600 {
 		t.Fatalf("rewrite state mode = %v, want 0600", info.Mode().Perm())
 	}
+	values, err := gitConfigGetAll(pushKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := strings.Join(values, ","), "ssh://git@github.com/,git://github.com/,https://github.com/"; got != want {
+		t.Fatalf("active pushInsteadOf = %q, want additive %q", got, want)
+	}
 	if err := restoreGitProxyRewritesAt(stateFile); err != nil {
 		t.Fatal(err)
 	}
 
-	values, err := gitConfigGetAll(pushKey)
+	values, err = gitConfigGetAll(pushKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,25 +120,39 @@ func TestConfigureGitProxyRewritesRollsBackPartialConfig(t *testing.T) {
 	action := githubactions.New(githubactions.WithWriter(os.Stderr))
 
 	setCalls := 0
+	addCalls := 0
 	rollbackCalls := 0
 	set := func(string, string) error {
 		setCalls++
-		if setCalls == 2 {
-			return os.ErrPermission
-		}
 		return nil
+	}
+	add := func(string, string) error {
+		addCalls++
+		return os.ErrPermission
 	}
 	rollback := func() error {
 		rollbackCalls++
 		return nil
 	}
 
-	err := configureGitProxyRewritesWith(action, 8123, set, rollback)
+	err := configureGitProxyRewritesWith(action, 8123, set, add, rollback)
 	if !errors.Is(err, os.ErrPermission) {
 		t.Fatalf("configure error = %v", err)
 	}
 	if rollbackCalls != 1 {
 		t.Fatalf("rollback calls = %d, want 1", rollbackCalls)
+	}
+	if setCalls != 1 || addCalls != 1 {
+		t.Fatalf("set/add calls = %d/%d, want 1/1", setCalls, addCalls)
+	}
+}
+
+func TestCommandLineHasGitProxyServe(t *testing.T) {
+	if !commandLineHasGitProxyServe("/path/action\x00--git-proxy-serve\x00") {
+		t.Fatal("proxy command line was not recognized")
+	}
+	if commandLineHasGitProxyServe("/path/action --git-proxy-server") {
+		t.Fatal("unrelated process command line was accepted")
 	}
 }
 

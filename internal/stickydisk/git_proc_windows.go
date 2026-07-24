@@ -21,3 +21,7 @@ func signalTerm(proc *os.Process) error {
 func processAlive(proc *os.Process) bool {
 	return false
 }
+
+func processIsGitProxy(int) bool {
+	return false
+}

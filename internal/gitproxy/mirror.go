@@ -47,6 +47,7 @@ type Mirror struct {
 	maintWG    sync.WaitGroup
 	closed     bool
 	lastSync   sync.Map // map[repoKey]time.Time
+	syncFailed sync.Map // map[repoKey]bool; keeps protocol-v2 follow-ups upstream
 }
 
 // NewMirror creates a mirror manager rooted at root. lastSync tracking is
@@ -90,6 +91,7 @@ func (m *Mirror) EnsureRepo(ctx context.Context, host, owner, repo, upstreamURL,
 		return "", "", err
 	}
 	if result.(Status) == StatusClone {
+		m.syncFailed.Delete(key)
 		m.log.Info("mirror cloned", "repo", key, "duration_ms", time.Since(start).Milliseconds())
 		return repoPath, StatusClone, nil
 	}
@@ -105,8 +107,10 @@ func (m *Mirror) EnsureRepo(ctx context.Context, host, owner, repo, upstreamURL,
 			// Serving a stale advertisement can make newly created refs fail
 			// before the client sends wants, so let the HTTP handler forward
 			// the complete request upstream instead.
+			m.syncFailed.Store(key, true)
 			return "", "", fmt.Errorf("sync public mirror: %w", err)
 		}
+		m.syncFailed.Delete(key)
 		m.lastSync.Store(key, time.Now())
 		m.scheduleOptimize(repoPath, false)
 		m.log.Info("mirror synced", "repo", key, "duration_ms", time.Since(start).Milliseconds())
@@ -121,6 +125,13 @@ func (m *Mirror) EnsureRepo(ctx context.Context, host, owner, repo, upstreamURL,
 		}
 	}
 	return repoPath, StatusHit, nil
+}
+
+// SyncFailed reports whether this proxy must keep a repository's protocol-v2
+// follow-up requests upstream until a later info/refs sync succeeds.
+func (m *Mirror) SyncFailed(host, owner, repo string) bool {
+	_, failed := m.syncFailed.Load(fmt.Sprintf("%s/%s/%s", host, owner, repo))
+	return failed
 }
 
 // isStale returns true if the repo needs syncing.

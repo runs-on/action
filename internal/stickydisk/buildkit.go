@@ -199,12 +199,17 @@ func dockerVolumeOwnedByRunsOn(volume dockerVolumeInspect) bool {
 // volume, then owns final shutdown because the sticky disk must not be
 // snapshotted while BuildKit is still writing to it.
 func cleanupBuildkit(action *githubactions.Action) error {
+	_, err := cleanupBuildkitWithSafety(action)
+	return err
+}
+
+func cleanupBuildkitWithSafety(action *githubactions.Action) (safeToDelete bool, err error) {
 	stateRootBytes, err := os.ReadFile(buildkitPreparedStateFile)
 	if os.IsNotExist(err) {
-		return nil
+		return true, nil
 	}
 	if err != nil {
-		return fmt.Errorf("read prepared BuildKit state: %w", err)
+		return false, fmt.Errorf("read prepared BuildKit state: %w", err)
 	}
 	defer os.Remove(buildkitPreparedStateFile)
 	stateRoot := strings.TrimSpace(string(stateRootBytes))
@@ -220,7 +225,17 @@ func cleanupBuildkit(action *githubactions.Action) error {
 		if !containerUsesBuildkitVolume(container) {
 			verificationErr = fmt.Errorf("Buildx container %s did not mount expected volume %s at %s; the pinned Buildx volume contract may have changed", buildkitContainerName, buildkitStateVolumeName, buildkitStateTarget)
 		} else {
-			action.Infof("Verified sticky BuildKit state mount: %s -> %s", stateRoot, buildkitStateTarget)
+			volume, found, volumeErr := inspectDockerVolume(buildkitStateVolumeName)
+			switch {
+			case volumeErr != nil:
+				verificationErr = volumeErr
+			case !found:
+				verificationErr = fmt.Errorf("BuildKit state volume %s disappeared before cleanup", buildkitStateVolumeName)
+			case !dockerVolumeMatches(volume, stateRoot):
+				verificationErr = fmt.Errorf("BuildKit state volume %s is not backed by %s", buildkitStateVolumeName, stateRoot)
+			default:
+				action.Infof("Verified sticky BuildKit state mount: %s -> %s", stateRoot, buildkitStateTarget)
+			}
 		}
 	}
 
@@ -236,7 +251,11 @@ func cleanupBuildkit(action *githubactions.Action) error {
 	if builderErr != nil {
 		builderErr = fmt.Errorf("remove BuildKit builder: %w", builderErr)
 	}
-	return errors.Join(topologyErr, verificationErr, stopErr, builderErr, volumeErr)
+	shutdownErr := errors.Join(stopErr, builderErr, volumeErr)
+	// A failed graceful stop is still safe for pressure recovery when forced
+	// builder/container removal succeeded and the volume was removed.
+	safeToDelete = builderErr == nil && volumeErr == nil
+	return safeToDelete, errors.Join(topologyErr, verificationErr, shutdownErr)
 }
 
 func removeBuildkitBuilder(action *githubactions.Action) error {

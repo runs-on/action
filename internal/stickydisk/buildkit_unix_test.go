@@ -48,3 +48,50 @@ exit 1
 		t.Fatalf("matching volume was unnecessarily recreated:\n%s", got)
 	}
 }
+
+func TestCleanupBuildkitTreatsCompletedForcedRemovalAsSafe(t *testing.T) {
+	previousState, previousErr := os.ReadFile(buildkitPreparedStateFile)
+	t.Cleanup(func() {
+		if previousErr == nil {
+			_ = os.WriteFile(buildkitPreparedStateFile, previousState, 0o600)
+		} else {
+			_ = os.Remove(buildkitPreparedStateFile)
+		}
+	})
+
+	bin := t.TempDir()
+	stateRoot := filepath.Join(t.TempDir(), "buildkit", "root")
+	script := `#!/bin/sh
+case "$1 $2" in
+  "buildx ls")
+    printf '%s\n' "runs-on0"
+    ;;
+  "container inspect")
+    printf '[{"Mounts":[{"Type":"volume","Name":"buildx_buildkit_runs-on0_state","Destination":"/var/lib/buildkit"}]}]\n'
+    ;;
+  "volume inspect")
+    printf '[{"Driver":"local","Labels":{"runs-on.stickydisk":"buildkit"},"Options":{"type":"none","o":"bind","device":"%s"}}]\n' "$VOLUME_DEVICE"
+    ;;
+  "stop --time")
+    exit 1
+    ;;
+esac
+exit 0
+`
+	if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(buildkitPreparedStateFile, []byte(stateRoot), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("VOLUME_DEVICE", filepath.Join(t.TempDir(), "not-sticky"))
+
+	safeToDelete, err := cleanupBuildkitWithSafety(githubactions.New())
+	if !safeToDelete {
+		t.Fatal("successful forced builder/container and volume removal should permit pressure recovery")
+	}
+	if err == nil || !strings.Contains(err.Error(), "is not backed by") || !strings.Contains(err.Error(), "did not stop cleanly") {
+		t.Fatalf("cleanup error = %v, want verification and graceful-stop errors", err)
+	}
+}

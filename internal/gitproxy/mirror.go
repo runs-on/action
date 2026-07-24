@@ -101,13 +101,16 @@ func (m *Mirror) EnsureRepo(ctx context.Context, host, owner, repo, upstreamURL,
 			return nil, m.syncRepo(ctx, repoPath, upstreamURL, authHeader)
 		})
 		if err != nil {
+			// Protocol v2 sends want-less follow-ups after info/refs. Once a
+			// sync fails, keep every follow-up upstream for both public and
+			// private mirrors so stale local refs cannot leak into the fetch.
+			m.syncFailed.Store(key, true)
 			if m.requiresAuth(repoPath) {
 				return "", "", fmt.Errorf("authentication required: %w", err)
 			}
 			// Serving a stale advertisement can make newly created refs fail
 			// before the client sends wants, so let the HTTP handler forward
 			// the complete request upstream instead.
-			m.syncFailed.Store(key, true)
 			return "", "", fmt.Errorf("sync public mirror: %w", err)
 		}
 		m.syncFailed.Delete(key)

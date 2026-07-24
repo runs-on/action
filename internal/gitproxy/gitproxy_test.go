@@ -223,6 +223,20 @@ func TestMirrorEnsureRepo(t *testing.T) {
 	if !mirror.SyncFailed("github.com", "owner", "repo") {
 		t.Fatal("public mirror sync failure was not retained for protocol-v2 follow-ups")
 	}
+
+	// Private mirrors need the same protocol-v2 fallback. The info/refs
+	// request reports an authentication-shaped error, but the following
+	// want-less ls-refs request must still stay upstream.
+	mirror.syncFailed.Delete("github.com/owner/repo")
+	if err := os.WriteFile(filepath.Join(repoPath, ".requires-auth"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, status, err = mirror.EnsureRepo(ctx, "github.com", "owner", "repo", upstreamURL, "Basic test"); err == nil || status != "" {
+		t.Fatalf("broken private mirror sync: status=%s err=%v, want propagated error", status, err)
+	}
+	if !mirror.SyncFailed("github.com", "owner", "repo") {
+		t.Fatal("private mirror sync failure was not retained for protocol-v2 follow-ups")
+	}
 }
 
 // TestServerServesGitClients exercises the full stack (router → mirror →

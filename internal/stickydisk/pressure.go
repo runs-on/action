@@ -74,10 +74,13 @@ func checkCritical(action *githubactions.Action, mountRoot string) {
 	}
 	buildkitSafe := true
 	if _, err := os.Stat(buildkitPreparedStateFile); err == nil {
-		if err := cleanupBuildkit(action); err != nil {
-			buildkitSafe = false
+		safeToDelete, err := cleanupBuildkitWithSafety(action)
+		if err != nil {
 			action.Warningf("Failed to stop active BuildKit cache before pressure reset: %v", err)
 		}
+		// Topology or mount verification errors are still reported, but only
+		// shutdown/removal failures make deleting the backing directory unsafe.
+		buildkitSafe = safeToDelete
 	}
 
 	for _, dir := range []string{filepath.Join(mountRoot, "mounts"), filepath.Join(mountRoot, "buildkit", "root"), gitMirrorDir(mountRoot)} {

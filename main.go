@@ -23,6 +23,7 @@ func handleMainExecution(action *githubactions.Action, ctx context.Context) {
 	if err != nil {
 		action.Fatalf("Failed to load configuration: %v", err)
 	}
+	stickydisk.SetBuildkitOutputs(action)
 
 	// Execute logic based on configuration
 	if cfg.HasShowEnv() {
@@ -45,10 +46,8 @@ func handleMainExecution(action *githubactions.Action, ctx context.Context) {
 	// Configure sticky disk cache mounts if requested
 	if cfg.HasStickyDiskCache() {
 		if err := stickydisk.Configure(action, stickydisk.Options{
-			Modes:         cfg.Cache,
-			Paths:         cfg.CachePaths,
-			WaitTimeout:   cfg.CacheWaitTimeout,
-			FailOnMissing: cfg.CacheFailOnMissing,
+			StickyCache:       cfg.StickyCache,
+			StickyWaitTimeout: cfg.StickyWaitTimeout,
 		}); err != nil {
 			action.Fatalf("Failed to configure sticky disk cache: %v", err)
 		}
@@ -87,11 +86,14 @@ func handlePostExecution(action *githubactions.Action, ctx context.Context) {
 		monitoring.GenerateMetricsSummary(action, cfg.Metrics, "chart", cfg.NetworkInterface, cfg.DiskDevice)
 	}
 
-	// Run cache mode post-job hooks (e.g. stop buildkitd) before the sticky
+	// Run cache mode post-job hooks (e.g. stop the Buildx builder) before the sticky
 	// disk is unmounted and snapshotted, then display usage
 	if cfg.HasStickyDiskCache() {
-		stickydisk.PostJob(action, cfg.Cache)
+		postErr := stickydisk.PostJob(action, cfg.StickyCache)
 		stickydisk.DisplayUsage(action)
+		if postErr != nil {
+			action.Fatalf("Sticky disk post-job cleanup failed: %v", postErr)
+		}
 	}
 
 	action.Infof("Post-execution phase finished.")

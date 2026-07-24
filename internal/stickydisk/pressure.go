@@ -64,8 +64,7 @@ func checkCritical(action *githubactions.Action, mountRoot string) {
 	if !stats.critical() {
 		return
 	}
-	action.Warningf("Sticky disk is critically full (%s): resetting all caches on the volume so this and future jobs can run. Consider a larger snap= size.", stats)
-	// buildkit/bin is kept: it is small and saves a re-download.
+	action.Warningf("Sticky disk is critically full (%s): resetting all caches on the volume so this and future jobs can run. Consider a larger sticky= size.", stats)
 	for _, dir := range []string{filepath.Join(mountRoot, "mounts"), filepath.Join(mountRoot, "buildkit", "root"), gitMirrorDir(mountRoot)} {
 		if _, err := os.Stat(dir); os.IsNotExist(err) {
 			continue
@@ -90,8 +89,8 @@ func warnOnPressure(action *githubactions.Action, mountRoot string) {
 	}
 
 	breakdown := usageBreakdown(mountRoot)
-	action.Warningf("Sticky disk is running low on space (%s). The volume is snapshotted as-is: increase the snap= label size (e.g. snap=40gb) or reduce cache usage, otherwise caches will be automatically reset once the volume is critically full.", stats)
-	summary := fmt.Sprintf("### :warning: Sticky disk cache almost full\n\n%s\n\n```\n%s\n```\n\nIncrease the `snap=` label size (e.g. `snap=40gb`) or reduce cache usage. Caches are automatically reset when the volume becomes critically full (<%d%% free).\n", stats, breakdown, criticalFreePct)
+	action.Warningf("Sticky disk is running low on space (%s). The volume is snapshotted as-is: increase the sticky= label size (e.g. sticky=40gb) or reduce cache usage, otherwise caches will be automatically reset once the volume is critically full.", stats)
+	summary := fmt.Sprintf("### :warning: Sticky disk cache almost full\n\n%s\n\n```\n%s\n```\n\nIncrease the `sticky=` label size (e.g. `sticky=40gb`) or reduce cache usage. Caches are automatically reset when the volume becomes critically full (<%d%% free).\n", stats, breakdown, criticalFreePct)
 	action.AddStepSummary(summary)
 }
 

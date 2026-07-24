@@ -1,23 +1,126 @@
 package stickydisk
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/sethvargo/go-githubactions"
 )
 
-func TestResolveModes(t *testing.T) {
-	modes, unknown := ResolveModes([]string{"go", "NPM", " ruby ", "bogus", "golang", ""})
-	if len(unknown) != 1 || unknown[0] != "bogus" {
-		t.Errorf("expected unknown [bogus], got %v", unknown)
+func TestParseCacheRequests(t *testing.T) {
+	requests, err := ParseCacheRequests([]string{
+		"go",
+		" NPM ",
+		"golang",
+		"custom,path=vendor/custom-cache,path=~/.cache/tool",
+		"custom,path=vendor/custom-cache",
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
-	var names []string
-	for _, m := range modes {
-		names = append(names, m.Name)
+	if len(requests) != 3 {
+		t.Fatalf("expected three requests, got %#v", requests)
 	}
-	// golang is an alias of go, already seen: deduplicated
-	expected := []string{"go", "node", "ruby"}
-	if strings.Join(names, ",") != strings.Join(expected, ",") {
-		t.Errorf("expected modes %v, got %v", expected, names)
+	if requests[0].Mode.Name != "go" {
+		t.Errorf("unexpected go request: %#v", requests[0])
+	}
+	if requests[1].Mode.Name != "node" {
+		t.Errorf("unexpected node request: %#v", requests[1])
+	}
+	custom := requests[2]
+	if !custom.Custom {
+		t.Errorf("unexpected custom request: %#v", custom)
+	}
+	if got, want := strings.Join(custom.Paths, ","), "vendor/custom-cache,~/.cache/tool"; got != want {
+		t.Errorf("custom paths = %q, want %q", got, want)
+	}
+}
+
+func TestParseCacheRequestsAlias(t *testing.T) {
+	requests, err := ParseCacheRequests([]string{"buildx"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(requests) != 1 || requests[0].Mode.Name != "buildkit" {
+		t.Fatalf("unexpected requests: %#v", requests)
+	}
+}
+
+func TestParseCacheRequestsMergesDuplicateBuiltins(t *testing.T) {
+	requests, err := ParseCacheRequests([]string{"go", "golang", "go"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(requests) != 1 {
+		t.Fatalf("unexpected requests: %#v", requests)
+	}
+}
+
+func TestParseCacheRequestsRejectsInvalidRecords(t *testing.T) {
+	tests := []struct {
+		name  string
+		entry string
+		want  string
+	}{
+		{name: "old comma list", entry: "go,node", want: "key=value"},
+		{name: "slash options", entry: "buildkit/fail-on-missing=true", want: "slash-delimited"},
+		{name: "unknown mode", entry: "bogus", want: "unknown cache mode"},
+		{name: "unknown option", entry: "go,missing=true", want: "unknown cache option"},
+		{name: "removed fail-on-missing option", entry: "go,fail-on-missing=true", want: "unknown cache option"},
+		{name: "empty mode", entry: ",fail-on-missing=true", want: "cache mode is empty"},
+		{name: "empty option", entry: "go,", want: "cache option is empty"},
+		{name: "custom without path", entry: "custom", want: "requires at least one path"},
+		{name: "path on builtin", entry: "go,path=vendor/cache", want: "only supported by the custom"},
+		{name: "empty path", entry: "custom,path=", want: "non-empty value"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := ParseCacheRequests([]string{tt.entry})
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("ParseCacheRequests(%q) error = %v, want substring %q", tt.entry, err, tt.want)
+			}
+		})
+	}
+}
+
+func TestMissingDiskIsFatal(t *testing.T) {
+	t.Setenv("GITHUB_OUTPUT", t.TempDir()+"/output")
+	action := githubactions.New()
+	err := missing(action, "sticky disk missing")
+	if err == nil || !strings.Contains(err.Error(), "sticky disk missing") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := missing(action, "sticky disk was not ready after 10ms"); err == nil || !strings.Contains(err.Error(), "not ready") {
+		t.Fatalf("cache should fail after timeout: %v", err)
+	}
+}
+
+func TestWaitForReadyTimesOut(t *testing.T) {
+	action := githubactions.New()
+	_, err := waitForReady(action, t.TempDir()+"/missing", t.TempDir()+"/unavailable", time.Millisecond)
+	if err == nil || !strings.Contains(err.Error(), "sticky disk was not ready") {
+		t.Fatalf("unexpected timeout error: %v", err)
+	}
+}
+
+func TestWaitForReadyFailsImmediatelyWhenDiskIsUnavailable(t *testing.T) {
+	root := t.TempDir()
+	unavailableFile := filepath.Join(root, "stickydisk.unavailable")
+	if err := os.WriteFile(unavailableFile, []byte("sticky disk unavailable\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	action := githubactions.New()
+	started := time.Now()
+	_, err := waitForReady(action, filepath.Join(root, "stickydisk.ready"), unavailableFile, time.Minute)
+	if err == nil || !strings.Contains(err.Error(), "sticky disk is unavailable") {
+		t.Fatalf("unexpected unavailable error: %v", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("unavailable marker was not handled immediately: %s", elapsed)
 	}
 }
 
@@ -62,28 +165,23 @@ func TestSourceDirName(t *testing.T) {
 
 func TestBuildkitMode(t *testing.T) {
 	for _, name := range []string{"buildkit", "buildx"} {
-		modes, unknown := ResolveModes([]string{name})
-		if len(unknown) != 0 || len(modes) != 1 {
-			t.Fatalf("expected %s to resolve to one mode, got modes=%v unknown=%v", name, modes, unknown)
+		requests, err := ParseCacheRequests([]string{name})
+		if err != nil || len(requests) != 1 {
+			t.Fatalf("expected %s to resolve to one mode, got requests=%v err=%v", name, requests, err)
 		}
-		mode := modes[0]
+		mode := requests[0].Mode
 		if mode.Name != "buildkit" {
 			t.Errorf("expected canonical name buildkit, got %s", mode.Name)
 		}
 		if mode.Setup == nil || mode.PostJob == nil {
 			t.Errorf("expected buildkit mode to define Setup and PostJob")
 		}
+		if !mode.SetupFailureFatal || !mode.PostJobFailureFatal {
+			t.Errorf("expected buildkit setup and cleanup contract failures to be fatal")
+		}
 		if len(mode.Paths) != 0 {
 			t.Errorf("expected buildkit mode to have no bind-mount paths, got %v", mode.Paths)
 		}
-	}
-}
-
-func TestBuildkitTarballURL(t *testing.T) {
-	url := buildkitTarballURL("v0.31.1", "arm64")
-	expected := "https://github.com/moby/buildkit/releases/download/v0.31.1/buildkit-v0.31.1.linux-arm64.tar.gz"
-	if url != expected {
-		t.Errorf("got %q, want %q", url, expected)
 	}
 }
 
@@ -119,15 +217,6 @@ func TestStatDiskSmoke(t *testing.T) {
 	}
 	if stats.totalBytes == 0 {
 		t.Errorf("expected non-zero totalBytes")
-	}
-}
-
-func TestBuildkitGCConfig(t *testing.T) {
-	config := buildkitGCConfig()
-	for _, expected := range []string{"[worker.oci]", "gc = true", `maxUsedSpace = "75%"`, `minFreeSpace = "20%"`} {
-		if !strings.Contains(config, expected) {
-			t.Errorf("expected %q in config:\n%s", expected, config)
-		}
 	}
 }
 
@@ -168,5 +257,23 @@ func TestModeSupportedOn(t *testing.T) {
 	}
 	if !cacheModes["go"].supportedOn("windows") {
 		t.Error("go mode must be supported on windows")
+	}
+}
+
+func TestResetBuildkitPreparedState(t *testing.T) {
+	stateFile := filepath.Join(t.TempDir(), "prepared")
+	if err := os.WriteFile(stateFile, []byte("stale"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	requests, err := ParseCacheRequests([]string{"buildkit"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := resetBuildkitPreparedState(requests, stateFile); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(stateFile); !os.IsNotExist(err) {
+		t.Fatalf("prepared state still exists: %v", err)
 	}
 }

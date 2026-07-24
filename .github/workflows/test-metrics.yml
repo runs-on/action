@@ -18,7 +18,7 @@ jobs:
       matrix:
         image: [ubuntu24-full-x64, ubuntu24-full-arm64]
         configuration: ["existing-aws-creds", "no-aws-creds", "cw-agent-stopped"]
-    runs-on: runs-on=${{ github.run_id }}/cpu=2/family=m7/image=${{ matrix.image }}
+    runs-on: runs-on=${{ github.run_id }}/env=bootstrap/cpu=2/family=m7/image=${{ matrix.image }}
     steps:
       - uses: actions/checkout@v6
       - name: configure aws credentials

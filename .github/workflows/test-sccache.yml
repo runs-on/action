@@ -11,7 +11,7 @@ on:
 
 jobs:
   test-sccache:
-    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/extras=s3-cache
+    runs-on: runs-on=${{ github.run_id }}/env=bootstrap/runner=2cpu-linux-x64/extras=s3-cache
     
     steps:
       - uses: actions/checkout@v6
@@ -103,4 +103,4 @@ jobs:
           echo "SCCACHE_BUCKET: $SCCACHE_BUCKET"
           echo "SCCACHE_REGION: $SCCACHE_REGION"
           echo "SCCACHE_S3_KEY_PREFIX: $SCCACHE_S3_KEY_PREFIX"
-          echo "RUSTC_WRAPPER: $RUSTC_WRAPPER" 
+          echo "RUSTC_WRAPPER: $RUSTC_WRAPPER"

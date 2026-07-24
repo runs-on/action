@@ -36,7 +36,7 @@ jobs:
         image: [ubuntu24-full-x64, ubuntu24-full-arm64]
         container:
           - ubuntu:24.04
-    runs-on: runs-on=${{ github.run_id }}/cpu=2/family=m7/image=${{ matrix.image }}/extras=s3-cache
+    runs-on: runs-on=${{ github.run_id }}/env=bootstrap/cpu=2/family=m7/image=${{ matrix.image }}/extras=s3-cache
     container: ${{ matrix.container }}
     env:
       ARTEFACT_NAME: ${{ github.run_id }}-${{ strategy.job-index }}-my-artifact

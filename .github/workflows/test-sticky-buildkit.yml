@@ -110,6 +110,7 @@ jobs:
         uses: ./
         with:
           sticky_cache: buildkit
+          sticky_wait_timeout: 1s
       - name: Verify missing sticky disk failed
         env:
           OUTCOME: ${{ steps.sticky_cache.outcome }}

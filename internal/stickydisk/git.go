@@ -146,10 +146,21 @@ func ensureGitProxy(action *githubactions.Action, mirrorDir string) (gitproxy.St
 }
 
 func gitProxyOwner() string {
+	// The runner generates RUNNER_TRACKING_ID per job execution, while
+	// GITHUB_JOB is shared by every matrix expansion. Runner names are the
+	// best available fallback on older runner versions.
+	executionID := os.Getenv("RUNNER_TRACKING_ID")
+	if executionID == "" {
+		executionID = os.Getenv("RUNS_ON_RUNNER_NAME")
+	}
+	if executionID == "" {
+		executionID = os.Getenv("RUNNER_NAME")
+	}
 	return strings.Join([]string{
 		os.Getenv("GITHUB_RUN_ID"),
 		os.Getenv("GITHUB_RUN_ATTEMPT"),
 		os.Getenv("GITHUB_JOB"),
+		executionID,
 	}, "/")
 }
 

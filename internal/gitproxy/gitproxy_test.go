@@ -302,6 +302,65 @@ func TestMirrorRepairFailureMarksSyncFailed(t *testing.T) {
 	}
 }
 
+func TestPrivateMirrorMarkerFailureRemovesClone(t *testing.T) {
+	repoPath := filepath.Join(t.TempDir(), "repo.git")
+	if err := os.MkdirAll(filepath.Join(repoPath, ".requires-auth"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repoPath, "private-object"), []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := markPrivateMirror(repoPath); err == nil {
+		t.Fatal("private marker unexpectedly succeeded over a directory")
+	}
+	if _, err := os.Stat(repoPath); !os.IsNotExist(err) {
+		t.Fatalf("private clone survived marker failure: %v", err)
+	}
+}
+
+func TestSharedCloneValidatesWaiterAuthorization(t *testing.T) {
+	mirror, err := NewMirror(t.TempDir(), time.Hour, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mirror.Close()
+
+	key := "github.com/owner/repo"
+	repoPath := mirror.RepoPath("github.com", "owner", "repo")
+	if err := os.MkdirAll(filepath.Dir(repoPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitCmd(t, t.TempDir(), "init", "--bare", repoPath)
+	if err := os.WriteFile(filepath.Join(repoPath, ".requires-auth"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		_, _, _ = mirror.group.Do("clone:"+key, func() (interface{}, error) {
+			close(started)
+			<-release
+			mirror.markAuthorized(key, repoPath, "Basic leader")
+			return StatusClone, nil
+		})
+	}()
+	<-started
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		close(release)
+	}()
+
+	_, _, err = mirror.EnsureRepo(t.Context(), "github.com", "owner", "repo", "file:///missing-upstream", "Basic waiter")
+	<-finished
+	if err == nil || !strings.Contains(err.Error(), "authentication required") {
+		t.Fatalf("shared clone waiter authorization error = %v", err)
+	}
+}
+
 // TestServerServesGitClients exercises the full stack (router → mirror →
 // git http-backend CGI) with real git clients: full clone, shallow clone,
 // exact-SHA fetch and filtered fetch, over smart HTTP protocol v2.

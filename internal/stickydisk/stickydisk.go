@@ -298,7 +298,11 @@ func validateCacheOrdering(requests []CacheRequest, goos, workspace string) erro
 			paths = request.Mode.pathsFor(goos)
 		}
 		for _, path := range paths {
-			if isWorkspaceCachePath(path, workspace) {
+			inWorkspace, err := isWorkspaceCachePath(path, workspace)
+			if err != nil {
+				return fmt.Errorf("classify %s cache path %s: %w", name, path, err)
+			}
+			if inWorkspace {
 				workspaceModes = append(workspaceModes, name)
 				break
 			}
@@ -311,15 +315,22 @@ func validateCacheOrdering(requests []CacheRequest, goos, workspace string) erro
 	return nil
 }
 
-func isWorkspaceCachePath(path, workspace string) bool {
+func isWorkspaceCachePath(path, workspace string) (bool, error) {
 	if !filepath.IsAbs(path) {
-		return path != "~" && !strings.HasPrefix(path, "~/")
+		return path != "~" && !strings.HasPrefix(path, "~/"), nil
 	}
 	if workspace == "" {
-		return false
+		return false, nil
 	}
-	rel, err := filepath.Rel(filepath.Clean(workspace), filepath.Clean(path))
-	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+	canonicalPath, err := canonicalCacheTarget(path)
+	if err != nil {
+		return false, err
+	}
+	canonicalWorkspace, err := canonicalCacheTarget(workspace)
+	if err != nil {
+		return false, err
+	}
+	return pathContains(canonicalWorkspace, canonicalPath), nil
 }
 
 func resetBuildkitPreparedState(requests []CacheRequest, stateFile string) error {

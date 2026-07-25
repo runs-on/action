@@ -254,6 +254,20 @@ func TestGitProxyStateMatchesMirrorRoot(t *testing.T) {
 	}
 }
 
+func TestGitProxyOwnerDistinguishesMatrixExecutions(t *testing.T) {
+	t.Setenv("GITHUB_RUN_ID", "123")
+	t.Setenv("GITHUB_RUN_ATTEMPT", "1")
+	t.Setenv("GITHUB_JOB", "test")
+	t.Setenv("RUNNER_TRACKING_ID", "matrix-leg-a")
+	first := gitProxyOwner()
+
+	t.Setenv("RUNNER_TRACKING_ID", "matrix-leg-b")
+	second := gitProxyOwner()
+	if first == second {
+		t.Fatalf("matrix executions share proxy owner %q", first)
+	}
+}
+
 func TestShouldRestoreGitProxyRewrites(t *testing.T) {
 	state := gitproxy.State{Owner: "123/1/build"}
 	if shouldRestoreGitProxyRewrites(state, "123/1/build", true) {

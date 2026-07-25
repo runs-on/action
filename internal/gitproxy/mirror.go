@@ -13,6 +13,7 @@ package gitproxy
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -104,6 +105,7 @@ func (m *Mirror) EnsureRepo(ctx context.Context, host, owner, repo, upstreamURL,
 			if err := m.cloneRepo(ctx, repoPath, upstreamURL, authHeader); err != nil {
 				return StatusClone, err
 			}
+			m.markAuthorized(key, repoPath, authHeader)
 			m.lastSync.Store(key, time.Now())
 			return StatusClone, nil
 		}
@@ -117,14 +119,20 @@ func (m *Mirror) EnsureRepo(ctx context.Context, host, owner, repo, upstreamURL,
 	}
 	if result.(Status) == StatusClone {
 		m.syncFailed.Delete(key)
-		m.markAuthorized(key, repoPath, authHeader)
+		if err := m.authorizeRepo(ctx, key, repoPath, upstreamURL, authHeader); err != nil {
+			return "", "", fmt.Errorf("authentication required: %w", err)
+		}
 		m.log.Info("mirror cloned", "repo", key, "duration_ms", time.Since(start).Milliseconds())
 		return repoPath, StatusClone, nil
 	}
 
 	if m.isStale(key) {
 		_, err, _ := m.group.Do("sync:"+key, func() (interface{}, error) {
-			return nil, m.syncRepo(ctx, repoPath, upstreamURL, authHeader)
+			if err := m.syncRepo(ctx, repoPath, upstreamURL, authHeader); err != nil {
+				return nil, err
+			}
+			m.markAuthorized(key, repoPath, authHeader)
+			return nil, nil
 		})
 		if err != nil {
 			// Protocol v2 sends want-less follow-ups after info/refs. Once a
@@ -141,7 +149,9 @@ func (m *Mirror) EnsureRepo(ctx context.Context, host, owner, repo, upstreamURL,
 		}
 		m.syncFailed.Delete(key)
 		m.lastSync.Store(key, time.Now())
-		m.markAuthorized(key, repoPath, authHeader)
+		if err := m.authorizeRepo(ctx, key, repoPath, upstreamURL, authHeader); err != nil {
+			return "", "", fmt.Errorf("authentication required: %w", err)
+		}
 		m.scheduleOptimize(repoPath, false)
 		m.log.Info("mirror synced", "repo", key, "duration_ms", time.Since(start).Milliseconds())
 		return repoPath, StatusSync, nil
@@ -250,12 +260,27 @@ func (m *Mirror) cloneRepo(ctx context.Context, repoPath, upstreamURL, authHeade
 	}
 
 	if authHeader != "" {
-		if err := os.WriteFile(filepath.Join(repoPath, ".requires-auth"), []byte("1"), 0o644); err != nil {
-			m.log.Warn("failed to mark repo as requiring auth", "path", repoPath, "err", err)
+		if err := markPrivateMirror(repoPath); err != nil {
+			return err
 		}
 	}
 
 	m.scheduleOptimize(repoPath, true)
+	return nil
+}
+
+// markPrivateMirror fails closed: without this persisted marker, a future
+// proxy process would treat cached private objects as public. Remove the clone
+// if the marker cannot be written so no unsafe snapshot can survive.
+func markPrivateMirror(repoPath string) error {
+	marker := filepath.Join(repoPath, ".requires-auth")
+	if err := os.WriteFile(marker, []byte("1"), 0o644); err != nil {
+		markerErr := fmt.Errorf("mark private mirror %s: %w", repoPath, err)
+		if cleanupErr := os.RemoveAll(repoPath); cleanupErr != nil {
+			return errors.Join(markerErr, fmt.Errorf("remove unmarked private mirror: %w", cleanupErr))
+		}
+		return markerErr
+	}
 	return nil
 }
 

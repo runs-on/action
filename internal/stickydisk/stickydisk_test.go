@@ -115,6 +115,28 @@ func TestValidateCacheOrdering(t *testing.T) {
 	}
 }
 
+func TestValidateCacheOrderingResolvesWorkspaceSymlinks(t *testing.T) {
+	root := t.TempDir()
+	workspace := filepath.Join(root, "workspace")
+	target := filepath.Join(workspace, "vendor", "cache")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(root, "outside-alias")
+	if err := os.Symlink(target, alias); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	requests, err := ParseCacheRequests([]string{"git", "custom,path=" + alias})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = validateCacheOrdering(requests, "linux", workspace)
+	if err == nil || !strings.Contains(err.Error(), "second runs-on/action step") {
+		t.Fatalf("symlinked workspace cache ordering error = %v", err)
+	}
+}
+
 func TestValidateNoOverlappingTargets(t *testing.T) {
 	if err := validateNoOverlappingTargets([]string{"/workspace/vendor", "/workspace/vendor/cache"}); err == nil {
 		t.Fatal("nested cache targets were accepted")

@@ -10,9 +10,8 @@ import (
 )
 
 // maxParseBody bounds how much of an upload-pack request we buffer for want
-// inspection. Checkout-style requests (few wants, no haves) are tiny; bodies
-// beyond this are negotiations from clients that already have most objects,
-// which the mirror can always serve.
+// inspection. Wants precede the potentially large list of haves, so the
+// buffered prefix is still inspected when the request exceeds this limit.
 const maxParseBody = 4 << 20
 
 var wantRe = regexp.MustCompile(`(?m)^want ([0-9a-f]{40,64})`)
@@ -48,13 +47,11 @@ func (s *Server) handleUploadPack(w http.ResponseWriter, r *http.Request, t targ
 		return
 	}
 
-	if overflow == nil {
-		for _, want := range parseWants(body, r.Header.Get("Content-Encoding")) {
-			if !s.mirror.HasObject(r.Context(), repoPath, want) {
-				s.log.Warn("want not in mirror, forwarding upstream", "repo", t.repoKey(), "want", want)
-				s.forwardUpstream(w, r, t, restored, "missing-want")
-				return
-			}
+	for _, want := range parseWants(body, r.Header.Get("Content-Encoding")) {
+		if !s.mirror.HasObject(r.Context(), repoPath, want) {
+			s.log.Warn("want not in mirror, forwarding upstream", "repo", t.repoKey(), "want", want)
+			s.forwardUpstream(w, r, t, restored, "missing-want")
+			return
 		}
 	}
 
@@ -88,7 +85,10 @@ func parseWants(body []byte, contentEncoding string) []string {
 			return nil
 		}
 		decoded, err := io.ReadAll(io.LimitReader(gz, maxParseBody))
-		if err != nil {
+		// A large compressed request leaves the buffered gzip stream
+		// incomplete. Its decoded prefix still contains the want lines and is
+		// safe to inspect even when the reader reports an unexpected EOF.
+		if err != nil && len(decoded) == 0 {
 			return nil
 		}
 		body = decoded

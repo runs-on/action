@@ -157,6 +157,46 @@ func TestCommandLineHasGitProxyServe(t *testing.T) {
 	}
 }
 
+func TestGitProxyLogLifecycle(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "git-proxy.log")
+	if err := os.WriteFile(path, []byte("prior job\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	logFile, err := openGitProxyLog(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := logFile.WriteString("current job\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := logFile.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(path); err != nil || string(got) != "current job\n" {
+		t.Fatalf("truncated log = %q, err = %v", got, err)
+	}
+
+	large := strings.Repeat("x", 8192) + "tail"
+	if err := os.WriteFile(path, []byte(large), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tail, err := readFileTail(path, 4000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tail) > 4003 || !strings.HasPrefix(tail, "...") || !strings.HasSuffix(tail, "tail") {
+		t.Fatalf("bounded tail = %q (len %d)", tail, len(tail))
+	}
+
+	if err := removeFileIfExists(path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("proxy log still exists after cleanup: %v", err)
+	}
+}
+
 // removeGitProxyRewrites must be a no-op (not an error) when nothing was
 // configured: the post step always runs, even after a failed setup.
 func TestRemoveGitProxyRewritesIdempotent(t *testing.T) {

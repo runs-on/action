@@ -1,6 +1,7 @@
 package stickydisk
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -83,7 +84,15 @@ func checkCritical(action *githubactions.Action, mountRoot string) {
 		buildkitSafe = safeToDelete
 	}
 
-	for _, dir := range []string{filepath.Join(mountRoot, "mounts"), filepath.Join(mountRoot, "buildkit", "root"), gitMirrorDir(mountRoot)} {
+	// Cache source directories may already be bind-mounted by an earlier
+	// action invocation in this job. Empty their contents while preserving
+	// the directory inode so active targets remain attached to a path that
+	// will be included in the sticky-disk snapshot.
+	if err := resetMountCaches(action, filepath.Join(mountRoot, "mounts")); err != nil {
+		action.Warningf("Failed to reset mounted caches: %v", err)
+	}
+
+	for _, dir := range []string{filepath.Join(mountRoot, "buildkit", "root"), gitMirrorDir(mountRoot)} {
 		if dir == gitMirrorDir(mountRoot) && !gitSafe {
 			continue
 		}
@@ -97,6 +106,48 @@ func checkCritical(action *githubactions.Action, mountRoot string) {
 			action.Warningf("Failed to reset %s: %v", dir, err)
 		}
 	}
+}
+
+func resetMountCaches(action *githubactions.Action, mountsRoot string) error {
+	return resetMountCachesWith(mountsRoot, func(path string) error {
+		return removeCacheDir(action, path)
+	})
+}
+
+// resetMountCachesWith preserves every top-level cache source directory while
+// removing its children. Bind mounts reference the source inode, so removing
+// the source itself would detach subsequent writes from the snapshot tree.
+func resetMountCachesWith(mountsRoot string, remove func(string) error) error {
+	entries, err := os.ReadDir(mountsRoot)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read mounted cache root %s: %w", mountsRoot, err)
+	}
+
+	var resetErr error
+	for _, entry := range entries {
+		source := filepath.Join(mountsRoot, entry.Name())
+		if !entry.IsDir() {
+			if err := remove(source); err != nil {
+				resetErr = errors.Join(resetErr, fmt.Errorf("remove stale mount entry %s: %w", source, err))
+			}
+			continue
+		}
+		children, err := os.ReadDir(source)
+		if err != nil {
+			resetErr = errors.Join(resetErr, fmt.Errorf("read cache source %s: %w", source, err))
+			continue
+		}
+		for _, child := range children {
+			path := filepath.Join(source, child.Name())
+			if err := remove(path); err != nil {
+				resetErr = errors.Join(resetErr, fmt.Errorf("remove cache entry %s: %w", path, err))
+			}
+		}
+	}
+	return resetErr
 }
 
 // warnOnPressure logs a usage summary in the post step and emits a warning

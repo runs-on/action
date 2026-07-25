@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -103,7 +104,7 @@ func ensureGitProxy(action *githubactions.Action, mirrorDir string) (gitproxy.St
 		return gitproxy.State{}, fmt.Errorf("cannot locate action binary: %w", err)
 	}
 
-	logFile, err := os.OpenFile(gitProxyLogFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	logFile, err := openGitProxyLog(gitProxyLogFile)
 	if err != nil {
 		return gitproxy.State{}, fmt.Errorf("cannot open proxy log file: %w", err)
 	}
@@ -391,6 +392,9 @@ func stopGit(action *githubactions.Action) error {
 	if os.Getenv("RUNNER_DEBUG") == "1" {
 		logProxyTail(action)
 	}
+	if err := removeFileIfExists(gitProxyLogFile); err != nil {
+		action.Warningf("Failed to remove git proxy log: %v", err)
+	}
 	if len(errs) > 0 {
 		return fmt.Errorf("git cache mode cleanup: %s", strings.Join(errs, "; "))
 	}
@@ -433,8 +437,48 @@ func commandLineHasGitProxyServe(command string) bool {
 	return false
 }
 
+func openGitProxyLog(path string) (*os.File, error) {
+	// Self-hosted runners retain /tmp across jobs. Truncate when ownership
+	// transfers to a new proxy so stale logs cannot grow without bound.
+	return os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+}
+
+func readFileTail(path string, limit int64) (string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+
+	info, err := file.Stat()
+	if err != nil {
+		return "", err
+	}
+	offset := info.Size() - limit
+	prefix := ""
+	if offset > 0 {
+		if _, err := file.Seek(offset, io.SeekStart); err != nil {
+			return "", err
+		}
+		prefix = "..."
+	}
+	log, err := io.ReadAll(io.LimitReader(file, limit))
+	if err != nil {
+		return "", err
+	}
+	return prefix + string(log), nil
+}
+
+func removeFileIfExists(path string) error {
+	err := os.Remove(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	return err
+}
+
 func logProxyTail(action *githubactions.Action) {
-	if log, err := os.ReadFile(gitProxyLogFile); err == nil && len(log) > 0 {
-		action.Infof("git proxy log:\n%s", tailString(string(log), 4000))
+	if log, err := readFileTail(gitProxyLogFile, 4000); err == nil && log != "" {
+		action.Infof("git proxy log:\n%s", log)
 	}
 }

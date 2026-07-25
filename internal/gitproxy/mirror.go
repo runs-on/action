@@ -89,6 +89,11 @@ func (m *Mirror) EnsureRepo(ctx context.Context, host, owner, repo, upstreamURL,
 		if statErr == nil {
 			if _, seen := m.lastSync.Load(key); !seen {
 				if err := configureMirrorUploadPack(ctx, repoPath); err != nil {
+					// Protocol v2 follows the failed info/refs request with
+					// want-less requests. Keep those upstream just as we do
+					// after a fetch failure, or stale local refs can leak into
+					// the remainder of the negotiation.
+					m.syncFailed.Store(key, true)
 					return StatusHit, err
 				}
 			}

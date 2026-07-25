@@ -339,6 +339,42 @@ func TestDiskStatsThresholds(t *testing.T) {
 	}
 }
 
+func TestResetMountCachesPreservesSourceDirectories(t *testing.T) {
+	mountsRoot := filepath.Join(t.TempDir(), "mounts")
+	sources := []string{
+		filepath.Join(mountsRoot, "go-build"),
+		filepath.Join(mountsRoot, "apt"),
+	}
+	for _, source := range sources {
+		if err := os.MkdirAll(filepath.Join(source, "nested"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(source, "nested", "cached"), []byte("cache"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stray := filepath.Join(mountsRoot, "stray")
+	if err := os.WriteFile(stray, []byte("stale"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := resetMountCachesWith(mountsRoot, os.RemoveAll); err != nil {
+		t.Fatal(err)
+	}
+	for _, source := range sources {
+		info, err := os.Stat(source)
+		if err != nil || !info.IsDir() {
+			t.Fatalf("cache source %s was removed: %v", source, err)
+		}
+		if entries, err := os.ReadDir(source); err != nil || len(entries) != 0 {
+			t.Fatalf("cache source %s was not emptied: entries=%v err=%v", source, entries, err)
+		}
+	}
+	if _, err := os.Stat(stray); !os.IsNotExist(err) {
+		t.Fatalf("stray mount entry survived reset: %v", err)
+	}
+}
+
 func TestStatDiskSmoke(t *testing.T) {
 	stats, err := statDisk(t.TempDir())
 	if err != nil {

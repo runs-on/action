@@ -275,6 +275,33 @@ func TestMirrorEnsureRepo(t *testing.T) {
 	}
 }
 
+func TestMirrorRepairFailureMarksSyncFailed(t *testing.T) {
+	upstreamBase, _ := newUpstreamRepo(t)
+	mirror, err := NewMirror(t.TempDir(), time.Hour, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mirror.Close()
+
+	ctx := t.Context()
+	upstreamURL := upstreamBase + "/owner/repo.git"
+	repoPath, _, err := mirror.EnsureRepo(ctx, "github.com", "owner", "repo", upstreamURL, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mirror.lastSync.Delete("github.com/owner/repo")
+	if err := os.WriteFile(filepath.Join(repoPath, "config.lock"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := mirror.EnsureRepo(ctx, "github.com", "owner", "repo", upstreamURL, ""); err == nil {
+		t.Fatal("upload-pack configuration repair unexpectedly succeeded with config.lock present")
+	}
+	if !mirror.SyncFailed("github.com", "owner", "repo") {
+		t.Fatal("upload-pack repair failure was not retained for protocol-v2 follow-ups")
+	}
+}
+
 // TestServerServesGitClients exercises the full stack (router → mirror →
 // git http-backend CGI) with real git clients: full clone, shallow clone,
 // exact-SHA fetch and filtered fetch, over smart HTTP protocol v2.
@@ -394,6 +421,30 @@ func TestServerFallbacks(t *testing.T) {
 		}
 		if len(requests) != 1 || requests[0].path != "/owner/repo.git/git-upload-pack" || requests[0].body != body {
 			t.Errorf("upstream saw %+v", requests)
+		}
+	})
+
+	t.Run("missing want in large request forwards upload-pack upstream", func(t *testing.T) {
+		requests = nil
+		mirrorRepo := server.mirror.RepoPath("github.com", "owner", "repo")
+		if err := os.MkdirAll(filepath.Dir(mirrorRepo), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if !server.mirror.IsUsable(t.Context(), mirrorRepo) {
+			gitCmd(t, t.TempDir(), "init", "--bare", mirrorRepo)
+		}
+
+		body := pkt("command=fetch") + "0001" + pkt("want "+strings.Repeat("d", 40)+"\n") + strings.Repeat("x", maxParseBody)
+		resp, err := http.Post(ts.URL+"/github.com/owner/repo.git/git-upload-pack", "application/x-git-upload-pack-request", strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		if got := resp.Header.Get(statusHeader); got != "upstream-missing-want" {
+			t.Errorf("%s = %q", statusHeader, got)
+		}
+		if len(requests) != 1 || requests[0].path != "/owner/repo.git/git-upload-pack" || requests[0].body != body {
+			t.Errorf("upstream did not receive the complete large request")
 		}
 	})
 

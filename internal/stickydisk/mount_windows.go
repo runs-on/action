@@ -100,8 +100,8 @@ func cacheMount(action *githubactions.Action, mountRoot, target string, rootOwne
 		return hit, err
 	}
 	if backup != "" {
-		if err := os.RemoveAll(backup); err != nil {
-			return hit, fmt.Errorf("remove cache backup %s after junction creation: %w", backup, err)
+		if err := removeWindowsCacheBackup(target, backup, !hit, os.RemoveAll); err != nil {
+			return hit, err
 		}
 	}
 	return hit, nil

@@ -228,6 +228,37 @@ func TestSameDirectory(t *testing.T) {
 	}
 }
 
+func TestWindowsColdBackupCleanupRestoresTarget(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "target")
+	backup := target + ".before-stickydisk"
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(backup, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(backup, "original")
+	if err := os.WriteFile(marker, []byte("keep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cleanupErr := errors.New("backup is busy")
+
+	err := removeWindowsCacheBackup(target, backup, true, func(string) error {
+		return cleanupErr
+	})
+	if !errors.Is(err, cleanupErr) {
+		t.Fatalf("cleanup error = %v, want %v", err, cleanupErr)
+	}
+	data, err := os.ReadFile(filepath.Join(target, "original"))
+	if err != nil || string(data) != "keep" {
+		t.Fatalf("restored target marker = %q, err = %v", data, err)
+	}
+	if _, err := os.Stat(backup); !os.IsNotExist(err) {
+		t.Fatalf("backup remains after rollback: %v", err)
+	}
+}
+
 func TestUnsupportedModeMakesCacheResultMiss(t *testing.T) {
 	results := []mountResult{
 		{Target: "node", Hit: true},
@@ -439,6 +470,16 @@ func TestAptModeRestoresSystemConfiguration(t *testing.T) {
 	}
 	if !mode.PostJobFailureFatal {
 		t.Fatal("expected apt configuration restore failures to be fatal")
+	}
+}
+
+func TestGitModeCleanupIsFatal(t *testing.T) {
+	mode := cacheModes["git"]
+	if mode.Setup == nil || mode.PostJob == nil {
+		t.Fatal("expected git mode to define setup and cleanup hooks")
+	}
+	if !mode.PostJobFailureFatal {
+		t.Fatal("expected git proxy cleanup failures to be fatal")
 	}
 }
 

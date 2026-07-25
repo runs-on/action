@@ -3,6 +3,7 @@ package stickydisk
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -67,6 +68,34 @@ func sameDirectory(a, b string) bool {
 	aInfo, aErr := os.Stat(a)
 	bInfo, bErr := os.Stat(b)
 	return aErr == nil && bErr == nil && os.SameFile(aInfo, bInfo)
+}
+
+// removeWindowsCacheBackup finalizes the directory-to-junction swap. A cold
+// source is deleted by cacheMount's error defer, so a failed backup removal
+// must first put the original target back instead of leaving a broken junction.
+func removeWindowsCacheBackup(target, backup string, cold bool, removeBackup func(string) error) error {
+	cleanupErr := removeBackup(backup)
+	if cleanupErr == nil {
+		return nil
+	}
+	result := fmt.Errorf("remove cache backup %s after junction creation: %w", backup, cleanupErr)
+	if _, err := os.Lstat(backup); os.IsNotExist(err) {
+		// Some removal implementations can report a late error after the
+		// backup has already disappeared; the junction is safe in that case.
+		return nil
+	} else if err != nil {
+		return errors.Join(result, fmt.Errorf("inspect cache backup %s after failed removal: %w", backup, err))
+	}
+	if !cold {
+		return result
+	}
+	if err := os.Remove(target); err != nil && !os.IsNotExist(err) {
+		return errors.Join(result, fmt.Errorf("remove failed cache junction %s: %w", target, err))
+	}
+	if err := os.Rename(backup, target); err != nil {
+		return errors.Join(result, fmt.Errorf("restore existing cache path %s from %s: %w", target, backup, err))
+	}
+	return result
 }
 
 // recordMountedTarget persists the target-to-source mapping on the sticky

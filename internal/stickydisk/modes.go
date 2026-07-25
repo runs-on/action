@@ -51,7 +51,7 @@ var cacheModes = map[string]CacheMode{
 	"poetry":     {Name: "poetry", Paths: []string{"~/.cache/pypoetry"}, WindowsPaths: []string{"~/AppData/Local/pypoetry/Cache"}},
 	"apt":        {Name: "apt", Paths: []string{"/var/cache/apt/archives"}, Root: true, Post: configureApt, PostJob: restoreApt, PostJobFailureFatal: true},
 	"buildkit":   {Name: "buildkit", Setup: setupBuildkit, SetupFailureFatal: true, PostJob: cleanupBuildkit, PostJobFailureFatal: true},
-	"git":        {Name: "git", Setup: setupGit, PostJob: stopGit},
+	"git":        {Name: "git", Setup: setupGit, PostJob: stopGit, PostJobFailureFatal: true},
 	"gradle":     {Name: "gradle", Paths: []string{"~/.gradle/caches", "~/.gradle/wrapper"}},
 	"maven":      {Name: "maven", Paths: []string{"~/.m2/repository"}},
 	"playwright": {Name: "playwright", Paths: []string{"~/.cache/ms-playwright"}, WindowsPaths: []string{"~/AppData/Local/ms-playwright"}},

@@ -128,6 +128,14 @@ func (m *Mirror) EnsureRepo(ctx context.Context, host, owner, repo, upstreamURL,
 
 	if m.isStale(key) {
 		_, err, _ := m.group.Do("sync:"+key, func() (interface{}, error) {
+			// A repository can become private after its public mirror was
+			// created. Persist that boundary before fetching potentially
+			// private objects into the previously public mirror.
+			if authHeader != "" && !m.requiresAuth(repoPath) {
+				if err := markPrivateMirror(repoPath); err != nil {
+					return nil, err
+				}
+			}
 			if err := m.syncRepo(ctx, repoPath, upstreamURL, authHeader); err != nil {
 				return nil, err
 			}
@@ -252,6 +260,14 @@ func (m *Mirror) cloneRepo(ctx context.Context, repoPath, upstreamURL, authHeade
 		return fmt.Errorf("git clone failed: %w\noutput: %s", err, output)
 	}
 
+	// Mark authenticated mirrors before any fallible post-clone setup. If
+	// setup fails, the usable bare repository must still fail closed.
+	if authHeader != "" {
+		if err := markPrivateMirror(repoPath); err != nil {
+			return err
+		}
+	}
+
 	// actions/checkout fetches exact commit SHAs and sparse checkouts fetch
 	// with --filter=blob:none; upload-pack rejects both unless the mirror
 	// repo config allows them.
@@ -259,19 +275,13 @@ func (m *Mirror) cloneRepo(ctx context.Context, repoPath, upstreamURL, authHeade
 		return err
 	}
 
-	if authHeader != "" {
-		if err := markPrivateMirror(repoPath); err != nil {
-			return err
-		}
-	}
-
 	m.scheduleOptimize(repoPath, true)
 	return nil
 }
 
 // markPrivateMirror fails closed: without this persisted marker, a future
-// proxy process would treat cached private objects as public. Remove the clone
-// if the marker cannot be written so no unsafe snapshot can survive.
+// proxy process would treat cached private objects as public. Remove the
+// mirror if the marker cannot be written so no unsafe snapshot can survive.
 func markPrivateMirror(repoPath string) error {
 	marker := filepath.Join(repoPath, ".requires-auth")
 	if err := os.WriteFile(marker, []byte("1"), 0o644); err != nil {

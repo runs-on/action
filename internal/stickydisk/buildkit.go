@@ -236,7 +236,6 @@ func cleanupBuildkitWithSafety(action *githubactions.Action) (safeToDelete bool,
 	if err != nil {
 		return false, fmt.Errorf("read prepared BuildKit state: %w", err)
 	}
-	defer os.Remove(buildkitPreparedStateFile)
 	stateRoot := strings.TrimSpace(string(stateRootBytes))
 
 	nodes, topologyErr := inspectBuildxNodes()
@@ -280,7 +279,16 @@ func cleanupBuildkitWithSafety(action *githubactions.Action) (safeToDelete bool,
 	// A failed graceful stop is still safe for pressure recovery when forced
 	// builder/container removal succeeded and the volume was removed.
 	safeToDelete = builderErr == nil && volumeErr == nil
-	return safeToDelete, errors.Join(topologyErr, verificationErr, shutdownErr)
+	var markerErr error
+	if safeToDelete {
+		// Preserve the marker after forced-removal failures so both pressure
+		// recovery and a later post hook know the backing directory may still
+		// be in use.
+		if err := os.Remove(buildkitPreparedStateFile); err != nil && !os.IsNotExist(err) {
+			markerErr = fmt.Errorf("remove prepared BuildKit state marker: %w", err)
+		}
+	}
+	return safeToDelete, errors.Join(topologyErr, verificationErr, shutdownErr, markerErr)
 }
 
 func removeBuildkitBuilder(action *githubactions.Action) error {

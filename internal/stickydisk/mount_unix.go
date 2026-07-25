@@ -93,6 +93,9 @@ func cacheMount(action *githubactions.Action, mountRoot, target string, rootOwne
 }
 
 func mergeTargetIntoCache(action *githubactions.Action, target, src string, rootOwned, restored bool) error {
+	if err := removeMergeTypeConflicts(action, target, src, rootOwned); err != nil {
+		return err
+	}
 	args := []string{"cp", "-a", "--", strings.TrimRight(target, "/") + "/.", src}
 	if rootOwned {
 		args = append([]string{"sudo"}, args...)
@@ -110,6 +113,52 @@ func mergeTargetIntoCache(action *githubactions.Action, target, src string, root
 		return copyErr
 	}
 	return nil
+}
+
+// removeMergeTypeConflicts makes the current checkout authoritative when a
+// restored entry changed between directory, regular file, or symlink. cp -a
+// cannot replace a destination directory with a file (or the reverse).
+func removeMergeTypeConflicts(action *githubactions.Action, target, src string, rootOwned bool) error {
+	return filepath.WalkDir(target, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return fmt.Errorf("inspect cache target %s: %w", path, walkErr)
+		}
+		rel, err := filepath.Rel(target, path)
+		if err != nil {
+			return fmt.Errorf("resolve cache target entry %s: %w", path, err)
+		}
+		if rel == "." {
+			return nil
+		}
+		destination := filepath.Join(src, rel)
+		destinationInfo, err := os.Lstat(destination)
+		if os.IsNotExist(err) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("inspect restored cache entry %s: %w", destination, err)
+		}
+		sourceInfo, err := os.Lstat(path)
+		if err != nil {
+			return fmt.Errorf("inspect current cache entry %s: %w", path, err)
+		}
+		if sourceInfo.Mode().Type() == destinationInfo.Mode().Type() {
+			return nil
+		}
+
+		// Root-owned modes such as apt require elevated removal; ordinary
+		// workspace and home caches stay within runner-user permissions.
+		if rootOwned {
+			if err := removeCacheDir(action, destination); err != nil {
+				return fmt.Errorf("replace conflicting restored cache entry %s: %w", destination, err)
+			}
+			return nil
+		}
+		if err := os.RemoveAll(destination); err != nil {
+			return fmt.Errorf("replace conflicting restored cache entry %s: %w", destination, err)
+		}
+		return nil
+	})
 }
 
 // removeCacheDir deletes a cache directory on the sticky disk. Contents may be

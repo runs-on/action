@@ -68,3 +68,37 @@ exit 1
 		t.Fatalf("restored source was lost after merge failure: %q, err=%v", got, err)
 	}
 }
+
+func TestMergeTargetIntoWarmCacheReplacesConflictingTypes(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "target")
+	src := filepath.Join(root, "src")
+	if err := os.MkdirAll(filepath.Join(target, "directory-now"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "directory-now", "current"), []byte("directory"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "file-now"), []byte("file"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(src, "file-now"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "file-now", "stale"), []byte("directory"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "directory-now"), []byte("file"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := mergeTargetIntoCache(githubactions.New(), target, src, false, true); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(filepath.Join(src, "directory-now", "current")); err != nil || string(got) != "directory" {
+		t.Fatalf("current directory did not replace cached file: %q, err=%v", got, err)
+	}
+	if got, err := os.ReadFile(filepath.Join(src, "file-now")); err != nil || string(got) != "file" {
+		t.Fatalf("current file did not replace cached directory: %q, err=%v", got, err)
+	}
+}

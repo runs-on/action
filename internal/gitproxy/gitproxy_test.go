@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -80,17 +81,18 @@ func TestResolveTarget(t *testing.T) {
 		method, path, query string
 		kind                requestKind
 		owner, repo         string
+		rest                string
 		wantErr             bool
 	}{
-		{"GET", "/github.com/foo/bar/info/refs", "service=git-upload-pack", kindInfoRefs, "foo", "bar", false},
-		{"GET", "/github.com/foo/bar.git/info/refs", "service=git-upload-pack", kindInfoRefs, "foo", "bar", false},
-		{"POST", "/github.com/foo/bar.git/git-upload-pack", "", kindUploadPack, "foo", "bar", false},
+		{"GET", "/github.com/foo/bar/info/refs", "service=git-upload-pack", kindInfoRefs, "foo", "bar", "/foo/bar/info/refs", false},
+		{"GET", "/github.com/Foo/BaR.git/info/refs", "service=git-upload-pack", kindInfoRefs, "foo", "bar", "/Foo/BaR.git/info/refs", false},
+		{"POST", "/github.com/foo/bar.git/git-upload-pack", "", kindUploadPack, "foo", "bar", "/foo/bar.git/git-upload-pack", false},
 		// receive-pack and LFS endpoints fall through to upstream
-		{"GET", "/github.com/foo/bar/info/refs", "service=git-receive-pack", kindFallback, "", "", false},
-		{"POST", "/github.com/foo/bar.git/git-receive-pack", "", kindFallback, "", "", false},
-		{"POST", "/github.com/foo/bar.git/info/lfs/objects/batch", "", kindFallback, "", "", false},
-		{"GET", "/gitlab.com/foo/bar/info/refs", "service=git-upload-pack", 0, "", "", true},
-		{"GET", "/github.com", "", 0, "", "", true},
+		{"GET", "/github.com/foo/bar/info/refs", "service=git-receive-pack", kindFallback, "", "", "/foo/bar/info/refs", false},
+		{"POST", "/github.com/foo/bar.git/git-receive-pack", "", kindFallback, "", "", "/foo/bar.git/git-receive-pack", false},
+		{"POST", "/github.com/foo/bar.git/info/lfs/objects/batch", "", kindFallback, "", "", "/foo/bar.git/info/lfs/objects/batch", false},
+		{"GET", "/gitlab.com/foo/bar/info/refs", "service=git-upload-pack", 0, "", "", "", true},
+		{"GET", "/github.com", "", 0, "", "", "", true},
 	}
 	for _, tt := range tests {
 		r := httptest.NewRequest(tt.method, tt.path+"?"+tt.query, nil)
@@ -105,9 +107,9 @@ func TestResolveTarget(t *testing.T) {
 			t.Errorf("%s %s: unexpected error: %v", tt.method, tt.path, err)
 			continue
 		}
-		if target.kind != tt.kind || target.owner != tt.owner || target.repo != tt.repo {
-			t.Errorf("%s %s: got kind=%d owner=%q repo=%q, want kind=%d owner=%q repo=%q",
-				tt.method, tt.path, target.kind, target.owner, target.repo, tt.kind, tt.owner, tt.repo)
+		if target.kind != tt.kind || target.owner != tt.owner || target.repo != tt.repo || target.rest != tt.rest {
+			t.Errorf("%s %s: got kind=%d owner=%q repo=%q rest=%q, want kind=%d owner=%q repo=%q rest=%q",
+				tt.method, tt.path, target.kind, target.owner, target.repo, target.rest, tt.kind, tt.owner, tt.repo, tt.rest)
 		}
 	}
 }
@@ -316,6 +318,68 @@ func TestPrivateMirrorMarkerFailureRemovesClone(t *testing.T) {
 	}
 	if _, err := os.Stat(repoPath); !os.IsNotExist(err) {
 		t.Fatalf("private clone survived marker failure: %v", err)
+	}
+}
+
+func TestAuthenticatedSyncMarksMirrorPrivate(t *testing.T) {
+	upstreamBase, _ := newUpstreamRepo(t)
+	mirror, err := NewMirror(t.TempDir(), time.Hour, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mirror.Close()
+
+	ctx := t.Context()
+	upstreamURL := upstreamBase + "/owner/repo.git"
+	repoPath, _, err := mirror.EnsureRepo(ctx, "github.com", "owner", "repo", upstreamURL, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mirror.lastSync.Delete("github.com/owner/repo")
+	if _, status, err := mirror.EnsureRepo(ctx, "github.com", "owner", "repo", upstreamURL, "Basic test"); err != nil || status != StatusSync {
+		t.Fatalf("authenticated sync: status=%s err=%v", status, err)
+	}
+	if _, err := os.Stat(filepath.Join(repoPath, ".requires-auth")); err != nil {
+		t.Fatalf("authenticated sync did not mark mirror private: %v", err)
+	}
+}
+
+func TestPrivateCloneMarksBeforeConfigFailure(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses a POSIX git wrapper to inject the configuration failure")
+	}
+	upstreamBase, _ := newUpstreamRepo(t)
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	script := fmt.Sprintf(`#!/bin/sh
+if [ "$1" = "-C" ] && [ "$3" = "config" ]; then
+  echo "injected config failure" >&2
+  exit 1
+fi
+exec %q "$@"
+`, realGit)
+	if err := os.WriteFile(filepath.Join(bin, "git"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	mirror, err := NewMirror(t.TempDir(), time.Hour, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mirror.Close()
+
+	repoPath := mirror.RepoPath("github.com", "owner", "repo")
+	_, _, err = mirror.EnsureRepo(t.Context(), "github.com", "owner", "repo", upstreamBase+"/owner/repo.git", "Basic test")
+	if err == nil || !strings.Contains(err.Error(), "injected config failure") {
+		t.Fatalf("private clone configuration error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(repoPath, ".requires-auth")); err != nil {
+		t.Fatalf("private clone was left unmarked after configuration failure: %v", err)
 	}
 }
 

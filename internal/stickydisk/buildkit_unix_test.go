@@ -137,4 +137,57 @@ exit 0
 	if err == nil || !strings.Contains(err.Error(), "is not backed by") || !strings.Contains(err.Error(), "did not stop cleanly") {
 		t.Fatalf("cleanup error = %v, want verification and graceful-stop errors", err)
 	}
+	if _, err := os.Stat(buildkitPreparedStateFile); !os.IsNotExist(err) {
+		t.Fatalf("safe cleanup retained prepared-state marker: %v", err)
+	}
+}
+
+func TestCleanupBuildkitRetainsMarkerWhenForcedRemovalFails(t *testing.T) {
+	previousState, previousErr := os.ReadFile(buildkitPreparedStateFile)
+	t.Cleanup(func() {
+		if previousErr == nil {
+			_ = os.WriteFile(buildkitPreparedStateFile, previousState, 0o600)
+		} else {
+			_ = os.Remove(buildkitPreparedStateFile)
+		}
+	})
+
+	bin := t.TempDir()
+	stateRoot := filepath.Join(t.TempDir(), "buildkit", "root")
+	script := `#!/bin/sh
+case "$1 $2" in
+  "buildx ls")
+    printf '%s\n' "runs-on0"
+    exit 0
+    ;;
+  "container inspect")
+    printf '[{"Mounts":[{"Type":"volume","Name":"buildx_buildkit_runs-on0_state","Destination":"/var/lib/buildkit"}]}]\n'
+    exit 0
+    ;;
+  "volume inspect")
+    printf '[{"Driver":"local","Labels":{"runs-on.stickydisk":"buildkit"},"Options":{"type":"none","o":"bind","device":"%s"}}]\n' "$VOLUME_DEVICE"
+    exit 0
+    ;;
+esac
+exit 1
+`
+	if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(buildkitPreparedStateFile, []byte(stateRoot), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("VOLUME_DEVICE", stateRoot)
+
+	safeToDelete, err := cleanupBuildkitWithSafety(githubactions.New())
+	if safeToDelete {
+		t.Fatal("failed forced builder/container and volume removal was treated as safe")
+	}
+	if err == nil {
+		t.Fatal("failed forced cleanup returned no error")
+	}
+	if got, readErr := os.ReadFile(buildkitPreparedStateFile); readErr != nil || string(got) != stateRoot {
+		t.Fatalf("unsafe cleanup lost prepared-state marker: got %q, err=%v", got, readErr)
+	}
 }

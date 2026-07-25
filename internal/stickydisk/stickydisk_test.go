@@ -138,11 +138,14 @@ func TestValidateCacheOrderingResolvesWorkspaceSymlinks(t *testing.T) {
 }
 
 func TestValidateNoOverlappingTargets(t *testing.T) {
-	if err := validateNoOverlappingTargets([]string{"/workspace/vendor", "/workspace/vendor/cache"}); err == nil {
+	if err := validateNoOverlappingTargets([]string{"/workspace/vendor", "/workspace/vendor/cache"}, "/runs-on/stickydisk"); err == nil {
 		t.Fatal("nested cache targets were accepted")
 	}
-	if err := validateNoOverlappingTargets([]string{"/workspace/vendor", "/home/runner/.cache"}); err != nil {
+	if err := validateNoOverlappingTargets([]string{"/workspace/vendor", "/home/runner/.cache"}, "/runs-on/stickydisk"); err != nil {
 		t.Fatalf("independent cache targets were rejected: %v", err)
+	}
+	if err := validateNoOverlappingTargets([]string{"/runs-on"}, "/runs-on/stickydisk"); err == nil {
+		t.Fatal("cache target containing the sticky mount was accepted")
 	}
 }
 
@@ -160,7 +163,7 @@ func TestValidateNoOverlappingTargetsResolvesSymlinks(t *testing.T) {
 	err := validateNoOverlappingTargets([]string{
 		filepath.Join(alias, "cache"),
 		vendor,
-	})
+	}, filepath.Join(root, "sticky"))
 	if err == nil {
 		t.Fatal("symlinked nested cache targets were accepted")
 	}
@@ -511,23 +514,5 @@ func TestModeSupportedOn(t *testing.T) {
 	}
 	if !cacheModes["go"].supportedOn("windows") {
 		t.Error("go mode must be supported on windows")
-	}
-}
-
-func TestResetBuildkitPreparedState(t *testing.T) {
-	stateFile := filepath.Join(t.TempDir(), "prepared")
-	if err := os.WriteFile(stateFile, []byte("stale"), 0600); err != nil {
-		t.Fatal(err)
-	}
-
-	requests, err := ParseCacheRequests([]string{"buildkit"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := resetBuildkitPreparedState(requests, stateFile); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(stateFile); !os.IsNotExist(err) {
-		t.Fatalf("prepared state still exists: %v", err)
 	}
 }

@@ -110,13 +110,6 @@ func Configure(action *githubactions.Action, opts Options) error {
 	// caches report a miss and the next snapshot starts clean.
 	checkCritical(action, mountRoot)
 
-	// Self-hosted runners reuse /tmp across jobs. Clear a cancelled prior
-	// invocation's marker only after pressure recovery has had a chance to
-	// stop its active builder before deleting cache data.
-	if err := resetBuildkitPreparedState(requests, buildkitPreparedStateFile); err != nil {
-		return fmt.Errorf("clear stale BuildKit prepared state: %w", err)
-	}
-
 	home, err := os.UserHomeDir()
 	if err != nil {
 		if runtime.GOOS == "windows" {
@@ -181,7 +174,7 @@ func Configure(action *githubactions.Action, opts Options) error {
 	for _, spec := range specs {
 		targets = append(targets, spec.target)
 	}
-	if err := validateNoOverlappingTargets(targets); err != nil {
+	if err := validateNoOverlappingTargets(targets, mountRoot); err != nil {
 		return err
 	}
 	if len(specs) == 0 && len(results) == 0 {
@@ -219,7 +212,7 @@ func Configure(action *githubactions.Action, opts Options) error {
 	return nil
 }
 
-func validateNoOverlappingTargets(targets []string) error {
+func validateNoOverlappingTargets(targets []string, mountRoot string) error {
 	canonical := make([]string, len(targets))
 	for i, target := range targets {
 		resolved, err := canonicalCacheTarget(target)
@@ -227,6 +220,18 @@ func validateNoOverlappingTargets(targets []string) error {
 			return fmt.Errorf("resolve sticky cache path %s: %w", target, err)
 		}
 		canonical[i] = resolved
+	}
+	canonicalMountRoot, err := canonicalCacheTarget(mountRoot)
+	if err != nil {
+		return fmt.Errorf("resolve sticky disk mount %s: %w", mountRoot, err)
+	}
+	for i, target := range canonical {
+		// cacheMount creates the source below mountRoot before copying the
+		// target. Allowing an ancestor target would recursively copy the sticky
+		// disk into its own descendant.
+		if pathContains(target, canonicalMountRoot) {
+			return fmt.Errorf("sticky cache path %s contains the sticky disk mount %s", targets[i], mountRoot)
+		}
 	}
 	for i := range canonical {
 		for j := i + 1; j < len(canonical); j++ {
@@ -331,18 +336,6 @@ func isWorkspaceCachePath(path, workspace string) (bool, error) {
 		return false, err
 	}
 	return pathContains(canonicalWorkspace, canonicalPath), nil
-}
-
-func resetBuildkitPreparedState(requests []CacheRequest, stateFile string) error {
-	for _, request := range requests {
-		if !request.Custom && request.Mode.Name == "buildkit" {
-			if err := os.Remove(stateFile); err != nil && !os.IsNotExist(err) {
-				return err
-			}
-			return nil
-		}
-	}
-	return nil
 }
 
 // missing handles the no-sticky-disk case. Requesting sticky_cache is an

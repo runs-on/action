@@ -179,6 +179,13 @@ func (s *Server) resolveTarget(r *http.Request) (target, error) {
 		return target{}, fmt.Errorf("invalid repo path %q: expected {owner}/{repo}", repoPath)
 	}
 	t.owner, t.repo = segs[0], segs[1]
+	if t.host == "github.com" {
+		// GitHub owner and repository identifiers are case-insensitive. Keep
+		// the original request in rest for upstream forwarding, but use one
+		// canonical spelling for local mirror paths and in-memory keys.
+		t.owner = strings.ToLower(t.owner)
+		t.repo = strings.ToLower(t.repo)
+	}
 	return t, nil
 }
 

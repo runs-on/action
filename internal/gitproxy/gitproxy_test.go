@@ -448,6 +448,36 @@ func TestServerFallbacks(t *testing.T) {
 		}
 	})
 
+	t.Run("private mirror direct upload-pack authenticates upstream", func(t *testing.T) {
+		requests = nil
+		mirrorRepo := server.mirror.RepoPath("github.com", "owner", "repo")
+		if err := os.MkdirAll(filepath.Dir(mirrorRepo), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if !server.mirror.IsUsable(t.Context(), mirrorRepo) {
+			gitCmd(t, t.TempDir(), "init", "--bare", mirrorRepo)
+		}
+		authMarker := filepath.Join(mirrorRepo, ".requires-auth")
+		if err := os.WriteFile(authMarker, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		defer os.Remove(authMarker)
+
+		lsRefs := pkt("command=ls-refs") + "0001" + pkt("peel\n") + "0000"
+		resp, err := http.Post(ts.URL+"/github.com/owner/repo.git/git-upload-pack", "application/x-git-upload-pack-request", strings.NewReader(lsRefs))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		if got := resp.Header.Get(statusHeader); got != "upstream-authentication-required" {
+			t.Errorf("%s = %q", statusHeader, got)
+		}
+		if string(body) != "upstream response" {
+			t.Errorf("private mirror response came from local cache: %q", body)
+		}
+	})
+
 	t.Run("failed sync keeps protocol v2 upstream", func(t *testing.T) {
 		requests = nil
 		server.mirror.syncFailed.Store("github.com/owner/repo", true)

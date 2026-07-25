@@ -124,6 +124,26 @@ func TestValidateNoOverlappingTargets(t *testing.T) {
 	}
 }
 
+func TestValidateNoOverlappingTargetsResolvesSymlinks(t *testing.T) {
+	root := t.TempDir()
+	vendor := filepath.Join(root, "vendor")
+	if err := os.MkdirAll(vendor, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(root, "alias")
+	if err := os.Symlink(vendor, alias); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	err := validateNoOverlappingTargets([]string{
+		filepath.Join(alias, "cache"),
+		vendor,
+	})
+	if err == nil {
+		t.Fatal("symlinked nested cache targets were accepted")
+	}
+}
+
 func TestValidateStickyMount(t *testing.T) {
 	root := t.TempDir()
 	if err := validateStickyMountWith(root, func(string) bool { return true }); err != nil {
@@ -158,7 +178,7 @@ func TestUnsupportedModeMakesCacheResultMiss(t *testing.T) {
 	}
 }
 
-func TestSeedColdCacheCopiesExistingContents(t *testing.T) {
+func TestMergeTargetIntoColdCacheCopiesExistingContents(t *testing.T) {
 	root := t.TempDir()
 	target := filepath.Join(root, "target")
 	src := filepath.Join(root, "src")
@@ -171,12 +191,50 @@ func TestSeedColdCacheCopiesExistingContents(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(target, "nested", "marker"), []byte("seeded"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := seedColdCache(githubactions.New(), target, src, false); err != nil {
+	if err := mergeTargetIntoCache(githubactions.New(), target, src, false, false); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(filepath.Join(src, "nested", "marker"))
 	if err != nil || string(data) != "seeded" {
 		t.Fatalf("seeded marker = %q, err = %v", data, err)
+	}
+}
+
+func TestMergeTargetIntoWarmCachePreservesRestoredAndCurrentContents(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "target")
+	src := filepath.Join(root, "src")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "restored-only"), []byte("cached"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "shared"), []byte("stale"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "current-only"), []byte("checked-in"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "shared"), []byte("current"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := mergeTargetIntoCache(githubactions.New(), target, src, false, true); err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]string{
+		"restored-only": "cached",
+		"current-only":  "checked-in",
+		"shared":        "current",
+	} {
+		got, err := os.ReadFile(filepath.Join(src, name))
+		if err != nil || string(got) != want {
+			t.Errorf("%s = %q, err=%v, want %q", name, got, err, want)
+		}
 	}
 }
 

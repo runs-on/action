@@ -41,10 +41,11 @@ func cacheMount(action *githubactions.Action, mountRoot, target string, rootOwne
 		return hit, nil
 	}
 
-	// Seed a cold junction target before moving it aside, otherwise checkout
-	// or image-provided files disappear behind the new junction.
-	if !hit && dirNonEmpty(target) {
-		if err := seedColdCache(action, target, src, false); err != nil {
+	// Merge the current target before moving it aside, otherwise checkout or
+	// image-provided files—including files added after a warm snapshot—would
+	// disappear behind the new junction.
+	if dirNonEmpty(target) {
+		if err := mergeTargetIntoCache(action, target, src, false, hit); err != nil {
 			return false, err
 		}
 	}
@@ -101,7 +102,7 @@ func isMountpoint(path string) bool {
 	return exec.Command("cmd", "/c", "mountvol", mountPath, "/L").Run() == nil
 }
 
-func seedColdCache(_ *githubactions.Action, target, src string, _ bool) error {
+func mergeTargetIntoCache(_ *githubactions.Action, target, src string, _ bool, restored bool) error {
 	cmd := exec.Command("robocopy", target, src, "/E", "/COPY:DAT", "/DCOPY:DAT", "/XJ", "/R:1", "/W:1")
 	out, err := cmd.CombinedOutput()
 	if err == nil {
@@ -111,7 +112,10 @@ func seedColdCache(_ *githubactions.Action, target, src string, _ bool) error {
 	if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() <= 7 {
 		return nil
 	}
-	copyErr := fmt.Errorf("seed cold cache %s from %s: %w: %s", src, target, err, strings.TrimSpace(string(out)))
+	copyErr := fmt.Errorf("merge cache target %s into %s: %w: %s", target, src, err, strings.TrimSpace(string(out)))
+	if restored {
+		return copyErr
+	}
 	if cleanupErr := os.RemoveAll(src); cleanupErr != nil {
 		return errors.Join(copyErr, fmt.Errorf("remove partial cache source %s: %w", src, cleanupErr))
 	}

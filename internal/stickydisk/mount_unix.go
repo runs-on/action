@@ -43,10 +43,11 @@ func cacheMount(action *githubactions.Action, mountRoot, target string, rootOwne
 		return false, fmt.Errorf("cache path %s is already an unrelated mountpoint; expected sticky source %s", target, src)
 	}
 
-	// A cold source must inherit files already created by checkout or the
-	// runner image before the bind mount hides the target directory.
-	if !hit && dirNonEmpty(target) {
-		if err := seedColdCache(action, target, src, rootOwned); err != nil {
+	// Merge files already created by checkout or the runner image before the
+	// bind mount hides the target. This also keeps newly checked-in files when
+	// a warm snapshot contains an older version of a workspace cache.
+	if dirNonEmpty(target) {
+		if err := mergeTargetIntoCache(action, target, src, rootOwned, hit); err != nil {
 			return false, err
 		}
 	}
@@ -91,15 +92,18 @@ func cacheMount(action *githubactions.Action, mountRoot, target string, rootOwne
 	return hit, nil
 }
 
-func seedColdCache(action *githubactions.Action, target, src string, rootOwned bool) error {
+func mergeTargetIntoCache(action *githubactions.Action, target, src string, rootOwned, restored bool) error {
 	args := []string{"cp", "-a", "--", strings.TrimRight(target, "/") + "/.", src}
 	if rootOwned {
 		args = append([]string{"sudo"}, args...)
 	}
 	if err := runLogged(action, args[0], args[1:]...); err != nil {
-		copyErr := fmt.Errorf("seed cold cache %s from %s: %w", src, target, err)
+		copyErr := fmt.Errorf("merge cache target %s into %s: %w", target, src, err)
+		if restored {
+			return copyErr
+		}
 		// A later job uses a non-empty source as its hit signal, so a partial
-		// copy must never survive and masquerade as a restorable cache.
+		// cold copy must never survive and masquerade as a restorable cache.
 		if cleanupErr := removeCacheDir(action, src); cleanupErr != nil {
 			return errors.Join(copyErr, fmt.Errorf("remove partial cache source %s: %w", src, cleanupErr))
 		}

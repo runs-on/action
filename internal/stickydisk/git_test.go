@@ -197,6 +197,38 @@ func TestGitProxyLogLifecycle(t *testing.T) {
 	}
 }
 
+func TestRestoreRewritesBeforeStoppingProxy(t *testing.T) {
+	restoreErr := errors.New("git config is locked")
+	stopCalls := 0
+	err := restoreRewritesThenStop(
+		func() error { return restoreErr },
+		func() error {
+			stopCalls++
+			return nil
+		},
+	)
+	if !errors.Is(err, restoreErr) {
+		t.Fatalf("cleanup error = %v, want %v", err, restoreErr)
+	}
+	if stopCalls != 0 {
+		t.Fatalf("proxy stop called %d times after rewrite restoration failed", stopCalls)
+	}
+
+	err = restoreRewritesThenStop(
+		func() error { return nil },
+		func() error {
+			stopCalls++
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stopCalls != 1 {
+		t.Fatalf("proxy stop calls = %d, want 1 after successful restoration", stopCalls)
+	}
+}
+
 // removeGitProxyRewrites must be a no-op (not an error) when nothing was
 // configured: the post step always runs, even after a failed setup.
 func TestRemoveGitProxyRewritesIdempotent(t *testing.T) {

@@ -220,9 +220,17 @@ func Configure(action *githubactions.Action, opts Options) error {
 }
 
 func validateNoOverlappingTargets(targets []string) error {
-	for i := range targets {
-		for j := i + 1; j < len(targets); j++ {
-			if pathContains(targets[i], targets[j]) || pathContains(targets[j], targets[i]) {
+	canonical := make([]string, len(targets))
+	for i, target := range targets {
+		resolved, err := canonicalCacheTarget(target)
+		if err != nil {
+			return fmt.Errorf("resolve sticky cache path %s: %w", target, err)
+		}
+		canonical[i] = resolved
+	}
+	for i := range canonical {
+		for j := i + 1; j < len(canonical); j++ {
+			if pathContains(canonical[i], canonical[j]) || pathContains(canonical[j], canonical[i]) {
 				return fmt.Errorf("sticky cache paths overlap: %s and %s; combine them into one cache target", targets[i], targets[j])
 			}
 		}
@@ -230,9 +238,35 @@ func validateNoOverlappingTargets(targets []string) error {
 	return nil
 }
 
+// canonicalCacheTarget resolves every existing symlink ancestor while
+// preserving a possibly nonexistent suffix. Lexical path checks alone can
+// otherwise accept aliases whose mounts hide one another.
+func canonicalCacheTarget(path string) (string, error) {
+	current := filepath.Clean(path)
+	var suffix []string
+	for {
+		resolved, err := filepath.EvalSymlinks(current)
+		if err == nil {
+			for i := len(suffix) - 1; i >= 0; i-- {
+				resolved = filepath.Join(resolved, suffix[i])
+			}
+			return filepath.Clean(resolved), nil
+		}
+		if !os.IsNotExist(err) {
+			return "", err
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return "", err
+		}
+		suffix = append(suffix, filepath.Base(current))
+		current = parent
+	}
+}
+
 func pathContains(parent, child string) bool {
 	rel, err := filepath.Rel(filepath.Clean(parent), filepath.Clean(child))
-	return err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 func allCacheResultsHit(results []mountResult) bool {

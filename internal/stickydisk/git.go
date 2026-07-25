@@ -377,16 +377,14 @@ func restoreGitProxyRewritesAt(stateFile string) error {
 // config must never point at a dead proxy. Runs in the post step, before the
 // runner's job-completed hook unmounts and snapshots the sticky disk.
 func stopGit(action *githubactions.Action) error {
-	var errs []string
-
-	if err := restoreGitProxyRewrites(); err != nil {
-		errs = append(errs, err.Error())
-	}
-
-	if state, err := gitproxy.ReadStateFile(gitProxyStateFile); err == nil {
-		if err := terminateGitProxy(action, state.PID); err != nil {
-			errs = append(errs, err.Error())
+	err := restoreRewritesThenStop(restoreGitProxyRewrites, func() error {
+		if state, err := gitproxy.ReadStateFile(gitProxyStateFile); err == nil {
+			return terminateGitProxy(action, state.PID)
 		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("git cache mode cleanup: %w", err)
 	}
 
 	if os.Getenv("RUNNER_DEBUG") == "1" {
@@ -395,10 +393,17 @@ func stopGit(action *githubactions.Action) error {
 	if err := removeFileIfExists(gitProxyLogFile); err != nil {
 		action.Warningf("Failed to remove git proxy log: %v", err)
 	}
-	if len(errs) > 0 {
-		return fmt.Errorf("git cache mode cleanup: %s", strings.Join(errs, "; "))
-	}
 	return nil
+}
+
+// restoreRewritesThenStop preserves the proxy whenever Git configuration could
+// not be restored. A live localhost endpoint is safer than leaving insteadOf
+// pointed at a dead port on a reused runner.
+func restoreRewritesThenStop(restore, stop func() error) error {
+	if err := restore(); err != nil {
+		return fmt.Errorf("restore git proxy rewrites; proxy left running: %w", err)
+	}
+	return stop()
 }
 
 // terminateGitProxy asks the proxy to shut down gracefully and escalates to

@@ -47,6 +47,13 @@ func (s *Server) handleUploadPack(w http.ResponseWriter, r *http.Request, t targ
 		return
 	}
 
+	upstreamURL := s.upstreamBase(t.host) + "/" + t.owner + "/" + t.repo + ".git"
+	if err := s.mirror.authorizeRepo(r.Context(), t.repoKey(), repoPath, upstreamURL, r.Header.Get("Authorization")); err != nil {
+		s.log.Warn("private mirror authorization failed, forwarding upload-pack upstream", "repo", t.repoKey(), "err", err)
+		s.forwardUpstream(w, r, t, restored, "authentication-required")
+		return
+	}
+
 	for _, want := range parseWants(body, r.Header.Get("Content-Encoding")) {
 		if !s.mirror.HasObject(r.Context(), repoPath, want) {
 			s.log.Warn("want not in mirror, forwarding upstream", "repo", t.repoKey(), "want", want)

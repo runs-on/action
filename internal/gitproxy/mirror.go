@@ -12,6 +12,7 @@ package gitproxy
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"log/slog"
 	"os"
@@ -48,6 +49,7 @@ type Mirror struct {
 	closed     bool
 	lastSync   sync.Map // map[repoKey]time.Time
 	syncFailed sync.Map // map[repoKey]bool; keeps protocol-v2 follow-ups upstream
+	authorized sync.Map // map[repoKey][32]byte; hashes successful private-repo auth
 }
 
 // NewMirror creates a mirror manager rooted at root. lastSync tracking is
@@ -115,6 +117,7 @@ func (m *Mirror) EnsureRepo(ctx context.Context, host, owner, repo, upstreamURL,
 	}
 	if result.(Status) == StatusClone {
 		m.syncFailed.Delete(key)
+		m.markAuthorized(key, repoPath, authHeader)
 		m.log.Info("mirror cloned", "repo", key, "duration_ms", time.Since(start).Milliseconds())
 		return repoPath, StatusClone, nil
 	}
@@ -138,6 +141,7 @@ func (m *Mirror) EnsureRepo(ctx context.Context, host, owner, repo, upstreamURL,
 		}
 		m.syncFailed.Delete(key)
 		m.lastSync.Store(key, time.Now())
+		m.markAuthorized(key, repoPath, authHeader)
 		m.scheduleOptimize(repoPath, false)
 		m.log.Info("mirror synced", "repo", key, "duration_ms", time.Since(start).Milliseconds())
 		return repoPath, StatusSync, nil
@@ -145,10 +149,8 @@ func (m *Mirror) EnsureRepo(ctx context.Context, host, owner, repo, upstreamURL,
 
 	// Fresh mirror: still validate auth for private repos so an
 	// unauthenticated client cannot read a previously-mirrored private repo.
-	if m.requiresAuth(repoPath) {
-		if err := m.validateAuth(ctx, upstreamURL, authHeader); err != nil {
-			return "", "", fmt.Errorf("authentication required: %w", err)
-		}
+	if err := m.authorizeRepo(ctx, key, repoPath, upstreamURL, authHeader); err != nil {
+		return "", "", fmt.Errorf("authentication required: %w", err)
 	}
 	return repoPath, StatusHit, nil
 }
@@ -173,6 +175,34 @@ func (m *Mirror) isStale(key string) bool {
 func (m *Mirror) requiresAuth(repoPath string) bool {
 	_, err := os.Stat(filepath.Join(repoPath, ".requires-auth"))
 	return err == nil
+}
+
+// authorizeRepo prevents a direct protocol-v2 POST from reading a restored
+// private mirror without first proving upstream access. Successful headers
+// are hashed in memory so the normal info/refs + upload-pack sequence does not
+// add another upstream round trip or retain credentials in proxy state.
+func (m *Mirror) authorizeRepo(ctx context.Context, key, repoPath, upstreamURL, authHeader string) error {
+	if !m.requiresAuth(repoPath) {
+		return nil
+	}
+	if authHeader == "" {
+		return fmt.Errorf("missing Authorization header")
+	}
+	digest := sha256.Sum256([]byte(authHeader))
+	if authorized, ok := m.authorized.Load(key); ok && authorized == digest {
+		return nil
+	}
+	if err := m.validateAuth(ctx, upstreamURL, authHeader); err != nil {
+		return err
+	}
+	m.authorized.Store(key, digest)
+	return nil
+}
+
+func (m *Mirror) markAuthorized(key, repoPath, authHeader string) {
+	if m.requiresAuth(repoPath) && authHeader != "" {
+		m.authorized.Store(key, sha256.Sum256([]byte(authHeader)))
+	}
 }
 
 // validateAuth validates the auth token can access the upstream repo.

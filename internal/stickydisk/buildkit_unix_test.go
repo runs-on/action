@@ -49,6 +49,49 @@ exit 1
 	}
 }
 
+func TestPrepareBuildkitVolumeRecoversWhenBuilderMetadataIsMissing(t *testing.T) {
+	bin := t.TempDir()
+	logFile := filepath.Join(t.TempDir(), "docker.log")
+	stateRoot := filepath.Join(t.TempDir(), "buildkit", "root")
+	script := `#!/bin/sh
+echo "$*" >> "$DOCKER_LOG"
+if [ "$1 $2" = "volume inspect" ]; then
+  printf '[{"Driver":"local","Labels":{"runs-on.stickydisk":"buildkit"},"Options":{"type":"none","o":"bind","device":"%s"}}]\n' "$STATE_ROOT"
+  exit 0
+fi
+if [ "$1 $2 $3 $4 $5" = "buildx rm --force --keep-state runs-on" ]; then
+  echo 'failed to remove runs-on: no builder "runs-on" found' >&2
+  exit 1
+fi
+if [ "$1 $2 $3" = "rm --force buildx_buildkit_runs-on0" ]; then
+  echo 'Error response from daemon: No such container: buildx_buildkit_runs-on0' >&2
+  exit 1
+fi
+exit 1
+`
+	if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("DOCKER_LOG", logFile)
+	t.Setenv("STATE_ROOT", stateRoot)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	if err := prepareBuildkitVolume(githubactions.New(), stateRoot); err != nil {
+		t.Fatal(err)
+	}
+	log, err := os.ReadFile(logFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(log)
+	if !strings.Contains(got, "rm --force "+buildkitContainerName) {
+		t.Fatalf("orphaned BuildKit container cleanup was not attempted:\n%s", got)
+	}
+	if strings.Contains(got, "volume create") {
+		t.Fatalf("matching volume was unnecessarily recreated:\n%s", got)
+	}
+}
+
 func TestCleanupBuildkitTreatsCompletedForcedRemovalAsSafe(t *testing.T) {
 	previousState, previousErr := os.ReadFile(buildkitPreparedStateFile)
 	t.Cleanup(func() {

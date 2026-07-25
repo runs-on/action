@@ -162,7 +162,20 @@ func prepareBuildkitVolume(action *githubactions.Action, stateRoot string) error
 }
 
 func removeBuildkitBuilderKeepState(action *githubactions.Action) error {
-	return runLogged(action, "docker", "buildx", "rm", "--force", "--keep-state", buildkitBuilderName)
+	err := runLogged(action, "docker", "buildx", "rm", "--force", "--keep-state", buildkitBuilderName)
+	if err == nil {
+		return nil
+	}
+	notFound := fmt.Sprintf("no builder %q found", buildkitBuilderName)
+	if !strings.Contains(strings.ToLower(err.Error()), strings.ToLower(notFound)) {
+		return err
+	}
+
+	// Interruption between preparing the volume and setup-buildx creating its
+	// metadata can leave only the known container. Remove it without -v so the
+	// matching sticky state volume remains available for the next setup action.
+	action.Infof("Buildx metadata for builder '%s' is absent; removing any orphaned BuildKit container while preserving its sticky volume.", buildkitBuilderName)
+	return removeBuildkitContainer()
 }
 
 func buildkitVolumeCreateArgs(stateRoot string) []string {
@@ -277,6 +290,10 @@ func removeBuildkitBuilder(action *githubactions.Action) error {
 		action.Warningf("Buildx cleanup failed, removing its container directly: %v", err)
 	}
 
+	return removeBuildkitContainer()
+}
+
+func removeBuildkitContainer() error {
 	out, err := exec.Command("docker", "rm", "--force", buildkitContainerName).CombinedOutput()
 	if err != nil && !strings.Contains(strings.ToLower(string(out)), "no such container") {
 		return fmt.Errorf("remove BuildKit container %s: %w: %s", buildkitContainerName, err, strings.TrimSpace(string(out)))

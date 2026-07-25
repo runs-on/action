@@ -11,6 +11,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ec2 v1.294.0
 	github.com/guptarohit/asciigraph v0.8.1
 	github.com/sethvargo/go-githubactions v1.3.2
+	golang.org/x/sync v0.22.0
 )
 
 require (
@@ -24,5 +25,4 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.35.16 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sts v1.41.8 // indirect
 	github.com/aws/smithy-go v1.24.2 // indirect
-	golang.org/x/sync v0.22.0 // indirect
 )

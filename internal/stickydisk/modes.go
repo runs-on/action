@@ -49,7 +49,7 @@ var cacheModes = map[string]CacheMode{
 	"python":     {Name: "python", Paths: []string{"~/.cache/pip"}, WindowsPaths: []string{"~/AppData/Local/pip/cache"}},
 	"uv":         {Name: "uv", Paths: []string{"~/.cache/uv"}, WindowsPaths: []string{"~/AppData/Local/uv/cache"}},
 	"poetry":     {Name: "poetry", Paths: []string{"~/.cache/pypoetry"}, WindowsPaths: []string{"~/AppData/Local/pypoetry/Cache"}},
-	"apt":        {Name: "apt", Paths: []string{"/var/cache/apt/archives"}, Root: true, Post: configureApt},
+	"apt":        {Name: "apt", Paths: []string{"/var/cache/apt/archives"}, Root: true, Post: configureApt, PostJob: restoreApt, PostJobFailureFatal: true},
 	"buildkit":   {Name: "buildkit", Setup: setupBuildkit, SetupFailureFatal: true, PostJob: cleanupBuildkit, PostJobFailureFatal: true},
 	"git":        {Name: "git", Setup: setupGit, PostJob: stopGit},
 	"gradle":     {Name: "gradle", Paths: []string{"~/.gradle/caches", "~/.gradle/wrapper"}},

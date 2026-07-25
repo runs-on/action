@@ -31,6 +31,18 @@ func cacheMount(action *githubactions.Action, mountRoot, target string, rootOwne
 
 	src := filepath.Join(mountRoot, "mounts", sourceDirName(target))
 	hit = dirNonEmpty(src)
+	if !hit {
+		// A cold source populated from checkout/image files must not survive a
+		// later setup failure and masquerade as a warm cache in the next job.
+		defer func() {
+			if err == nil {
+				return
+			}
+			if cleanupErr := removeCacheDir(action, src); cleanupErr != nil {
+				err = errors.Join(err, fmt.Errorf("remove failed cold cache source %s: %w", src, cleanupErr))
+			}
+		}()
+	}
 
 	if err := os.MkdirAll(src, 0o755); err != nil {
 		return hit, fmt.Errorf("failed to create source dir %s: %w", src, err)

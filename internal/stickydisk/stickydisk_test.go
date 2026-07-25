@@ -147,6 +147,9 @@ func TestValidateNoOverlappingTargets(t *testing.T) {
 	if err := validateNoOverlappingTargets([]string{"/runs-on"}, "/runs-on/stickydisk", nil); err == nil {
 		t.Fatal("cache target containing the sticky mount was accepted")
 	}
+	if err := validateNoOverlappingTargets([]string{"/runs-on/stickydisk/mounts"}, "/runs-on/stickydisk", nil); err == nil {
+		t.Fatal("cache target inside the sticky mount was accepted")
+	}
 	if err := validateNoOverlappingTargets([]string{"/workspace/vendor"}, "/runs-on/stickydisk", []string{"/workspace/vendor/cache"}); err == nil {
 		t.Fatal("cache target overlapping an earlier invocation was accepted")
 	}
@@ -426,6 +429,16 @@ func TestBuildkitMode(t *testing.T) {
 		if len(mode.Paths) != 0 {
 			t.Errorf("expected buildkit mode to have no bind-mount paths, got %v", mode.Paths)
 		}
+	}
+}
+
+func TestAptModeRestoresSystemConfiguration(t *testing.T) {
+	mode := cacheModes["apt"]
+	if mode.Post == nil || mode.PostJob == nil {
+		t.Fatal("expected apt mode to configure and restore system settings")
+	}
+	if !mode.PostJobFailureFatal {
+		t.Fatal("expected apt configuration restore failures to be fatal")
 	}
 }
 

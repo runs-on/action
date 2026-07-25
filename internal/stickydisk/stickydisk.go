@@ -127,6 +127,7 @@ func Configure(action *githubactions.Action, opts Options) error {
 	var posts []func(action *githubactions.Action) error
 	var results []mountResult
 	seen := map[string]bool{}
+	seenPosts := map[string]bool{}
 	addTarget := func(path string, root bool) {
 		resolved := resolveTarget(path, home, workspace)
 		if seen[resolved] {
@@ -166,8 +167,11 @@ func Configure(action *githubactions.Action, opts Options) error {
 		for _, path := range mode.pathsFor(runtime.GOOS) {
 			addTarget(path, mode.Root)
 		}
-		if mode.Post != nil {
+		// A mode can be listed more than once, but its process-wide setup and
+		// saved post-job state must be established only once per invocation.
+		if mode.Post != nil && !seenPosts[mode.Name] {
 			posts = append(posts, mode.Post)
+			seenPosts[mode.Name] = true
 		}
 	}
 	targets := make([]string, 0, len(specs))
@@ -247,10 +251,10 @@ func validateNoOverlappingTargets(targets []string, mountRoot string, activeTarg
 	}
 	for i, target := range canonical {
 		// cacheMount creates the source below mountRoot before copying the
-		// target. Allowing an ancestor target would recursively copy the sticky
-		// disk into its own descendant.
-		if pathContains(target, canonicalMountRoot) {
-			return fmt.Errorf("sticky cache path %s contains the sticky disk mount %s", targets[i], mountRoot)
+		// target. Either containment direction would copy the sticky disk into
+		// itself or place the source below the directory being copied.
+		if pathContains(target, canonicalMountRoot) || pathContains(canonicalMountRoot, target) {
+			return fmt.Errorf("sticky cache path %s overlaps the sticky disk mount %s", targets[i], mountRoot)
 		}
 	}
 	for i, target := range canonical {
@@ -417,14 +421,16 @@ func PostJob(action *githubactions.Action, cacheEntries []string) error {
 		return err
 	}
 	var fatalErr error
+	seenModes := map[string]bool{}
 	for _, request := range requests {
 		if request.Custom {
 			continue
 		}
 		mode := request.Mode
-		if mode.PostJob == nil || !mode.supportedOn(runtime.GOOS) {
+		if mode.PostJob == nil || !mode.supportedOn(runtime.GOOS) || seenModes[mode.Name] {
 			continue
 		}
+		seenModes[mode.Name] = true
 		if err := mode.PostJob(action); err != nil {
 			if mode.PostJobFailureFatal {
 				fatalErr = errors.Join(fatalErr, fmt.Errorf("post-job hook for %s cache failed: %w", mode.Name, err))

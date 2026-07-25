@@ -90,7 +90,12 @@ func TestCacheMountPreservesExistingBackupPath(t *testing.T) {
 	root := t.TempDir()
 	target := filepath.Join(root, "target")
 	backup := target + ".before-stickydisk"
+	mountRoot := filepath.Join(root, "sticky")
+	src := filepath.Join(mountRoot, "mounts", sourceDirName(target))
 	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "current"), []byte("current"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.MkdirAll(backup, 0o755); err != nil {
@@ -102,11 +107,14 @@ func TestCacheMountPreservesExistingBackupPath(t *testing.T) {
 	}
 
 	action := githubactions.New(githubactions.WithWriter(os.Stderr))
-	if _, err := cacheMount(action, filepath.Join(root, "sticky"), target, false); err == nil {
+	if _, err := cacheMount(action, mountRoot, target, false); err == nil {
 		t.Fatal("cacheMount succeeded despite a colliding backup path")
 	}
 	data, err := os.ReadFile(marker)
 	if err != nil || string(data) != "keep" {
 		t.Fatalf("pre-existing backup data = %q, err = %v", data, err)
+	}
+	if _, err := os.Stat(src); !os.IsNotExist(err) {
+		t.Fatalf("cold source remains after setup failure: %v", err)
 	}
 }

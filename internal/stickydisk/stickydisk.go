@@ -174,7 +174,14 @@ func Configure(action *githubactions.Action, opts Options) error {
 	for _, spec := range specs {
 		targets = append(targets, spec.target)
 	}
-	if err := validateNoOverlappingTargets(targets, mountRoot); err != nil {
+	var activeTargets []string
+	if len(targets) > 0 {
+		activeTargets, err = activeMountedTargets(mountRoot)
+		if err != nil {
+			return err
+		}
+	}
+	if err := validateNoOverlappingTargets(targets, mountRoot, activeTargets); err != nil {
 		return err
 	}
 	if len(specs) == 0 && len(results) == 0 {
@@ -184,6 +191,11 @@ func Configure(action *githubactions.Action, opts Options) error {
 	}
 
 	for _, spec := range specs {
+		if err := recordMountedTarget(mountRoot, spec.target); err != nil {
+			action.Warningf("Failed to record cache target %s: %v", spec.target, err)
+			results = append(results, mountResult{Target: spec.target, Err: err})
+			continue
+		}
 		hit, err := cacheMount(action, mountRoot, spec.target, spec.root)
 		if err != nil {
 			action.Warningf("Failed to set up cache for %s: %v", spec.target, err)
@@ -212,7 +224,7 @@ func Configure(action *githubactions.Action, opts Options) error {
 	return nil
 }
 
-func validateNoOverlappingTargets(targets []string, mountRoot string) error {
+func validateNoOverlappingTargets(targets []string, mountRoot string, activeTargets []string) error {
 	canonical := make([]string, len(targets))
 	for i, target := range targets {
 		resolved, err := canonicalCacheTarget(target)
@@ -220,6 +232,14 @@ func validateNoOverlappingTargets(targets []string, mountRoot string) error {
 			return fmt.Errorf("resolve sticky cache path %s: %w", target, err)
 		}
 		canonical[i] = resolved
+	}
+	canonicalActive := make([]string, len(activeTargets))
+	for i, target := range activeTargets {
+		resolved, err := canonicalCacheTarget(target)
+		if err != nil {
+			return fmt.Errorf("resolve active sticky cache path %s: %w", target, err)
+		}
+		canonicalActive[i] = resolved
 	}
 	canonicalMountRoot, err := canonicalCacheTarget(mountRoot)
 	if err != nil {
@@ -231,6 +251,16 @@ func validateNoOverlappingTargets(targets []string, mountRoot string) error {
 		// disk into its own descendant.
 		if pathContains(target, canonicalMountRoot) {
 			return fmt.Errorf("sticky cache path %s contains the sticky disk mount %s", targets[i], mountRoot)
+		}
+	}
+	for i, target := range canonical {
+		for j, active := range canonicalActive {
+			if rel, err := filepath.Rel(target, active); err == nil && rel == "." {
+				continue
+			}
+			if pathContains(target, active) || pathContains(active, target) {
+				return fmt.Errorf("sticky cache path %s overlaps path %s mounted by an earlier action invocation", targets[i], activeTargets[j])
+			}
 		}
 	}
 	for i := range canonical {

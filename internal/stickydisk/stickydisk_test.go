@@ -138,14 +138,23 @@ func TestValidateCacheOrderingResolvesWorkspaceSymlinks(t *testing.T) {
 }
 
 func TestValidateNoOverlappingTargets(t *testing.T) {
-	if err := validateNoOverlappingTargets([]string{"/workspace/vendor", "/workspace/vendor/cache"}, "/runs-on/stickydisk"); err == nil {
+	if err := validateNoOverlappingTargets([]string{"/workspace/vendor", "/workspace/vendor/cache"}, "/runs-on/stickydisk", nil); err == nil {
 		t.Fatal("nested cache targets were accepted")
 	}
-	if err := validateNoOverlappingTargets([]string{"/workspace/vendor", "/home/runner/.cache"}, "/runs-on/stickydisk"); err != nil {
+	if err := validateNoOverlappingTargets([]string{"/workspace/vendor", "/home/runner/.cache"}, "/runs-on/stickydisk", nil); err != nil {
 		t.Fatalf("independent cache targets were rejected: %v", err)
 	}
-	if err := validateNoOverlappingTargets([]string{"/runs-on"}, "/runs-on/stickydisk"); err == nil {
+	if err := validateNoOverlappingTargets([]string{"/runs-on"}, "/runs-on/stickydisk", nil); err == nil {
 		t.Fatal("cache target containing the sticky mount was accepted")
+	}
+	if err := validateNoOverlappingTargets([]string{"/workspace/vendor"}, "/runs-on/stickydisk", []string{"/workspace/vendor/cache"}); err == nil {
+		t.Fatal("cache target overlapping an earlier invocation was accepted")
+	}
+	if err := validateNoOverlappingTargets([]string{"/workspace/vendor/cache"}, "/runs-on/stickydisk", []string{"/workspace/vendor"}); err == nil {
+		t.Fatal("nested cache target overlapping an earlier invocation was accepted")
+	}
+	if err := validateNoOverlappingTargets([]string{"/workspace/vendor/cache"}, "/runs-on/stickydisk", []string{"/workspace/vendor/cache"}); err != nil {
+		t.Fatalf("same cache target from an earlier invocation was rejected: %v", err)
 	}
 }
 
@@ -163,9 +172,32 @@ func TestValidateNoOverlappingTargetsResolvesSymlinks(t *testing.T) {
 	err := validateNoOverlappingTargets([]string{
 		filepath.Join(alias, "cache"),
 		vendor,
-	}, filepath.Join(root, "sticky"))
+	}, filepath.Join(root, "sticky"), nil)
 	if err == nil {
 		t.Fatal("symlinked nested cache targets were accepted")
+	}
+}
+
+func TestActiveMountedTargetsUsesRecordedSource(t *testing.T) {
+	mountRoot := t.TempDir()
+	target := filepath.Join(t.TempDir(), "workspace", "vendor")
+	stale := filepath.Join(t.TempDir(), "stale")
+	if err := recordMountedTarget(mountRoot, target); err != nil {
+		t.Fatal(err)
+	}
+	if err := recordMountedTarget(mountRoot, stale); err != nil {
+		t.Fatal(err)
+	}
+	expectedSource := filepath.Join(mountRoot, "mounts", sourceDirName(target))
+
+	active, err := activeMountedTargetsWith(mountRoot, func(actualTarget, actualSource string) bool {
+		return actualTarget == target && actualSource == expectedSource
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(active) != 1 || active[0] != target {
+		t.Fatalf("active targets = %v, want [%s]", active, target)
 	}
 }
 

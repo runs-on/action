@@ -103,6 +103,12 @@ func (m *Mirror) EnsureRepo(ctx context.Context, host, owner, repo, upstreamURL,
 		}
 		if os.IsNotExist(statErr) {
 			if err := m.cloneRepo(ctx, repoPath, upstreamURL, authHeader); err != nil {
+				// cloneRepo can fail after creating a usable bare repository
+				// (for example during upload-pack configuration). Keep every
+				// protocol-v2 follow-up upstream until a later setup succeeds.
+				if m.IsUsable(ctx, repoPath) {
+					m.syncFailed.Store(key, true)
+				}
 				return StatusClone, err
 			}
 			m.markAuthorized(key, repoPath, authHeader)

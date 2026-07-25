@@ -381,6 +381,9 @@ exec %q "$@"
 	if _, err := os.Stat(filepath.Join(repoPath, ".requires-auth")); err != nil {
 		t.Fatalf("private clone was left unmarked after configuration failure: %v", err)
 	}
+	if !mirror.SyncFailed("github.com", "owner", "repo") {
+		t.Fatal("clone setup failure was not retained for protocol-v2 follow-ups")
+	}
 }
 
 func TestSharedCloneValidatesWaiterAuthorization(t *testing.T) {

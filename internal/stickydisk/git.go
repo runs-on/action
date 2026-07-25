@@ -77,6 +77,9 @@ func setupGit(action *githubactions.Action, mountRoot string) (hit bool, err err
 }
 
 func gitMirrorCacheHit(mirrorDir, repo string) bool {
+	// GitHub repository identifiers are case-insensitive, and the proxy uses
+	// lowercase local mirror keys so alternate URL casing shares one cache.
+	repo = strings.ToLower(repo)
 	return gitproxy.IsUsableRepo(context.Background(), filepath.Join(mirrorDir, "github.com", repo+".git"))
 }
 

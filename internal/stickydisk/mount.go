@@ -15,6 +15,8 @@ import (
 
 var unsafeChars = regexp.MustCompile(`[^a-zA-Z0-9._-]+`)
 
+const mountTargetRecordsDir = ".runs-on-mount-targets"
+
 // resolveTarget expands "~/" against the given home directory and resolves
 // relative paths against the workspace directory.
 func resolveTarget(target, home, workspace string) string {
@@ -65,6 +67,93 @@ func sameDirectory(a, b string) bool {
 	aInfo, aErr := os.Stat(a)
 	bInfo, bErr := os.Stat(b)
 	return aErr == nil && bErr == nil && os.SameFile(aInfo, bInfo)
+}
+
+// recordMountedTarget persists the target-to-source mapping on the sticky
+// disk. Bind mounts and junctions survive across action invocations in one
+// job, so later invocations need this mapping to reject parent/child mounts
+// that would hide one another.
+func recordMountedTarget(mountRoot, target string) error {
+	if !filepath.IsAbs(target) {
+		return fmt.Errorf("record sticky cache target %s: path is not absolute", target)
+	}
+	recordsRoot := filepath.Join(mountRoot, mountTargetRecordsDir)
+	if err := os.MkdirAll(recordsRoot, 0o700); err != nil {
+		return fmt.Errorf("create sticky cache target records: %w", err)
+	}
+	record := filepath.Join(recordsRoot, sourceDirName(target))
+	if content, err := os.ReadFile(record); err == nil {
+		if string(content) != target {
+			return fmt.Errorf("sticky cache target record collision for %s", target)
+		}
+		return nil
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("inspect sticky cache target record %s: %w", record, err)
+	}
+
+	temp, err := os.CreateTemp(recordsRoot, ".tmp-")
+	if err != nil {
+		return fmt.Errorf("create sticky cache target record: %w", err)
+	}
+	tempName := temp.Name()
+	defer os.Remove(tempName)
+	if _, err := temp.WriteString(target); err != nil {
+		temp.Close()
+		return fmt.Errorf("write sticky cache target record %s: %w", target, err)
+	}
+	if err := temp.Close(); err != nil {
+		return fmt.Errorf("close sticky cache target record %s: %w", target, err)
+	}
+	if err := os.Rename(tempName, record); err != nil {
+		return fmt.Errorf("publish sticky cache target record %s: %w", target, err)
+	}
+	return nil
+}
+
+func activeMountedTargets(mountRoot string) ([]string, error) {
+	return activeMountedTargetsWith(mountRoot, sameDirectory)
+}
+
+func activeMountedTargetsWith(mountRoot string, same func(string, string) bool) ([]string, error) {
+	recordsRoot := filepath.Join(mountRoot, mountTargetRecordsDir)
+	entries, err := os.ReadDir(recordsRoot)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read sticky cache target records: %w", err)
+	}
+
+	var active []string
+	for _, entry := range entries {
+		// Interrupted atomic writes leave only an unpublished temporary file.
+		if strings.HasPrefix(entry.Name(), ".tmp-") {
+			continue
+		}
+		record := filepath.Join(recordsRoot, entry.Name())
+		info, err := os.Lstat(record)
+		if err != nil {
+			return nil, fmt.Errorf("inspect sticky cache target record %s: %w", record, err)
+		}
+		if !info.Mode().IsRegular() || info.Size() > 32*1024 {
+			return nil, fmt.Errorf("invalid sticky cache target record %s", record)
+		}
+		content, err := os.ReadFile(record)
+		if err != nil {
+			return nil, fmt.Errorf("read sticky cache target record %s: %w", record, err)
+		}
+		target := string(content)
+		if !filepath.IsAbs(target) {
+			return nil, fmt.Errorf("invalid sticky cache target record %s", record)
+		}
+		source := filepath.Join(mountRoot, "mounts", entry.Name())
+		// Snapshot-restored records are ignored unless the target still
+		// resolves to their source in this job.
+		if same(target, source) {
+			active = append(active, target)
+		}
+	}
+	return active, nil
 }
 
 // validateStickyMountWith prevents stale ready markers from redirecting cache

@@ -296,6 +296,9 @@ func TestGitMirrorCacheHitRequiresBareRepository(t *testing.T) {
 	if !gitMirrorCacheHit(mirrorDir, "owner/repo") {
 		t.Fatal("valid bare mirror did not report a cache hit")
 	}
+	if !gitMirrorCacheHit(mirrorDir, "Owner/RePo") {
+		t.Fatal("mixed-case GitHub repository did not reuse lowercase mirror")
+	}
 }
 
 // A failed or skipped setup must leave the global git config untouched.

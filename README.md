@@ -60,6 +60,12 @@ Possible values:
 * `summary` - Display costs in the action log output and in the GitHub job summary
 * Any other value - Disables the feature
 
+When `runs-on/action` is invoked more than once in the same job, only the first
+invocation with cost reporting enabled calculates and displays the job cost.
+Later invocations skip duplicate reporting automatically. An invocation with
+cost reporting disabled does not prevent a later enabled invocation from
+reporting.
+
 ### `metrics`
 
 **Note: this is currently only available with a development release of RunsOn. This will be fully functional with v2.8.4+**
@@ -337,7 +343,7 @@ jobs:
   build:
     runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/sticky=20gb
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: runs-on/action@v2
         with:
           sticky_cache: |
@@ -394,7 +400,7 @@ jobs:
   build:
     runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/sticky=docker:20gb
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - id: runs-on
         uses: runs-on/action@v2
         with:
@@ -444,10 +450,13 @@ jobs:
       - uses: runs-on/action@v2
         with:
           sticky_cache: git
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 ```
 
 To combine it with any workspace-relative cache, including `ruby` (`vendor/bundle`) or a relative `custom,path=...`, run the action twice: use `git` before checkout, then run the workspace-relative cache after checkout. The second invocation reuses the already-running proxy. Combining them in one invocation fails early so a workspace mount cannot interfere with checkout.
+
+Repeated invocations share the same job-level cost-reporting claim, so the
+second invocation does not calculate or print the job cost again.
 
 Notes and limitations:
 

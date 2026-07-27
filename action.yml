@@ -11,7 +11,7 @@ inputs:
     required: false
     default: 'false'
   show_costs:
-    description: 'Control how execution costs are displayed: "inline" for log output, "summary" for GitHub job summary, any other value disables the feature'
+    description: 'Control how execution costs are displayed: "inline" for log output, "summary" for GitHub job summary, any other value disables the feature. When the action is used more than once in a job, only the first enabled invocation reports costs.'
     required: false
     default: 'inline'
   metrics:

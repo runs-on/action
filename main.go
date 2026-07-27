@@ -5,6 +5,8 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strconv"
+	"strings"
 
 	"github.com/runs-on/action/internal/cache"
 	"github.com/runs-on/action/internal/config"
@@ -16,6 +18,40 @@ import (
 	"github.com/runs-on/action/internal/stickydisk"
 	"github.com/sethvargo/go-githubactions"
 )
+
+const (
+	costTrackingClaimEnv = "RUNS_ON_ACTION_COST_TRACKING_CLAIMED"
+	costTrackingStateKey = "runs_on_action_track_costs"
+	costTrackingStateEnv = "STATE_" + costTrackingStateKey
+)
+
+func costTrackingRequested(showCosts string) bool {
+	return showCosts == "inline" || showCosts == "summary"
+}
+
+// claimCostTracking assigns cost reporting to the first enabled invocation in
+// a job. GITHUB_ENV tells later action steps that the job already has an owner,
+// while GITHUB_STATE carries the decision to this invocation's own post step.
+func claimCostTracking(action *githubactions.Action, showCosts string) bool {
+	track := costTrackingRequested(showCosts) &&
+		!strings.EqualFold(strings.TrimSpace(os.Getenv(costTrackingClaimEnv)), "true")
+	action.SaveState(costTrackingStateKey, strconv.FormatBool(track))
+	if track {
+		action.SetEnv(costTrackingClaimEnv, "true")
+	}
+	return track
+}
+
+func shouldTrackCostsInPost() bool {
+	state := strings.TrimSpace(os.Getenv(costTrackingStateEnv))
+	if state == "" {
+		// Preserve cost reporting for direct/legacy post invocations that did
+		// not receive the new per-invocation state.
+		return true
+	}
+	track, err := strconv.ParseBool(state)
+	return err == nil && track
+}
 
 // handleMainExecution contains the original main logic.
 func handleMainExecution(action *githubactions.Action, ctx context.Context) {
@@ -35,8 +71,10 @@ func handleMainExecution(action *githubactions.Action, ctx context.Context) {
 
 	cache.UpdateZctionsConfig(action, cfg.ActionsResultsURL, cfg.ZctionsResultsURL, cfg.ZctionsCacheURL, cfg.ActionsRuntimeToken)
 
-	if cfg.HasShowCosts() {
+	if claimCostTracking(action, cfg.ShowCosts) {
 		action.Infof("show_costs is enabled. You will find cost details in the post-execution step of this action.")
+	} else if costTrackingRequested(cfg.ShowCosts) {
+		action.Infof("Cost tracking is already registered by an earlier runs-on/action invocation; this invocation will skip duplicate cost reporting.")
 	}
 
 	// Configure sccache if requested
@@ -79,9 +117,13 @@ func handlePostExecution(action *githubactions.Action, ctx context.Context) {
 		env.DisplayEnvVars()
 	}
 
-	err = costs.ComputeAndDisplayCosts(action, cfg)
-	if err != nil {
-		action.Warningf("Failed to compute or display costs: %v", err)
+	if shouldTrackCostsInPost() {
+		err = costs.ComputeAndDisplayCosts(action, cfg)
+		if err != nil {
+			action.Warningf("Failed to compute or display costs: %v", err)
+		}
+	} else {
+		action.Infof("Skipping duplicate cost reporting from this runs-on/action invocation.")
 	}
 
 	// Display metrics summary

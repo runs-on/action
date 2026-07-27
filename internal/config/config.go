@@ -123,10 +123,6 @@ func (c *Config) HasShowEnv() bool {
 	return c.ShowEnv
 }
 
-func (c *Config) HasShowCosts() bool {
-	return c.ShowCosts != "inline"
-}
-
 func (c *Config) HasMetrics() bool {
 	return c.IsUsingRunsOn() && c.IsUsingLinux() && len(c.Metrics) > 0
 }

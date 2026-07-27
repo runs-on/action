@@ -92,6 +92,71 @@ exit 1
 	}
 }
 
+func TestPauseBuildkitForPressureResetPreservesBuilder(t *testing.T) {
+	previousState, previousErr := os.ReadFile(buildkitPreparedStateFile)
+	t.Cleanup(func() {
+		if previousErr == nil {
+			_ = os.WriteFile(buildkitPreparedStateFile, previousState, 0o600)
+		} else {
+			_ = os.Remove(buildkitPreparedStateFile)
+		}
+	})
+
+	bin := t.TempDir()
+	logFile := filepath.Join(t.TempDir(), "docker.log")
+	stateRoot := filepath.Join(t.TempDir(), "buildkit", "root")
+	script := `#!/bin/sh
+echo "$*" >> "$DOCKER_LOG"
+case "$1 $2" in
+  "buildx ls")
+    printf '%s\n' "runs-on0"
+    ;;
+  "container inspect")
+    printf '[{"Mounts":[{"Type":"volume","Name":"buildx_buildkit_runs-on0_state","Destination":"/var/lib/buildkit"}]}]\n'
+    ;;
+  "volume inspect")
+    printf '[{"Driver":"local","Labels":{"runs-on.stickydisk":"buildkit"},"Options":{"type":"none","o":"bind","device":"%s"}}]\n' "$STATE_ROOT"
+    ;;
+  "stop --time")
+    ;;
+  *)
+    exit 1
+    ;;
+esac
+`
+	if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(buildkitPreparedStateFile, []byte(stateRoot), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("DOCKER_LOG", logFile)
+	t.Setenv("STATE_ROOT", stateRoot)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	safeToReset, err := pauseBuildkitForPressureReset(githubactions.New(), stateRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !safeToReset {
+		t.Fatal("verified and stopped BuildKit state was not safe to reset")
+	}
+	if got, err := os.ReadFile(buildkitPreparedStateFile); err != nil || string(got) != stateRoot {
+		t.Fatalf("pressure reset lost the prepared-state marker: got %q, err=%v", got, err)
+	}
+	log, err := os.ReadFile(logFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(log)
+	if !strings.Contains(got, "stop --time 20 "+buildkitContainerName) {
+		t.Fatalf("active BuildKit container was not stopped:\n%s", got)
+	}
+	if strings.Contains(got, "buildx rm") || strings.Contains(got, "volume rm") {
+		t.Fatalf("pressure reset removed the builder or volume:\n%s", got)
+	}
+}
+
 func TestCleanupBuildkitTreatsCompletedForcedRemovalAsSafe(t *testing.T) {
 	previousState, previousErr := os.ReadFile(buildkitPreparedStateFile)
 	t.Cleanup(func() {

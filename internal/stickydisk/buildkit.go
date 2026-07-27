@@ -228,6 +228,61 @@ func cleanupBuildkit(action *githubactions.Action) error {
 	return err
 }
 
+// pauseBuildkitForPressureReset stops the active BuildKit container only after
+// verifying that the action-owned builder still uses the expected sticky
+// volume. The builder metadata, container, volume, and prepared-state marker
+// remain intact so a later build in the same job can restart the builder.
+func pauseBuildkitForPressureReset(action *githubactions.Action, expectedStateRoot string) (safeToReset bool, err error) {
+	stateRootBytes, err := os.ReadFile(buildkitPreparedStateFile)
+	if err != nil {
+		return false, fmt.Errorf("read prepared BuildKit state: %w", err)
+	}
+	stateRoot := strings.TrimSpace(string(stateRootBytes))
+	if filepath.Clean(stateRoot) != filepath.Clean(expectedStateRoot) {
+		return false, fmt.Errorf("prepared BuildKit state %s does not match pressure-reset path %s", stateRoot, expectedStateRoot)
+	}
+
+	nodes, err := inspectBuildxNodes()
+	if err != nil {
+		return false, err
+	}
+	// Between runs-on/action and setup-buildx there is a prepared volume but no
+	// builder yet. That state is safe to reset without a container shutdown.
+	if len(nodes) > 0 {
+		if err := validateBuildkitNodes(nodes); err != nil {
+			return false, err
+		}
+	}
+
+	volume, found, err := inspectDockerVolume(buildkitStateVolumeName)
+	if err != nil {
+		return false, err
+	}
+	if !found {
+		return false, fmt.Errorf("BuildKit state volume %s disappeared before pressure reset", buildkitStateVolumeName)
+	}
+	if !dockerVolumeMatches(volume, stateRoot) {
+		return false, fmt.Errorf("BuildKit state volume %s is not backed by %s", buildkitStateVolumeName, stateRoot)
+	}
+
+	container, err := inspectBuildkitContainer()
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "no such container") && len(nodes) == 0 {
+			action.Infof("BuildKit volume is prepared but its builder has not started; resetting it in place.")
+			return true, nil
+		}
+		return false, err
+	}
+	if !containerUsesBuildkitVolume(container) {
+		return false, fmt.Errorf("Buildx container %s did not mount expected volume %s at %s", buildkitContainerName, buildkitStateVolumeName, buildkitStateTarget)
+	}
+	if err := runLogged(action, "docker", "stop", "--time", fmt.Sprintf("%.0f", buildkitStopWait.Seconds()), buildkitContainerName); err != nil {
+		return false, fmt.Errorf("stop active BuildKit container before pressure reset: %w", err)
+	}
+	action.Infof("Stopped BuildKit builder '%s' for an in-place cache reset; Buildx will restart it on the next build.", buildkitBuilderName)
+	return true, nil
+}
+
 func cleanupBuildkitWithSafety(action *githubactions.Action) (safeToDelete bool, err error) {
 	stateRootBytes, err := os.ReadFile(buildkitPreparedStateFile)
 	if os.IsNotExist(err) {

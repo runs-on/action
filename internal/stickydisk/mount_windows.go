@@ -115,7 +115,7 @@ func isMountpoint(path string) bool {
 }
 
 func mergeTargetIntoCache(_ *githubactions.Action, target, src string, _ bool, restored bool) error {
-	cmd := exec.Command("robocopy", target, src, "/E", "/COPY:DAT", "/DCOPY:DAT", "/XJ", "/R:1", "/W:1")
+	cmd := exec.Command("robocopy", robocopyMergeArgs(target, src)...)
 	out, err := cmd.CombinedOutput()
 	if err == nil {
 		return nil
@@ -132,6 +132,13 @@ func mergeTargetIntoCache(_ *githubactions.Action, target, src string, _ bool, r
 		return errors.Join(copyErr, fmt.Errorf("remove partial cache source %s: %w", src, cleanupErr))
 	}
 	return copyErr
+}
+
+func robocopyMergeArgs(target, src string) []string {
+	// Copy junction entries as junctions instead of traversing their targets.
+	// Excluding them with /XJ would silently drop linked package directories
+	// when the original cache target is replaced by the sticky junction.
+	return []string{target, src, "/E", "/COPY:DAT", "/DCOPY:DAT", "/SJ", "/R:1", "/W:1"}
 }
 
 // removeCacheDir deletes a cache directory on the sticky disk. Everything on

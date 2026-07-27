@@ -544,6 +544,27 @@ func TestResetMountCachesPreservesSourceDirectories(t *testing.T) {
 	}
 }
 
+func TestResetCacheContentsPreservesRoot(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "buildkit", "root")
+	if err := os.MkdirAll(filepath.Join(root, "nested"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "nested", "cached"), []byte("cache"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := resetCacheContentsWith(root, os.RemoveAll); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(root)
+	if err != nil || !info.IsDir() {
+		t.Fatalf("cache root was removed: %v", err)
+	}
+	if entries, err := os.ReadDir(root); err != nil || len(entries) != 0 {
+		t.Fatalf("cache root was not emptied: entries=%v err=%v", entries, err)
+	}
+}
+
 func TestStatDiskSmoke(t *testing.T) {
 	stats, err := statDisk(t.TempDir())
 	if err != nil {

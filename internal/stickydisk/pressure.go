@@ -73,15 +73,25 @@ func checkCritical(action *githubactions.Action, mountRoot string) {
 			action.Warningf("Failed to stop active git cache before pressure reset: %v", err)
 		}
 	}
-	buildkitSafe := true
+	buildkitRoot := filepath.Join(mountRoot, "buildkit", "root")
+	preserveBuildkitRoot := false
 	if _, err := os.Stat(buildkitPreparedStateFile); err == nil {
-		safeToDelete, err := cleanupBuildkitWithSafety(action)
-		if err != nil {
-			action.Warningf("Failed to stop active BuildKit cache before pressure reset: %v", err)
+		// A prior action invocation may already have created the builder. Stop
+		// its container and empty the backing directory in place, preserving
+		// the builder metadata and volume so later build steps still work.
+		preserveBuildkitRoot = true
+		safeToReset, pauseErr := pauseBuildkitForPressureReset(action, buildkitRoot)
+		if pauseErr != nil {
+			action.Warningf("Failed to pause active BuildKit cache before pressure reset: %v", pauseErr)
+		} else if safeToReset {
+			if err := resetCacheContents(action, buildkitRoot); err != nil {
+				action.Warningf("Failed to reset active BuildKit cache: %v", err)
+			}
 		}
-		// Topology or mount verification errors are still reported, but only
-		// shutdown/removal failures make deleting the backing directory unsafe.
-		buildkitSafe = safeToDelete
+	} else if !os.IsNotExist(err) {
+		// An unreadable marker means BuildKit may still own the directory.
+		preserveBuildkitRoot = true
+		action.Warningf("Could not inspect active BuildKit cache before pressure reset: %v", err)
 	}
 
 	// Cache source directories may already be bind-mounted by an earlier
@@ -92,11 +102,11 @@ func checkCritical(action *githubactions.Action, mountRoot string) {
 		action.Warningf("Failed to reset mounted caches: %v", err)
 	}
 
-	for _, dir := range []string{filepath.Join(mountRoot, "buildkit", "root"), gitMirrorDir(mountRoot)} {
+	for _, dir := range []string{buildkitRoot, gitMirrorDir(mountRoot)} {
 		if dir == gitMirrorDir(mountRoot) && !gitSafe {
 			continue
 		}
-		if dir == filepath.Join(mountRoot, "buildkit", "root") && !buildkitSafe {
+		if dir == buildkitRoot && preserveBuildkitRoot {
 			continue
 		}
 		if _, err := os.Stat(dir); os.IsNotExist(err) {
@@ -106,6 +116,33 @@ func checkCritical(action *githubactions.Action, mountRoot string) {
 			action.Warningf("Failed to reset %s: %v", dir, err)
 		}
 	}
+}
+
+func resetCacheContents(action *githubactions.Action, root string) error {
+	return resetCacheContentsWith(root, func(path string) error {
+		return removeCacheDir(action, path)
+	})
+}
+
+// resetCacheContentsWith removes every child while preserving the root inode.
+// Active bind mounts and Docker local volumes keep referring to that inode.
+func resetCacheContentsWith(root string, remove func(string) error) error {
+	entries, err := os.ReadDir(root)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read cache root %s: %w", root, err)
+	}
+
+	var resetErr error
+	for _, entry := range entries {
+		path := filepath.Join(root, entry.Name())
+		if err := remove(path); err != nil {
+			resetErr = errors.Join(resetErr, fmt.Errorf("remove cache entry %s: %w", path, err))
+		}
+	}
+	return resetErr
 }
 
 func resetMountCaches(action *githubactions.Action, mountsRoot string) error {

@@ -5,10 +5,21 @@ package stickydisk
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/sethvargo/go-githubactions"
 )
+
+func TestRobocopyMergeArgsPreserveJunctions(t *testing.T) {
+	args := robocopyMergeArgs("target", "source")
+	if !slices.Contains(args, "/SJ") {
+		t.Fatalf("robocopy args do not preserve junctions: %v", args)
+	}
+	if slices.Contains(args, "/XJ") {
+		t.Fatalf("robocopy args still exclude junctions: %v", args)
+	}
+}
 
 func TestCacheMountRestoresTargetWhenJunctionCreationFails(t *testing.T) {
 	root := t.TempDir()

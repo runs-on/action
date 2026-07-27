@@ -100,7 +100,7 @@ func cacheMount(action *githubactions.Action, mountRoot, target string, rootOwne
 		return hit, err
 	}
 	if backup != "" {
-		if err := removeWindowsCacheBackup(target, backup, !hit, os.RemoveAll); err != nil {
+		if err := removeWindowsCacheBackup(target, backup, os.RemoveAll); err != nil {
 			return hit, err
 		}
 	}

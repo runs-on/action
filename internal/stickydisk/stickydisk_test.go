@@ -228,7 +228,7 @@ func TestSameDirectory(t *testing.T) {
 	}
 }
 
-func TestWindowsColdBackupCleanupRestoresTarget(t *testing.T) {
+func TestWindowsWarmBackupCleanupRestoresTarget(t *testing.T) {
 	root := t.TempDir()
 	target := filepath.Join(root, "target")
 	backup := target + ".before-stickydisk"
@@ -244,7 +244,7 @@ func TestWindowsColdBackupCleanupRestoresTarget(t *testing.T) {
 	}
 	cleanupErr := errors.New("backup is busy")
 
-	err := removeWindowsCacheBackup(target, backup, true, func(string) error {
+	err := removeWindowsCacheBackup(target, backup, func(string) error {
 		return cleanupErr
 	})
 	if !errors.Is(err, cleanupErr) {

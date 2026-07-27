@@ -70,10 +70,10 @@ func sameDirectory(a, b string) bool {
 	return aErr == nil && bErr == nil && os.SameFile(aInfo, bInfo)
 }
 
-// removeWindowsCacheBackup finalizes the directory-to-junction swap. A cold
-// source is deleted by cacheMount's error defer, so a failed backup removal
-// must first put the original target back instead of leaving a broken junction.
-func removeWindowsCacheBackup(target, backup string, cold bool, removeBackup func(string) error) error {
+// removeWindowsCacheBackup finalizes the directory-to-junction swap. A failed
+// backup removal must put the original target back instead of leaving a
+// junction and backup that cannot survive sticky-disk detachment cleanly.
+func removeWindowsCacheBackup(target, backup string, removeBackup func(string) error) error {
 	cleanupErr := removeBackup(backup)
 	if cleanupErr == nil {
 		return nil
@@ -85,9 +85,6 @@ func removeWindowsCacheBackup(target, backup string, cold bool, removeBackup fun
 		return nil
 	} else if err != nil {
 		return errors.Join(result, fmt.Errorf("inspect cache backup %s after failed removal: %w", backup, err))
-	}
-	if !cold {
-		return result
 	}
 	if err := os.Remove(target); err != nil && !os.IsNotExist(err) {
 		return errors.Join(result, fmt.Errorf("remove failed cache junction %s: %w", target, err))

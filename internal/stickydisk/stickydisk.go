@@ -82,7 +82,7 @@ func Configure(action *githubactions.Action, opts Options) error {
 			home = "/home/runner"
 		}
 	}
-	if err := validateCacheOrdering(requests, runtime.GOOS, workspace, home); err != nil {
+	if err := validateCacheOrdering(requests, runtime.GOOS, workspace, home, buildkitPreparedStateFile); err != nil {
 		return err
 	}
 
@@ -345,16 +345,25 @@ func postSetupMountsSucceeded(targets []string, mountErrors map[string]error) bo
 	return true
 }
 
-func validateCacheOrdering(requests []CacheRequest, goos, workspace, home string) error {
+func validateCacheOrdering(requests []CacheRequest, goos, workspace, home, buildkitStateFile string) error {
 	if goos == "windows" {
 		return nil
 	}
 
 	hasGit := false
+	hasBuildkit := false
 	for _, request := range requests {
-		if !request.Custom && request.Mode.Name == "git" {
-			hasGit = true
+		if !request.Custom {
+			switch request.Mode.Name {
+			case "git":
+				hasGit = true
+			case "buildkit":
+				hasBuildkit = true
+			}
 		}
+	}
+	if err := validateBuildkitStateVisibility(requests, goos, workspace, home, buildkitStateFile, hasBuildkit); err != nil {
+		return err
 	}
 	if !hasGit {
 		return nil
@@ -396,6 +405,43 @@ func validateCacheOrdering(requests []CacheRequest, goos, workspace, home string
 	}
 	if len(workspaceModes) > 0 {
 		return fmt.Errorf("git cache mode cannot be combined with workspace-relative cache modes (%s) in one invocation; run git before checkout, then run workspace-relative caches in a second runs-on/action step after checkout", strings.Join(workspaceModes, ", "))
+	}
+	return nil
+}
+
+func validateBuildkitStateVisibility(requests []CacheRequest, goos, workspace, home, stateFile string, hasBuildkit bool) error {
+	if !hasBuildkit {
+		if _, err := os.Lstat(stateFile); os.IsNotExist(err) {
+			return nil
+		} else if err != nil {
+			return fmt.Errorf("inspect prepared BuildKit state marker %s: %w", stateFile, err)
+		}
+	}
+
+	canonicalStateFile, err := canonicalCacheTarget(stateFile)
+	if err != nil {
+		return fmt.Errorf("resolve prepared BuildKit state marker %s: %w", stateFile, err)
+	}
+	for _, request := range requests {
+		if !request.Custom && request.Mode.Name == "buildkit" {
+			continue
+		}
+		paths := request.Paths
+		name := "custom"
+		if !request.Custom {
+			name = request.Mode.Name
+			paths = request.Mode.pathsFor(goos)
+		}
+		for _, path := range paths {
+			target := resolveTarget(path, home, workspace)
+			canonicalTarget, err := canonicalCacheTarget(target)
+			if err != nil {
+				return fmt.Errorf("classify %s cache path %s against BuildKit state: %w", name, path, err)
+			}
+			if pathContains(canonicalTarget, canonicalStateFile) {
+				return fmt.Errorf("%s cache target %s would hide active BuildKit cleanup state %s; do not mount it while the BuildKit sticky cache is active", name, path, stateFile)
+			}
+		}
 	}
 	return nil
 }

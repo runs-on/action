@@ -106,7 +106,7 @@ func TestValidateCacheOrdering(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			err = validateCacheOrdering(requests, "linux", "/home/runner/work/repo/repo", "/home/runner")
+			err = validateCacheOrdering(requests, "linux", "/home/runner/work/repo/repo", "/home/runner", filepath.Join(t.TempDir(), "buildkit-state"))
 			if tt.wantErr && (err == nil || !strings.Contains(err.Error(), "separate runs-on/action steps") && !strings.Contains(err.Error(), "second runs-on/action step")) {
 				t.Fatalf("validation error = %v", err)
 			}
@@ -133,9 +133,39 @@ func TestValidateCacheOrderingResolvesWorkspaceSymlinks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = validateCacheOrdering(requests, "linux", workspace, filepath.Join(root, "home"))
+	err = validateCacheOrdering(requests, "linux", workspace, filepath.Join(root, "home"), filepath.Join(root, "buildkit-state"))
 	if err == nil || !strings.Contains(err.Error(), "second runs-on/action step") {
 		t.Fatalf("symlinked workspace cache ordering error = %v", err)
+	}
+}
+
+func TestValidateCacheOrderingRejectsTargetHidingRequestedBuildkitState(t *testing.T) {
+	requests, err := ParseCacheRequests([]string{"buildkit", "custom,path=/tmp"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = validateCacheOrdering(requests, "linux", "/workspace", "/home/runner", "/tmp/runs-on-buildkit-volume")
+	if err == nil || !strings.Contains(err.Error(), "hide active BuildKit cleanup state") {
+		t.Fatalf("BuildKit state visibility error = %v", err)
+	}
+}
+
+func TestValidateCacheOrderingRejectsLaterTargetHidingBuildkitState(t *testing.T) {
+	root := t.TempDir()
+	stateFile := filepath.Join(root, "tmp", "runs-on-buildkit-volume")
+	if err := os.MkdirAll(filepath.Dir(stateFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(stateFile, []byte("/sticky/buildkit/root"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	requests, err := ParseCacheRequests([]string{"custom,path=" + filepath.Dir(stateFile)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = validateCacheOrdering(requests, "linux", "/workspace", "/home/runner", stateFile)
+	if err == nil || !strings.Contains(err.Error(), "hide active BuildKit cleanup state") {
+		t.Fatalf("later BuildKit state visibility error = %v", err)
 	}
 }
 
@@ -317,6 +347,32 @@ func TestRetryWindowsCacheBackupCleanup(t *testing.T) {
 	}
 	if _, err := os.Stat(cleanup); !os.IsNotExist(err) {
 		t.Fatalf("deferred cleanup remains: %v", err)
+	}
+}
+
+func TestLiveUnrelatedCacheLink(t *testing.T) {
+	root := t.TempDir()
+	liveTarget := filepath.Join(root, "live-target")
+	if err := os.Mkdir(liveTarget, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	liveLink := filepath.Join(root, "live-link")
+	if err := os.Symlink(liveTarget, liveLink); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if live, err := liveUnrelatedCacheLink(liveLink); err != nil || !live {
+		t.Fatalf("live link = %v, err = %v; want true", live, err)
+	}
+
+	brokenLink := filepath.Join(root, "broken-link")
+	if err := os.Symlink(filepath.Join(root, "missing"), brokenLink); err != nil {
+		t.Fatal(err)
+	}
+	if live, err := liveUnrelatedCacheLink(brokenLink); err != nil || live {
+		t.Fatalf("broken link = %v, err = %v; want false", live, err)
+	}
+	if live, err := liveUnrelatedCacheLink(liveTarget); err != nil || live {
+		t.Fatalf("ordinary directory = %v, err = %v; want false", live, err)
 	}
 }
 

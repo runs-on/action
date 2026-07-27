@@ -92,6 +92,66 @@ exit 1
 	}
 }
 
+func TestRecordPreparedBuildkitStateRollsBackVolumeOnWriteFailure(t *testing.T) {
+	bin := t.TempDir()
+	logFile := filepath.Join(t.TempDir(), "docker.log")
+	stateRoot := filepath.Join(t.TempDir(), "buildkit", "root")
+	script := `#!/bin/sh
+echo "$*" >> "$DOCKER_LOG"
+if [ "$1 $2" = "volume inspect" ]; then
+  printf '[{"Driver":"local","Labels":{"runs-on.stickydisk":"buildkit"},"Options":{"type":"none","o":"bind","device":"%s"}}]\n' "$STATE_ROOT"
+  exit 0
+fi
+if [ "$1 $2" = "volume rm" ]; then
+  exit 0
+fi
+exit 1
+`
+	if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("DOCKER_LOG", logFile)
+	t.Setenv("STATE_ROOT", stateRoot)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	stateFile := t.TempDir()
+	err := recordPreparedBuildkitState(stateRoot, stateFile)
+	if err == nil || !strings.Contains(err.Error(), "record prepared BuildKit volume") {
+		t.Fatalf("state recording error = %v", err)
+	}
+	log, readErr := os.ReadFile(logFile)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if !strings.Contains(string(log), "volume rm "+buildkitStateVolumeName) {
+		t.Fatalf("unrecorded volume was not removed:\n%s", log)
+	}
+}
+
+func TestPreparedBuildkitStateRootFallsBackToActionState(t *testing.T) {
+	previousState, previousErr := os.ReadFile(buildkitPreparedStateFile)
+	t.Cleanup(func() {
+		if previousErr == nil {
+			_ = os.WriteFile(buildkitPreparedStateFile, previousState, 0o600)
+		} else {
+			_ = os.Remove(buildkitPreparedStateFile)
+		}
+	})
+	if err := os.Remove(buildkitPreparedStateFile); err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	stateRoot := filepath.Join(t.TempDir(), "buildkit", "root")
+	t.Setenv(buildkitPreparedStateEnv, stateRoot)
+
+	got, found, err := preparedBuildkitStateRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found || got != stateRoot {
+		t.Fatalf("saved state root = %q, found = %v; want %q", got, found, stateRoot)
+	}
+}
+
 func TestPauseBuildkitForPressureResetPreservesBuilder(t *testing.T) {
 	previousState, previousErr := os.ReadFile(buildkitPreparedStateFile)
 	t.Cleanup(func() {

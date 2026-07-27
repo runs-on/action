@@ -21,6 +21,8 @@ const (
 	buildkitStateVolumeName   = buildkitContainerName + "_state"
 	buildkitStateTarget       = "/var/lib/buildkit"
 	buildkitPreparedStateFile = "/tmp/runs-on-buildkit-volume"
+	buildkitPreparedStateKey  = "runs_on_buildkit_state_root"
+	buildkitPreparedStateEnv  = "STATE_" + buildkitPreparedStateKey
 	buildkitStopWait          = 20 * time.Second
 	buildkitVolumeLabelKey    = "runs-on.stickydisk"
 	buildkitVolumeLabelValue  = "buildkit"
@@ -106,12 +108,40 @@ func setupBuildkit(action *githubactions.Action, mountRoot string) (hit bool, er
 	if err := prepareBuildkitVolume(action, stateRoot); err != nil {
 		return hit, err
 	}
-	if err := os.WriteFile(buildkitPreparedStateFile, []byte(stateRoot), 0600); err != nil {
-		return hit, fmt.Errorf("record prepared BuildKit volume: %w", err)
+	// GitHub state gives this invocation's post step a cleanup fallback if the
+	// cross-invocation marker cannot be persisted.
+	action.SaveState(buildkitPreparedStateKey, stateRoot)
+	if err := recordPreparedBuildkitState(stateRoot, buildkitPreparedStateFile); err != nil {
+		return hit, err
 	}
 
 	action.Infof("Prepared sticky BuildKit state volume '%s' for builder '%s'. Run docker/setup-buildx-action next with name=%s, driver=docker-container, and cleanup=false.", buildkitStateVolumeName, buildkitBuilderName, buildkitBuilderName)
 	return hit, nil
+}
+
+func recordPreparedBuildkitState(stateRoot, stateFile string) error {
+	if err := os.WriteFile(stateFile, []byte(stateRoot), 0o600); err != nil {
+		recordErr := fmt.Errorf("record prepared BuildKit volume: %w", err)
+		if cleanupErr := removePreparedBuildkitVolume(stateRoot); cleanupErr != nil {
+			return errors.Join(recordErr, fmt.Errorf("remove unrecorded RunsOn BuildKit volume: %w", cleanupErr))
+		}
+		return recordErr
+	}
+	return nil
+}
+
+func removePreparedBuildkitVolume(stateRoot string) error {
+	volume, found, err := inspectDockerVolume(buildkitStateVolumeName)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return nil
+	}
+	if !dockerVolumeOwnedByRunsOn(volume) || !dockerVolumeMatches(volume, stateRoot) {
+		return fmt.Errorf("refusing to remove BuildKit volume %s because it no longer matches the prepared RunsOn volume", buildkitStateVolumeName)
+	}
+	return removeDockerVolume(buildkitStateVolumeName)
 }
 
 func prepareBuildkitVolume(action *githubactions.Action, stateRoot string) error {
@@ -120,10 +150,10 @@ func prepareBuildkitVolume(action *githubactions.Action, stateRoot string) error
 		return err
 	}
 	if found {
+		if !dockerVolumeOwnedByRunsOn(volume) {
+			return fmt.Errorf("Docker volume %s already exists but is not owned by RunsOn; run runs-on/action before docker/setup-buildx-action", buildkitStateVolumeName)
+		}
 		if !dockerVolumeMatches(volume, stateRoot) {
-			if !dockerVolumeOwnedByRunsOn(volume) {
-				return fmt.Errorf("Docker volume %s already exists but is not backed by %s; run runs-on/action before docker/setup-buildx-action", buildkitStateVolumeName, stateRoot)
-			}
 			// A cancelled prior job can leave our labelled bind volume pointing
 			// at that job's detached sticky disk, possibly still held by the
 			// action-owned builder. Remove that builder before recreating state.
@@ -284,14 +314,13 @@ func pauseBuildkitForPressureReset(action *githubactions.Action, expectedStateRo
 }
 
 func cleanupBuildkitWithSafety(action *githubactions.Action) (safeToDelete bool, err error) {
-	stateRootBytes, err := os.ReadFile(buildkitPreparedStateFile)
-	if os.IsNotExist(err) {
+	stateRoot, found, err := preparedBuildkitStateRoot()
+	if err != nil {
+		return false, err
+	}
+	if !found {
 		return true, nil
 	}
-	if err != nil {
-		return false, fmt.Errorf("read prepared BuildKit state: %w", err)
-	}
-	stateRoot := strings.TrimSpace(string(stateRootBytes))
 
 	nodes, topologyErr := inspectBuildxNodes()
 	if topologyErr == nil && len(nodes) == 0 {
@@ -349,6 +378,28 @@ func cleanupBuildkitWithSafety(action *githubactions.Action) (safeToDelete bool,
 		}
 	}
 	return safeToDelete, errors.Join(topologyErr, verificationErr, shutdownErr, markerErr)
+}
+
+func preparedBuildkitStateRoot() (string, bool, error) {
+	stateRootBytes, err := os.ReadFile(buildkitPreparedStateFile)
+	if os.IsNotExist(err) {
+		stateRoot := strings.TrimSpace(os.Getenv(buildkitPreparedStateEnv))
+		if stateRoot == "" {
+			return "", false, nil
+		}
+		if !filepath.IsAbs(stateRoot) {
+			return "", false, fmt.Errorf("saved BuildKit state root is not absolute: %s", stateRoot)
+		}
+		return stateRoot, true, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("read prepared BuildKit state: %w", err)
+	}
+	stateRoot := strings.TrimSpace(string(stateRootBytes))
+	if !filepath.IsAbs(stateRoot) {
+		return "", false, fmt.Errorf("prepared BuildKit state root is not absolute: %s", stateRoot)
+	}
+	return stateRoot, true, nil
 }
 
 func cleanupPreparedBuildkitVolume(action *githubactions.Action, stateRoot string) (safeToDelete bool, err error) {

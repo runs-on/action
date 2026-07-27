@@ -57,6 +57,14 @@ func cacheMount(action *githubactions.Action, mountRoot, target string, rootOwne
 		return hit, nil
 	}
 
+	liveLink, linkErr := liveUnrelatedCacheLink(target)
+	if linkErr != nil {
+		return hit, fmt.Errorf("inspect cache link %s: %w", target, linkErr)
+	}
+	if liveLink {
+		return false, fmt.Errorf("cache path %s is already an unrelated junction; expected sticky source %s", target, src)
+	}
+
 	// Merge the current target before moving it aside, otherwise checkout or
 	// image-provided files—including files added after a warm snapshot—would
 	// disappear behind the new junction.
@@ -69,9 +77,6 @@ func cacheMount(action *githubactions.Action, mountRoot, target string, rootOwne
 	hasBackup := false
 	if fi, statErr := os.Lstat(target); statErr == nil {
 		if fi.Mode()&(os.ModeSymlink|os.ModeIrregular) != 0 {
-			if _, err := os.Stat(target); err == nil {
-				return false, fmt.Errorf("cache path %s is already an unrelated junction; expected sticky source %s", target, src)
-			}
 			// A broken junction can only reference a detached prior volume;
 			// remove it before linking the current sticky source.
 			if err := os.Remove(target); err != nil {

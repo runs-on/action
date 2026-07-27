@@ -70,6 +70,28 @@ func sameDirectory(a, b string) bool {
 	return aErr == nil && bErr == nil && os.SameFile(aInfo, bInfo)
 }
 
+// liveUnrelatedCacheLink distinguishes an active junction or symbolic link
+// from a broken link left behind by a detached volume.
+func liveUnrelatedCacheLink(path string) (bool, error) {
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if info.Mode()&(os.ModeSymlink|os.ModeIrregular) == 0 {
+		return false, nil
+	}
+	if _, err := os.Stat(path); err == nil {
+		return true, nil
+	} else if os.IsNotExist(err) {
+		return false, nil
+	} else {
+		return false, err
+	}
+}
+
 // removeWindowsCacheBackup finalizes the directory-to-junction swap. The
 // intact backup is first renamed away from the reserved rollback path. If its
 // recursive deletion then fails partway through, the complete sticky junction

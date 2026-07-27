@@ -207,6 +207,74 @@ exit 0
 	}
 }
 
+func TestCleanupBuildkitRemovesPreparedUnusedVolume(t *testing.T) {
+	previousState, previousErr := os.ReadFile(buildkitPreparedStateFile)
+	t.Cleanup(func() {
+		if previousErr == nil {
+			_ = os.WriteFile(buildkitPreparedStateFile, previousState, 0o600)
+		} else {
+			_ = os.Remove(buildkitPreparedStateFile)
+		}
+	})
+
+	bin := t.TempDir()
+	logFile := filepath.Join(t.TempDir(), "docker.log")
+	stateRoot := filepath.Join(t.TempDir(), "buildkit", "root")
+	script := `#!/bin/sh
+echo "$*" >> "$DOCKER_LOG"
+case "$1 $2" in
+  "buildx ls")
+    exit 0
+    ;;
+  "container inspect")
+    echo 'Error response from daemon: No such container: buildx_buildkit_runs-on0' >&2
+    exit 1
+    ;;
+  "volume inspect")
+    printf '[{"Driver":"local","Labels":{"runs-on.stickydisk":"buildkit"},"Options":{"type":"none","o":"bind","device":"%s"}}]\n' "$STATE_ROOT"
+    exit 0
+    ;;
+  "volume rm")
+    exit 0
+    ;;
+  *)
+    exit 1
+    ;;
+esac
+`
+	if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(buildkitPreparedStateFile, []byte(stateRoot), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("DOCKER_LOG", logFile)
+	t.Setenv("STATE_ROOT", stateRoot)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	safeToDelete, err := cleanupBuildkitWithSafety(githubactions.New())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !safeToDelete {
+		t.Fatal("prepared-only BuildKit state was not safe to delete")
+	}
+	if _, err := os.Stat(buildkitPreparedStateFile); !os.IsNotExist(err) {
+		t.Fatalf("prepared-only cleanup retained the state marker: %v", err)
+	}
+	log, err := os.ReadFile(logFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(log)
+	if !strings.Contains(got, "volume rm "+buildkitStateVolumeName) {
+		t.Fatalf("prepared volume was not removed:\n%s", got)
+	}
+	if strings.Contains(got, "stop --time") || strings.Contains(got, "buildx rm") {
+		t.Fatalf("prepared-only cleanup tried to stop absent runtime resources:\n%s", got)
+	}
+}
+
 func TestCleanupBuildkitRetainsMarkerWhenForcedRemovalFails(t *testing.T) {
 	previousState, previousErr := os.ReadFile(buildkitPreparedStateFile)
 	t.Cleanup(func() {

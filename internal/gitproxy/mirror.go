@@ -327,6 +327,10 @@ func (m *Mirror) syncRepo(ctx context.Context, repoPath, upstreamURL, authHeader
 		"-c", "pack.depth=0",
 		"-c", "pack.deltaCacheSize=1",
 		"-c", "pack.threads=1",
+		// The bare repository is persisted runner-writable state. A previous
+		// job can place executable hooks in its default hooks directory even
+		// after unsafe config keys are removed.
+		"-c", "core.hooksPath=/dev/null",
 		"fetch", "--prune", "--force", "--", upstreamURL, "+refs/*:refs/*",
 	}
 	cmd := exec.CommandContext(ctx, "git", args...)
@@ -403,7 +407,7 @@ func syncMirrorHEAD(ctx context.Context, repoPath, upstreamURL, authHeader strin
 	if !strings.HasPrefix(headRef, "refs/heads/") {
 		return fmt.Errorf("resolve upstream HEAD: no branch symref in output")
 	}
-	if out, err := exec.CommandContext(ctx, "git", "--git-dir", repoPath, "symbolic-ref", "HEAD", headRef).CombinedOutput(); err != nil {
+	if out, err := exec.CommandContext(ctx, "git", "-c", "core.hooksPath=/dev/null", "--git-dir", repoPath, "symbolic-ref", "HEAD", headRef).CombinedOutput(); err != nil {
 		return fmt.Errorf("update mirror HEAD to %s: %w\noutput: %s", headRef, err, out)
 	}
 	return nil

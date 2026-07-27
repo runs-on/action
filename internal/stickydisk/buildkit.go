@@ -294,6 +294,11 @@ func cleanupBuildkitWithSafety(action *githubactions.Action) (safeToDelete bool,
 	stateRoot := strings.TrimSpace(string(stateRootBytes))
 
 	nodes, topologyErr := inspectBuildxNodes()
+	if topologyErr == nil && len(nodes) == 0 {
+		if _, containerErr := inspectBuildkitContainer(); isMissingBuildkitContainer(containerErr) {
+			return cleanupPreparedBuildkitVolume(action, stateRoot)
+		}
+	}
 	if topologyErr == nil {
 		topologyErr = validateBuildkitNodes(nodes)
 	}
@@ -344,6 +349,33 @@ func cleanupBuildkitWithSafety(action *githubactions.Action) (safeToDelete bool,
 		}
 	}
 	return safeToDelete, errors.Join(topologyErr, verificationErr, shutdownErr, markerErr)
+}
+
+func cleanupPreparedBuildkitVolume(action *githubactions.Action, stateRoot string) (safeToDelete bool, err error) {
+	volume, found, err := inspectDockerVolume(buildkitStateVolumeName)
+	if err != nil {
+		return false, err
+	}
+	if found {
+		if !dockerVolumeOwnedByRunsOn(volume) {
+			return false, fmt.Errorf("prepared BuildKit state volume %s is not owned by RunsOn", buildkitStateVolumeName)
+		}
+		if !dockerVolumeMatches(volume, stateRoot) {
+			return false, fmt.Errorf("prepared BuildKit state volume %s is not backed by %s", buildkitStateVolumeName, stateRoot)
+		}
+		if err := removeDockerVolume(buildkitStateVolumeName); err != nil {
+			return false, err
+		}
+		action.Infof("Removed prepared but unused sticky BuildKit state volume '%s'.", buildkitStateVolumeName)
+	}
+	if err := os.Remove(buildkitPreparedStateFile); err != nil && !os.IsNotExist(err) {
+		return true, fmt.Errorf("remove prepared BuildKit state marker: %w", err)
+	}
+	return true, nil
+}
+
+func isMissingBuildkitContainer(err error) bool {
+	return err != nil && strings.Contains(strings.ToLower(err.Error()), "no such container")
 }
 
 func removeBuildkitBuilder(action *githubactions.Action) error {

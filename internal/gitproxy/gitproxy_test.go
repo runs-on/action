@@ -278,7 +278,7 @@ func TestMirrorEnsureRepo(t *testing.T) {
 }
 
 func TestAuthenticatedSyncIgnoresPersistedNetworkConfig(t *testing.T) {
-	upstreamBase, _ := newUpstreamRepo(t)
+	upstreamBase, headSHA := newUpstreamRepo(t)
 	mirror, err := NewMirror(t.TempDir(), time.Hour, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
@@ -307,6 +307,14 @@ func TestAuthenticatedSyncIgnoresPersistedNetworkConfig(t *testing.T) {
 	gitCmd(t, repoPath, "config", "http.extraHeader", "Authorization: persisted")
 	gitCmd(t, repoPath, "config", "core.hooksPath", filepath.Join(repoPath, "hooks-from-earlier-job"))
 
+	exfiltratedToken := filepath.Join(t.TempDir(), "exfiltrated-token")
+	hook := fmt.Sprintf("#!/bin/sh\nprintf '%%s' \"$GIT_CONFIG_VALUE_0\" > %q\n", exfiltratedToken)
+	if err := os.WriteFile(filepath.Join(repoPath, "hooks", "reference-transaction"), []byte(hook), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	upstreamRepo := filepath.Join(strings.TrimPrefix(upstreamBase, "file://"), "owner", "repo.git")
+	gitCmd(t, t.TempDir(), "--git-dir", upstreamRepo, "branch", "post-clone", headSHA)
+
 	mirror.lastSync.Delete("github.com/owner/repo")
 	if _, status, err := mirror.EnsureRepo(ctx, "github.com", "owner", "repo", upstreamURL, "Basic privileged"); err != nil || status != StatusSync {
 		t.Fatalf("authenticated sync: status=%s err=%v", status, err)
@@ -315,6 +323,11 @@ func TestAuthenticatedSyncIgnoresPersistedNetworkConfig(t *testing.T) {
 	case header := <-attackerRequests:
 		t.Fatalf("persisted network config received an upstream request with Authorization %q", header)
 	default:
+	}
+	if token, err := os.ReadFile(exfiltratedToken); err == nil {
+		t.Fatalf("persisted reference-transaction hook received %q", token)
+	} else if !os.IsNotExist(err) {
+		t.Fatal(err)
 	}
 }
 

@@ -316,6 +316,9 @@ func configureMirrorUploadPack(ctx context.Context, repoPath string) error {
 // syncRepo fetches updates from upstream.
 func (m *Mirror) syncRepo(ctx context.Context, repoPath, upstreamURL, authHeader string) error {
 	start := time.Now()
+	if err := sanitizeMirrorNetworkConfig(ctx, repoPath); err != nil {
+		return err
+	}
 	args := []string{
 		"-C", repoPath,
 		"-c", "gc.auto=0",
@@ -324,7 +327,7 @@ func (m *Mirror) syncRepo(ctx context.Context, repoPath, upstreamURL, authHeader
 		"-c", "pack.depth=0",
 		"-c", "pack.deltaCacheSize=1",
 		"-c", "pack.threads=1",
-		"fetch", "--all", "--prune", "--force",
+		"fetch", "--prune", "--force", "--", upstreamURL, "+refs/*:refs/*",
 	}
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Env = gitEnv(authHeader)
@@ -336,6 +339,51 @@ func (m *Mirror) syncRepo(ctx context.Context, repoPath, upstreamURL, authHeader
 	}
 	m.log.Debug("sync complete", "path", repoPath, "duration_ms", time.Since(start).Milliseconds())
 	return nil
+}
+
+// sanitizeMirrorNetworkConfig removes configuration that an earlier job could
+// persist to redirect a later authenticated fetch or execute code while the
+// new job's Authorization header is present. Syncs use the caller-supplied
+// upstream URL and refspec directly, so persisted remotes are unnecessary.
+func sanitizeMirrorNetworkConfig(ctx context.Context, repoPath string) error {
+	list := exec.CommandContext(ctx, "git", "-C", repoPath, "config", "--local", "--no-includes", "--name-only", "--list")
+	list.Env = gitEnv("")
+	out, err := list.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("list persisted mirror config: %w\noutput: %s", err, out)
+	}
+
+	seen := map[string]bool{}
+	for _, key := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if key == "" || seen[key] || !unsafePersistedNetworkKey(key) {
+			continue
+		}
+		seen[key] = true
+		unset := exec.CommandContext(ctx, "git", "-C", repoPath, "config", "--local", "--no-includes", "--unset-all", key)
+		unset.Env = gitEnv("")
+		if output, err := unset.CombinedOutput(); err != nil {
+			return fmt.Errorf("remove unsafe persisted mirror config %s: %w\noutput: %s", key, err, output)
+		}
+	}
+	return nil
+}
+
+func unsafePersistedNetworkKey(key string) bool {
+	lower := strings.ToLower(key)
+	for _, prefix := range []string{
+		"credential.",
+		"http.",
+		"include.",
+		"includeif.",
+		"protocol.",
+		"remote.",
+		"url.",
+	} {
+		if strings.HasPrefix(lower, prefix) {
+			return true
+		}
+	}
+	return lower == "core.hookspath" || lower == "core.sshcommand"
 }
 
 func syncMirrorHEAD(ctx context.Context, repoPath, upstreamURL, authHeader string) error {

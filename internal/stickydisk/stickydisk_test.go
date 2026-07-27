@@ -163,6 +163,23 @@ func TestValidateNoOverlappingTargets(t *testing.T) {
 	}
 }
 
+func TestValidateNoOverlappingTargetsRejectsActiveSymlinkAlias(t *testing.T) {
+	root := t.TempDir()
+	active := filepath.Join(root, "active")
+	alias := filepath.Join(root, "alias")
+	if err := os.Mkdir(active, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(active, alias); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	err := validateNoOverlappingTargets([]string{alias}, filepath.Join(root, "sticky"), []string{active})
+	if err == nil || !strings.Contains(err.Error(), "reuse the exact path") {
+		t.Fatalf("active target alias error = %v", err)
+	}
+}
+
 func TestValidateNoOverlappingTargetsResolvesSymlinks(t *testing.T) {
 	root := t.TempDir()
 	vendor := filepath.Join(root, "vendor")
@@ -282,6 +299,24 @@ func TestPostSetupRequiresSuccessfulMounts(t *testing.T) {
 	}
 	if !postSetupMountsSucceeded(targets, map[string]error{targets[0]: nil}) {
 		t.Fatal("post-setup did not run after a successful mount")
+	}
+}
+
+func TestRetryWindowsCacheBackupCleanup(t *testing.T) {
+	cleanup := filepath.Join(t.TempDir(), "cache.before-stickydisk.removing")
+	if err := os.Mkdir(cleanup, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	retryWindowsCacheBackupCleanup(githubactions.New(), cleanup, func(path string) error {
+		called = true
+		return os.RemoveAll(path)
+	})
+	if !called {
+		t.Fatal("deferred cleanup was not retried")
+	}
+	if _, err := os.Stat(cleanup); !os.IsNotExist(err) {
+		t.Fatalf("deferred cleanup remains: %v", err)
 	}
 }
 

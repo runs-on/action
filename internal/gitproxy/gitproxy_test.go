@@ -251,11 +251,11 @@ func TestMirrorEnsureRepo(t *testing.T) {
 		t.Errorf("HasObject(zeros) = true, want false")
 	}
 
-	// A local sync failure must reach the HTTP handler so it can forward the
+	// An upstream sync failure must reach the HTTP handler so it can forward the
 	// ref advertisement upstream instead of serving stale public refs.
-	gitCmd(t, repoPath, "config", "remote.origin.url", "file:///missing-upstream")
+	brokenUpstreamURL := "file:///missing-upstream"
 	time.Sleep(60 * time.Millisecond)
-	if _, status, err = mirror.EnsureRepo(ctx, "github.com", "owner", "repo", upstreamURL, ""); err == nil || status != "" {
+	if _, status, err = mirror.EnsureRepo(ctx, "github.com", "owner", "repo", brokenUpstreamURL, ""); err == nil || status != "" {
 		t.Fatalf("broken public mirror sync: status=%s err=%v, want propagated error", status, err)
 	}
 	if !mirror.SyncFailed("github.com", "owner", "repo") {
@@ -269,11 +269,52 @@ func TestMirrorEnsureRepo(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repoPath, ".requires-auth"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, status, err = mirror.EnsureRepo(ctx, "github.com", "owner", "repo", upstreamURL, "Basic test"); err == nil || status != "" {
+	if _, status, err = mirror.EnsureRepo(ctx, "github.com", "owner", "repo", brokenUpstreamURL, "Basic test"); err == nil || status != "" {
 		t.Fatalf("broken private mirror sync: status=%s err=%v, want propagated error", status, err)
 	}
 	if !mirror.SyncFailed("github.com", "owner", "repo") {
 		t.Fatal("private mirror sync failure was not retained for protocol-v2 follow-ups")
+	}
+}
+
+func TestAuthenticatedSyncIgnoresPersistedNetworkConfig(t *testing.T) {
+	upstreamBase, _ := newUpstreamRepo(t)
+	mirror, err := NewMirror(t.TempDir(), time.Hour, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mirror.Close()
+
+	ctx := t.Context()
+	upstreamURL := upstreamBase + "/owner/repo.git"
+	repoPath, _, err := mirror.EnsureRepo(ctx, "github.com", "owner", "repo", upstreamURL, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	attackerRequests := make(chan string, 10)
+	attacker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attackerRequests <- r.Header.Get("Authorization")
+		http.Error(w, "unexpected request", http.StatusUnauthorized)
+	}))
+	defer attacker.Close()
+
+	// Every network-affecting value below is runner-writable persisted state
+	// from the previous job. None may influence the authenticated sync.
+	gitCmd(t, repoPath, "config", "remote.origin.url", attacker.URL+"/origin.git")
+	gitCmd(t, repoPath, "remote", "add", "attacker", attacker.URL+"/extra.git")
+	gitCmd(t, repoPath, "config", "url."+attacker.URL+"/.insteadOf", upstreamURL)
+	gitCmd(t, repoPath, "config", "http.extraHeader", "Authorization: persisted")
+	gitCmd(t, repoPath, "config", "core.hooksPath", filepath.Join(repoPath, "hooks-from-earlier-job"))
+
+	mirror.lastSync.Delete("github.com/owner/repo")
+	if _, status, err := mirror.EnsureRepo(ctx, "github.com", "owner", "repo", upstreamURL, "Basic privileged"); err != nil || status != StatusSync {
+		t.Fatalf("authenticated sync: status=%s err=%v", status, err)
+	}
+	select {
+	case header := <-attackerRequests:
+		t.Fatalf("persisted network config received an upstream request with Authorization %q", header)
+	default:
 	}
 }
 

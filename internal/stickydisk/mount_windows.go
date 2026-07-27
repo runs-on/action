@@ -48,7 +48,11 @@ func cacheMount(action *githubactions.Action, mountRoot, target string, rootOwne
 		return hit, fmt.Errorf("failed to create source dir %s: %w", src, err)
 	}
 
+	backup := strings.TrimRight(target, `\/`) + ".before-stickydisk"
 	if sameDirectory(target, src) {
+		// A previous recursive deletion may have left a partial backup on the
+		// runner disk. The junction fast path must still retry that cleanup.
+		retryWindowsCacheBackupCleanup(action, backup+".removing", os.RemoveAll)
 		action.Infof("Path %s already points at the expected sticky source", target)
 		return hit, nil
 	}
@@ -62,7 +66,7 @@ func cacheMount(action *githubactions.Action, mountRoot, target string, rootOwne
 		}
 	}
 
-	var backup string
+	hasBackup := false
 	if fi, statErr := os.Lstat(target); statErr == nil {
 		if fi.Mode()&(os.ModeSymlink|os.ModeIrregular) != 0 {
 			if _, err := os.Stat(target); err == nil {
@@ -74,7 +78,6 @@ func cacheMount(action *githubactions.Action, mountRoot, target string, rootOwne
 				return hit, fmt.Errorf("failed to remove existing link %s: %w", target, err)
 			}
 		} else {
-			backup = strings.TrimRight(target, `\/`) + ".before-stickydisk"
 			if _, err := os.Lstat(backup); err == nil {
 				return hit, fmt.Errorf("cannot move existing cache path %s aside: backup path %s already exists", target, backup)
 			} else if !os.IsNotExist(err) {
@@ -83,6 +86,7 @@ func cacheMount(action *githubactions.Action, mountRoot, target string, rootOwne
 			if err := os.Rename(target, backup); err != nil {
 				return hit, fmt.Errorf("failed to move existing %s aside: %w", target, err)
 			}
+			hasBackup = true
 			action.Infof("Moved existing %s to %s", target, backup)
 		}
 	} else if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
@@ -92,14 +96,14 @@ func cacheMount(action *githubactions.Action, mountRoot, target string, rootOwne
 	if err := runLogged(action, "cmd", "/c", "mklink", "/J", target, src); err != nil {
 		// A mount failure must not hide the runner image or checkout content
 		// that was moved aside to make room for the junction.
-		if backup != "" {
+		if hasBackup {
 			if restoreErr := os.Rename(backup, target); restoreErr != nil {
 				return hit, errors.Join(err, fmt.Errorf("restore existing cache path %s from %s: %w", target, backup, restoreErr))
 			}
 		}
 		return hit, err
 	}
-	if backup != "" {
+	if hasBackup {
 		if err := removeWindowsCacheBackup(action, target, backup, os.RemoveAll); err != nil {
 			return hit, err
 		}
@@ -135,10 +139,11 @@ func mergeTargetIntoCache(_ *githubactions.Action, target, src string, _ bool, r
 }
 
 func robocopyMergeArgs(target, src string) []string {
-	// Copy junction entries as junctions instead of traversing their targets.
+	// Copy junction and symbolic-link entries as links instead of traversing
+	// their targets.
 	// Excluding them with /XJ would silently drop linked package directories
 	// when the original cache target is replaced by the sticky junction.
-	return []string{target, src, "/E", "/COPY:DAT", "/DCOPY:DAT", "/SJ", "/R:1", "/W:1"}
+	return []string{target, src, "/E", "/COPY:DAT", "/DCOPY:DAT", "/SJ", "/SL", "/R:1", "/W:1"}
 }
 
 // removeCacheDir deletes a cache directory on the sticky disk. Everything on

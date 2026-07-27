@@ -116,6 +116,12 @@ func rollbackWindowsCacheSwap(target, backup string, result error) error {
 	return result
 }
 
+func retryWindowsCacheBackupCleanup(action *githubactions.Action, cleanup string, remove func(string) error) {
+	if err := remove(cleanup); err != nil && !os.IsNotExist(err) {
+		action.Warningf("Could not remove deferred cache backup %s: %v. It will be retried by a later action invocation.", cleanup, err)
+	}
+}
+
 // recordMountedTarget persists the target-to-source mapping on the sticky
 // disk. Bind mounts and junctions survive across action invocations in one
 // job, so later invocations need this mapping to reject parent/child mounts

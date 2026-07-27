@@ -275,6 +275,9 @@ func validateNoOverlappingTargets(targets []string, mountRoot string, activeTarg
 	for i, target := range canonical {
 		for j, active := range canonicalActive {
 			if rel, err := filepath.Rel(target, active); err == nil && rel == "." {
+				if filepath.Clean(targets[i]) != filepath.Clean(activeTargets[j]) {
+					return fmt.Errorf("sticky cache path %s is already active as %s; reuse the exact path from the earlier action invocation", targets[i], activeTargets[j])
+				}
 				continue
 			}
 			if pathContains(target, active) || pathContains(active, target) {

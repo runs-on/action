@@ -82,7 +82,7 @@ func Configure(action *githubactions.Action, opts Options) error {
 			home = "/home/runner"
 		}
 	}
-	if err := validateCacheOrdering(requests, runtime.GOOS, workspace, home, buildkitPreparedStateFile); err != nil {
+	if err := validateCacheOrdering(requests, runtime.GOOS, workspace); err != nil {
 		return err
 	}
 
@@ -186,14 +186,7 @@ func Configure(action *githubactions.Action, opts Options) error {
 	for _, spec := range specs {
 		targets = append(targets, spec.target)
 	}
-	var activeTargets []string
-	if len(targets) > 0 {
-		activeTargets, err = activeMountedTargets(mountRoot)
-		if err != nil {
-			return err
-		}
-	}
-	if err := validateNoOverlappingTargets(targets, mountRoot, activeTargets); err != nil {
+	if err := validateNoOverlappingTargets(targets, mountRoot); err != nil {
 		return err
 	}
 	if len(specs) == 0 && len(results) == 0 {
@@ -204,12 +197,6 @@ func Configure(action *githubactions.Action, opts Options) error {
 
 	mountErrors := make(map[string]error, len(specs))
 	for _, spec := range specs {
-		if err := recordMountedTarget(mountRoot, spec.target); err != nil {
-			action.Warningf("Failed to record cache target %s: %v", spec.target, err)
-			results = append(results, mountResult{Target: spec.target, Err: err})
-			mountErrors[spec.target] = err
-			continue
-		}
 		hit, err := cacheMount(action, mountRoot, spec.target, spec.root)
 		if err != nil {
 			action.Warningf("Failed to set up cache for %s: %v", spec.target, err)
@@ -243,46 +230,18 @@ func Configure(action *githubactions.Action, opts Options) error {
 	return nil
 }
 
-func validateNoOverlappingTargets(targets []string, mountRoot string, activeTargets []string) error {
+func validateNoOverlappingTargets(targets []string, mountRoot string) error {
 	canonical := make([]string, len(targets))
 	for i, target := range targets {
-		resolved, err := canonicalCacheTarget(target)
-		if err != nil {
-			return fmt.Errorf("resolve sticky cache path %s: %w", target, err)
-		}
-		canonical[i] = resolved
+		canonical[i] = filepath.Clean(target)
 	}
-	canonicalActive := make([]string, len(activeTargets))
-	for i, target := range activeTargets {
-		resolved, err := canonicalCacheTarget(target)
-		if err != nil {
-			return fmt.Errorf("resolve active sticky cache path %s: %w", target, err)
-		}
-		canonicalActive[i] = resolved
-	}
-	canonicalMountRoot, err := canonicalCacheTarget(mountRoot)
-	if err != nil {
-		return fmt.Errorf("resolve sticky disk mount %s: %w", mountRoot, err)
-	}
+	canonicalMountRoot := filepath.Clean(mountRoot)
 	for i, target := range canonical {
 		// cacheMount creates the source below mountRoot before copying the
 		// target. Either containment direction would copy the sticky disk into
 		// itself or place the source below the directory being copied.
 		if pathContains(target, canonicalMountRoot) || pathContains(canonicalMountRoot, target) {
 			return fmt.Errorf("sticky cache path %s overlaps the sticky disk mount %s", targets[i], mountRoot)
-		}
-	}
-	for i, target := range canonical {
-		for j, active := range canonicalActive {
-			if rel, err := filepath.Rel(target, active); err == nil && rel == "." {
-				if filepath.Clean(targets[i]) != filepath.Clean(activeTargets[j]) {
-					return fmt.Errorf("sticky cache path %s is already active as %s; reuse the exact path from the earlier action invocation", targets[i], activeTargets[j])
-				}
-				continue
-			}
-			if pathContains(target, active) || pathContains(active, target) {
-				return fmt.Errorf("sticky cache path %s overlaps path %s mounted by an earlier action invocation", targets[i], activeTargets[j])
-			}
 		}
 	}
 	for i := range canonical {
@@ -293,32 +252,6 @@ func validateNoOverlappingTargets(targets []string, mountRoot string, activeTarg
 		}
 	}
 	return nil
-}
-
-// canonicalCacheTarget resolves every existing symlink ancestor while
-// preserving a possibly nonexistent suffix. Lexical path checks alone can
-// otherwise accept aliases whose mounts hide one another.
-func canonicalCacheTarget(path string) (string, error) {
-	current := filepath.Clean(path)
-	var suffix []string
-	for {
-		resolved, err := filepath.EvalSymlinks(current)
-		if err == nil {
-			for i := len(suffix) - 1; i >= 0; i-- {
-				resolved = filepath.Join(resolved, suffix[i])
-			}
-			return filepath.Clean(resolved), nil
-		}
-		if !os.IsNotExist(err) {
-			return "", err
-		}
-		parent := filepath.Dir(current)
-		if parent == current {
-			return "", err
-		}
-		suffix = append(suffix, filepath.Base(current))
-		current = parent
-	}
 }
 
 func pathContains(parent, child string) bool {
@@ -345,32 +278,25 @@ func postSetupMountsSucceeded(targets []string, mountErrors map[string]error) bo
 	return true
 }
 
-func validateCacheOrdering(requests []CacheRequest, goos, workspace, home, buildkitStateFile string) error {
+func validateCacheOrdering(requests []CacheRequest, goos, workspace string) error {
 	if goos == "windows" {
 		return nil
 	}
 
 	hasGit := false
-	hasBuildkit := false
 	for _, request := range requests {
 		if !request.Custom {
 			switch request.Mode.Name {
 			case "git":
 				hasGit = true
-			case "buildkit":
-				hasBuildkit = true
 			}
 		}
-	}
-	if err := validateBuildkitStateVisibility(requests, goos, workspace, home, buildkitStateFile, hasBuildkit); err != nil {
-		return err
 	}
 	if !hasGit {
 		return nil
 	}
 
 	var workspaceModes []string
-	var protectedModes []string
 	for _, request := range requests {
 		if !request.Custom && request.Mode.Name == "git" {
 			continue
@@ -389,83 +315,13 @@ func validateCacheOrdering(requests []CacheRequest, goos, workspace, home, build
 			if inWorkspace {
 				workspaceModes = append(workspaceModes, name)
 			}
-			resolved := resolveTarget(path, home, workspace)
-			protected, err := gitCachePathHidesState(resolved, home)
-			if err != nil {
-				return fmt.Errorf("classify %s cache path %s against git state: %w", name, path, err)
-			}
-			if protected {
-				protectedModes = append(protectedModes, name)
-			}
 		}
 	}
 
-	if len(protectedModes) > 0 {
-		return fmt.Errorf("git cache mode cannot be combined with cache targets that hide the runner home or git proxy state (%s); run git and those caches in separate runs-on/action steps", strings.Join(protectedModes, ", "))
-	}
 	if len(workspaceModes) > 0 {
 		return fmt.Errorf("git cache mode cannot be combined with workspace-relative cache modes (%s) in one invocation; run git before checkout, then run workspace-relative caches in a second runs-on/action step after checkout", strings.Join(workspaceModes, ", "))
 	}
 	return nil
-}
-
-func validateBuildkitStateVisibility(requests []CacheRequest, goos, workspace, home, stateFile string, hasBuildkit bool) error {
-	if !hasBuildkit {
-		if _, err := os.Lstat(stateFile); os.IsNotExist(err) {
-			return nil
-		} else if err != nil {
-			return fmt.Errorf("inspect prepared BuildKit state marker %s: %w", stateFile, err)
-		}
-	}
-
-	canonicalStateFile, err := canonicalCacheTarget(stateFile)
-	if err != nil {
-		return fmt.Errorf("resolve prepared BuildKit state marker %s: %w", stateFile, err)
-	}
-	for _, request := range requests {
-		if !request.Custom && request.Mode.Name == "buildkit" {
-			continue
-		}
-		paths := request.Paths
-		name := "custom"
-		if !request.Custom {
-			name = request.Mode.Name
-			paths = request.Mode.pathsFor(goos)
-		}
-		for _, path := range paths {
-			target := resolveTarget(path, home, workspace)
-			canonicalTarget, err := canonicalCacheTarget(target)
-			if err != nil {
-				return fmt.Errorf("classify %s cache path %s against BuildKit state: %w", name, path, err)
-			}
-			if pathContains(canonicalTarget, canonicalStateFile) {
-				return fmt.Errorf("%s cache target %s would hide active BuildKit cleanup state %s; do not mount it while the BuildKit sticky cache is active", name, path, stateFile)
-			}
-		}
-	}
-	return nil
-}
-
-func gitCachePathHidesState(target, home string) (bool, error) {
-	canonicalTarget, err := canonicalCacheTarget(target)
-	if err != nil {
-		return false, err
-	}
-	protected := []string{
-		home,
-		filepath.Dir(gitProxyStateFile),
-		gitProxyLogFile,
-	}
-	for _, path := range protected {
-		canonicalProtected, err := canonicalCacheTarget(path)
-		if err != nil {
-			return false, err
-		}
-		if pathContains(canonicalTarget, canonicalProtected) {
-			return true, nil
-		}
-	}
-	return false, nil
 }
 
 func isWorkspaceCachePath(path, workspace string) (bool, error) {
@@ -475,15 +331,7 @@ func isWorkspaceCachePath(path, workspace string) (bool, error) {
 	if workspace == "" {
 		return false, nil
 	}
-	canonicalPath, err := canonicalCacheTarget(path)
-	if err != nil {
-		return false, err
-	}
-	canonicalWorkspace, err := canonicalCacheTarget(workspace)
-	if err != nil {
-		return false, err
-	}
-	return pathContains(canonicalWorkspace, canonicalPath), nil
+	return pathContains(filepath.Clean(workspace), filepath.Clean(path)), nil
 }
 
 // missing handles the no-sticky-disk case. Requesting sticky_cache is an

@@ -33,9 +33,8 @@ func TestConfigureAndRemoveGitProxyRewrites(t *testing.T) {
 	isolatedGitConfig(t)
 	t.Setenv("INPUT_TOKEN", "test-token")
 	action := githubactions.New(githubactions.WithWriter(os.Stderr))
-	stateFile := t.TempDir() + "/rewrites.json"
 
-	if err := configureGitProxyRewritesAt(action, 8123, stateFile); err != nil {
+	if err := configureGitProxyRewrites(action, 8123); err != nil {
 		t.Fatal(err)
 	}
 
@@ -51,7 +50,7 @@ func TestConfigureAndRemoveGitProxyRewrites(t *testing.T) {
 		}
 	}
 
-	if err := restoreGitProxyRewritesAt(stateFile); err != nil {
+	if err := removeGitProxyRewrites(); err != nil {
 		t.Fatal(err)
 	}
 	cfg = globalConfigNames(t)
@@ -59,60 +58,6 @@ func TestConfigureAndRemoveGitProxyRewrites(t *testing.T) {
 		if strings.Contains(cfg, gone) {
 			t.Errorf("global config still contains %q after cleanup:\n%s", gone, cfg)
 		}
-	}
-}
-
-func TestGitProxyRewritesRestorePreExistingValues(t *testing.T) {
-	isolatedGitConfig(t)
-	t.Setenv("INPUT_TOKEN", "test-token")
-	action := githubactions.New(githubactions.WithWriter(os.Stderr))
-	stateFile := t.TempDir() + "/rewrites.json"
-
-	pushKey := "url.https://github.com/.pushInsteadOf"
-	for _, value := range []string{"ssh://git@github.com/", "git://github.com/"} {
-		if err := gitConfigAdd(pushKey, value); err != nil {
-			t.Fatal(err)
-		}
-	}
-	unrelatedKey := "url.http://127.0.0.1:9999/example/.insteadOf"
-	if err := gitConfigAdd(unrelatedKey, "https://example.com/"); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := configureGitProxyRewritesAt(action, 8123, stateFile); err != nil {
-		t.Fatal(err)
-	}
-	info, err := os.Stat(stateFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Mode().Perm() != 0o600 {
-		t.Fatalf("rewrite state mode = %v, want 0600", info.Mode().Perm())
-	}
-	values, err := gitConfigGetAll(pushKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got, want := strings.Join(values, ","), "ssh://git@github.com/,git://github.com/,https://github.com/"; got != want {
-		t.Fatalf("active pushInsteadOf = %q, want additive %q", got, want)
-	}
-	if err := restoreGitProxyRewritesAt(stateFile); err != nil {
-		t.Fatal(err)
-	}
-
-	values, err = gitConfigGetAll(pushKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got, want := strings.Join(values, ","), "ssh://git@github.com/,git://github.com/"; got != want {
-		t.Fatalf("restored pushInsteadOf = %q, want %q", got, want)
-	}
-	values, err = gitConfigGetAll(unrelatedKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got, want := strings.Join(values, ","), "https://example.com/"; got != want {
-		t.Fatalf("unrelated rewrite = %q, want %q", got, want)
 	}
 }
 
@@ -233,7 +178,7 @@ func TestRestoreRewritesBeforeStoppingProxy(t *testing.T) {
 // configured: the post step always runs, even after a failed setup.
 func TestRemoveGitProxyRewritesIdempotent(t *testing.T) {
 	isolatedGitConfig(t)
-	if err := restoreGitProxyRewritesAt(t.TempDir() + "/missing.json"); err != nil {
+	if err := removeGitProxyRewrites(); err != nil {
 		t.Fatal(err)
 	}
 }

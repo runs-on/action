@@ -14,6 +14,8 @@ import (
 	"github.com/sethvargo/go-githubactions"
 )
 
+// Buildx derives the node, container, and state-volume names from the builder
+// name; keep these aligned with its docker-container driver naming contract.
 const (
 	buildkitBuilderName       = "runs-on"
 	buildkitNodeName          = buildkitBuilderName + "0"
@@ -21,8 +23,6 @@ const (
 	buildkitStateVolumeName   = buildkitContainerName + "_state"
 	buildkitStateTarget       = "/var/lib/buildkit"
 	buildkitPreparedStateFile = "/tmp/runs-on-buildkit-volume"
-	buildkitPreparedStateKey  = "runs_on_buildkit_state_root"
-	buildkitPreparedStateEnv  = "STATE_" + buildkitPreparedStateKey
 	buildkitStopWait          = 20 * time.Second
 	buildkitVolumeLabelKey    = "runs-on.stickydisk"
 	buildkitVolumeLabelValue  = "buildkit"
@@ -108,40 +108,12 @@ func setupBuildkit(action *githubactions.Action, mountRoot string) (hit bool, er
 	if err := prepareBuildkitVolume(action, stateRoot); err != nil {
 		return hit, err
 	}
-	// GitHub state gives this invocation's post step a cleanup fallback if the
-	// cross-invocation marker cannot be persisted.
-	action.SaveState(buildkitPreparedStateKey, stateRoot)
-	if err := recordPreparedBuildkitState(stateRoot, buildkitPreparedStateFile); err != nil {
-		return hit, err
+	if err := os.WriteFile(buildkitPreparedStateFile, []byte(stateRoot), 0o600); err != nil {
+		return hit, fmt.Errorf("record prepared BuildKit volume: %w", err)
 	}
 
 	action.Infof("Prepared sticky BuildKit state volume '%s' for builder '%s'. Run docker/setup-buildx-action next with name=%s, driver=docker-container, and cleanup=false.", buildkitStateVolumeName, buildkitBuilderName, buildkitBuilderName)
 	return hit, nil
-}
-
-func recordPreparedBuildkitState(stateRoot, stateFile string) error {
-	if err := os.WriteFile(stateFile, []byte(stateRoot), 0o600); err != nil {
-		recordErr := fmt.Errorf("record prepared BuildKit volume: %w", err)
-		if cleanupErr := removePreparedBuildkitVolume(stateRoot); cleanupErr != nil {
-			return errors.Join(recordErr, fmt.Errorf("remove unrecorded RunsOn BuildKit volume: %w", cleanupErr))
-		}
-		return recordErr
-	}
-	return nil
-}
-
-func removePreparedBuildkitVolume(stateRoot string) error {
-	volume, found, err := inspectDockerVolume(buildkitStateVolumeName)
-	if err != nil {
-		return err
-	}
-	if !found {
-		return nil
-	}
-	if !dockerVolumeOwnedByRunsOn(volume) || !dockerVolumeMatches(volume, stateRoot) {
-		return fmt.Errorf("refusing to remove BuildKit volume %s because it no longer matches the prepared RunsOn volume", buildkitStateVolumeName)
-	}
-	return removeDockerVolume(buildkitStateVolumeName)
 }
 
 func prepareBuildkitVolume(action *githubactions.Action, stateRoot string) error {
@@ -254,72 +226,16 @@ func dockerVolumeOwnedByRunsOn(volume dockerVolumeInspect) bool {
 // volume, then owns final shutdown because the sticky disk must not be
 // snapshotted while BuildKit is still writing to it.
 func cleanupBuildkit(action *githubactions.Action) error {
-	_, err := cleanupBuildkitWithSafety(action)
-	return err
-}
-
-// pauseBuildkitForPressureReset stops the active BuildKit container only after
-// verifying that the action-owned builder still uses the expected sticky
-// volume. The builder metadata, container, volume, and prepared-state marker
-// remain intact so a later build in the same job can restart the builder.
-func pauseBuildkitForPressureReset(action *githubactions.Action, expectedStateRoot string) (safeToReset bool, err error) {
 	stateRootBytes, err := os.ReadFile(buildkitPreparedStateFile)
+	if os.IsNotExist(err) {
+		return nil
+	}
 	if err != nil {
-		return false, fmt.Errorf("read prepared BuildKit state: %w", err)
+		return fmt.Errorf("read prepared BuildKit state: %w", err)
 	}
 	stateRoot := strings.TrimSpace(string(stateRootBytes))
-	if filepath.Clean(stateRoot) != filepath.Clean(expectedStateRoot) {
-		return false, fmt.Errorf("prepared BuildKit state %s does not match pressure-reset path %s", stateRoot, expectedStateRoot)
-	}
-
-	nodes, err := inspectBuildxNodes()
-	if err != nil {
-		return false, err
-	}
-	// Between runs-on/action and setup-buildx there is a prepared volume but no
-	// builder yet. That state is safe to reset without a container shutdown.
-	if len(nodes) > 0 {
-		if err := validateBuildkitNodes(nodes); err != nil {
-			return false, err
-		}
-	}
-
-	volume, found, err := inspectDockerVolume(buildkitStateVolumeName)
-	if err != nil {
-		return false, err
-	}
-	if !found {
-		return false, fmt.Errorf("BuildKit state volume %s disappeared before pressure reset", buildkitStateVolumeName)
-	}
-	if !dockerVolumeMatches(volume, stateRoot) {
-		return false, fmt.Errorf("BuildKit state volume %s is not backed by %s", buildkitStateVolumeName, stateRoot)
-	}
-
-	container, err := inspectBuildkitContainer()
-	if err != nil {
-		if strings.Contains(strings.ToLower(err.Error()), "no such container") && len(nodes) == 0 {
-			action.Infof("BuildKit volume is prepared but its builder has not started; resetting it in place.")
-			return true, nil
-		}
-		return false, err
-	}
-	if !containerUsesBuildkitVolume(container) {
-		return false, fmt.Errorf("Buildx container %s did not mount expected volume %s at %s", buildkitContainerName, buildkitStateVolumeName, buildkitStateTarget)
-	}
-	if err := runLogged(action, "docker", "stop", "--time", fmt.Sprintf("%.0f", buildkitStopWait.Seconds()), buildkitContainerName); err != nil {
-		return false, fmt.Errorf("stop active BuildKit container before pressure reset: %w", err)
-	}
-	action.Infof("Stopped BuildKit builder '%s' for an in-place cache reset; Buildx will restart it on the next build.", buildkitBuilderName)
-	return true, nil
-}
-
-func cleanupBuildkitWithSafety(action *githubactions.Action) (safeToDelete bool, err error) {
-	stateRoot, found, err := preparedBuildkitStateRoot()
-	if err != nil {
-		return false, err
-	}
-	if !found {
-		return true, nil
+	if !filepath.IsAbs(stateRoot) {
+		return fmt.Errorf("prepared BuildKit state root is not absolute: %s", stateRoot)
 	}
 
 	nodes, topologyErr := inspectBuildxNodes()
@@ -365,64 +281,38 @@ func cleanupBuildkitWithSafety(action *githubactions.Action) (safeToDelete bool,
 		builderErr = fmt.Errorf("remove BuildKit builder: %w", builderErr)
 	}
 	shutdownErr := errors.Join(stopErr, builderErr, volumeErr)
-	// A failed graceful stop is still safe for pressure recovery when forced
-	// builder/container removal succeeded and the volume was removed.
-	safeToDelete = builderErr == nil && volumeErr == nil
 	var markerErr error
-	if safeToDelete {
-		// Preserve the marker after forced-removal failures so both pressure
-		// recovery and a later post hook know the backing directory may still
-		// be in use.
+	// Preserve the marker unless forced builder/container and volume removal
+	// succeeded, so a later post hook can retry cleanup.
+	if builderErr == nil && volumeErr == nil {
 		if err := os.Remove(buildkitPreparedStateFile); err != nil && !os.IsNotExist(err) {
 			markerErr = fmt.Errorf("remove prepared BuildKit state marker: %w", err)
 		}
 	}
-	return safeToDelete, errors.Join(topologyErr, verificationErr, shutdownErr, markerErr)
+	return errors.Join(topologyErr, verificationErr, shutdownErr, markerErr)
 }
 
-func preparedBuildkitStateRoot() (string, bool, error) {
-	stateRootBytes, err := os.ReadFile(buildkitPreparedStateFile)
-	if os.IsNotExist(err) {
-		stateRoot := strings.TrimSpace(os.Getenv(buildkitPreparedStateEnv))
-		if stateRoot == "" {
-			return "", false, nil
-		}
-		if !filepath.IsAbs(stateRoot) {
-			return "", false, fmt.Errorf("saved BuildKit state root is not absolute: %s", stateRoot)
-		}
-		return stateRoot, true, nil
-	}
-	if err != nil {
-		return "", false, fmt.Errorf("read prepared BuildKit state: %w", err)
-	}
-	stateRoot := strings.TrimSpace(string(stateRootBytes))
-	if !filepath.IsAbs(stateRoot) {
-		return "", false, fmt.Errorf("prepared BuildKit state root is not absolute: %s", stateRoot)
-	}
-	return stateRoot, true, nil
-}
-
-func cleanupPreparedBuildkitVolume(action *githubactions.Action, stateRoot string) (safeToDelete bool, err error) {
+func cleanupPreparedBuildkitVolume(action *githubactions.Action, stateRoot string) error {
 	volume, found, err := inspectDockerVolume(buildkitStateVolumeName)
 	if err != nil {
-		return false, err
+		return err
 	}
 	if found {
 		if !dockerVolumeOwnedByRunsOn(volume) {
-			return false, fmt.Errorf("prepared BuildKit state volume %s is not owned by RunsOn", buildkitStateVolumeName)
+			return fmt.Errorf("prepared BuildKit state volume %s is not owned by RunsOn", buildkitStateVolumeName)
 		}
 		if !dockerVolumeMatches(volume, stateRoot) {
-			return false, fmt.Errorf("prepared BuildKit state volume %s is not backed by %s", buildkitStateVolumeName, stateRoot)
+			return fmt.Errorf("prepared BuildKit state volume %s is not backed by %s", buildkitStateVolumeName, stateRoot)
 		}
 		if err := removeDockerVolume(buildkitStateVolumeName); err != nil {
-			return false, err
+			return err
 		}
 		action.Infof("Removed prepared but unused sticky BuildKit state volume '%s'.", buildkitStateVolumeName)
 	}
 	if err := os.Remove(buildkitPreparedStateFile); err != nil && !os.IsNotExist(err) {
-		return true, fmt.Errorf("remove prepared BuildKit state marker: %w", err)
+		return fmt.Errorf("remove prepared BuildKit state marker: %w", err)
 	}
-	return true, nil
+	return nil
 }
 
 func isMissingBuildkitContainer(err error) bool {

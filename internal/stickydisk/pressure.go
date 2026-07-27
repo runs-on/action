@@ -1,7 +1,6 @@
 package stickydisk
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -65,126 +64,25 @@ func checkCritical(action *githubactions.Action, mountRoot string) {
 	if !stats.critical() {
 		return
 	}
+	for _, marker := range []string{gitProxyStateFile, buildkitPreparedStateFile} {
+		if _, err := os.Lstat(marker); err == nil || !os.IsNotExist(err) {
+			action.Warningf("Sticky disk is critically full (%s), but caches are in use; skipping automatic reset. Increase the sticky disk size.", stats)
+			return
+		}
+	}
+
 	action.Warningf("Sticky disk is critically full (%s): resetting all caches on the volume so this and future jobs can run. Consider a larger sticky= size.", stats)
-	gitSafe := true
-	if _, err := os.Stat(gitProxyStateFile); err == nil {
-		if err := stopGit(action); err != nil {
-			gitSafe = false
-			action.Warningf("Failed to stop active git cache before pressure reset: %v", err)
-		}
-	}
-	buildkitRoot := filepath.Join(mountRoot, "buildkit", "root")
-	preserveBuildkitRoot := false
-	if _, err := os.Stat(buildkitPreparedStateFile); err == nil {
-		// A prior action invocation may already have created the builder. Stop
-		// its container and empty the backing directory in place, preserving
-		// the builder metadata and volume so later build steps still work.
-		preserveBuildkitRoot = true
-		safeToReset, pauseErr := pauseBuildkitForPressureReset(action, buildkitRoot)
-		if pauseErr != nil {
-			action.Warningf("Failed to pause active BuildKit cache before pressure reset: %v", pauseErr)
-		} else if safeToReset {
-			if err := resetCacheContents(action, buildkitRoot); err != nil {
-				action.Warningf("Failed to reset active BuildKit cache: %v", err)
-			}
-		}
-	} else if !os.IsNotExist(err) {
-		// An unreadable marker means BuildKit may still own the directory.
-		preserveBuildkitRoot = true
-		action.Warningf("Could not inspect active BuildKit cache before pressure reset: %v", err)
-	}
-
-	// Cache source directories may already be bind-mounted by an earlier
-	// action invocation in this job. Empty their contents while preserving
-	// the directory inode so active targets remain attached to a path that
-	// will be included in the sticky-disk snapshot.
-	if err := resetMountCaches(action, filepath.Join(mountRoot, "mounts")); err != nil {
-		action.Warningf("Failed to reset mounted caches: %v", err)
-	}
-
-	for _, dir := range []string{buildkitRoot, gitMirrorDir(mountRoot)} {
-		if dir == gitMirrorDir(mountRoot) && !gitSafe {
-			continue
-		}
-		if dir == buildkitRoot && preserveBuildkitRoot {
-			continue
-		}
-		if _, err := os.Stat(dir); os.IsNotExist(err) {
-			continue
-		}
-		if err := removeCacheDir(action, dir); err != nil {
-			action.Warningf("Failed to reset %s: %v", dir, err)
-		}
-	}
-}
-
-func resetCacheContents(action *githubactions.Action, root string) error {
-	return resetCacheContentsWith(root, func(path string) error {
-		return removeCacheDir(action, path)
-	})
-}
-
-// resetCacheContentsWith removes every child while preserving the root inode.
-// Active bind mounts and Docker local volumes keep referring to that inode.
-func resetCacheContentsWith(root string, remove func(string) error) error {
-	entries, err := os.ReadDir(root)
-	if os.IsNotExist(err) {
-		return nil
-	}
+	entries, err := os.ReadDir(mountRoot)
 	if err != nil {
-		return fmt.Errorf("read cache root %s: %w", root, err)
+		action.Warningf("Failed to list sticky disk caches: %v", err)
+		return
 	}
-
-	var resetErr error
 	for _, entry := range entries {
-		path := filepath.Join(root, entry.Name())
-		if err := remove(path); err != nil {
-			resetErr = errors.Join(resetErr, fmt.Errorf("remove cache entry %s: %w", path, err))
+		path := filepath.Join(mountRoot, entry.Name())
+		if err := removeCacheDir(action, path); err != nil {
+			action.Warningf("Failed to reset %s: %v", path, err)
 		}
 	}
-	return resetErr
-}
-
-func resetMountCaches(action *githubactions.Action, mountsRoot string) error {
-	return resetMountCachesWith(mountsRoot, func(path string) error {
-		return removeCacheDir(action, path)
-	})
-}
-
-// resetMountCachesWith preserves every top-level cache source directory while
-// removing its children. Bind mounts reference the source inode, so removing
-// the source itself would detach subsequent writes from the snapshot tree.
-func resetMountCachesWith(mountsRoot string, remove func(string) error) error {
-	entries, err := os.ReadDir(mountsRoot)
-	if os.IsNotExist(err) {
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("read mounted cache root %s: %w", mountsRoot, err)
-	}
-
-	var resetErr error
-	for _, entry := range entries {
-		source := filepath.Join(mountsRoot, entry.Name())
-		if !entry.IsDir() {
-			if err := remove(source); err != nil {
-				resetErr = errors.Join(resetErr, fmt.Errorf("remove stale mount entry %s: %w", source, err))
-			}
-			continue
-		}
-		children, err := os.ReadDir(source)
-		if err != nil {
-			resetErr = errors.Join(resetErr, fmt.Errorf("read cache source %s: %w", source, err))
-			continue
-		}
-		for _, child := range children {
-			path := filepath.Join(source, child.Name())
-			if err := remove(path); err != nil {
-				resetErr = errors.Join(resetErr, fmt.Errorf("remove cache entry %s: %w", path, err))
-			}
-		}
-	}
-	return resetErr
 }
 
 // warnOnPressure logs a usage summary in the post step and emits a warning

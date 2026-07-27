@@ -59,7 +59,7 @@ func cacheMount(action *githubactions.Action, mountRoot, target string, rootOwne
 	// bind mount hides the target. This also keeps newly checked-in files when
 	// a warm snapshot contains an older version of a workspace cache.
 	if dirNonEmpty(target) {
-		if err := mergeTargetIntoCache(action, target, src, rootOwned, hit); err != nil {
+		if err := mergeTargetIntoCache(action, target, src, rootOwned); err != nil {
 			return false, err
 		}
 	}
@@ -104,73 +104,15 @@ func cacheMount(action *githubactions.Action, mountRoot, target string, rootOwne
 	return hit, nil
 }
 
-func mergeTargetIntoCache(action *githubactions.Action, target, src string, rootOwned, restored bool) error {
-	if err := removeMergeTypeConflicts(action, target, src, rootOwned); err != nil {
-		return err
-	}
+func mergeTargetIntoCache(action *githubactions.Action, target, src string, rootOwned bool) error {
 	args := []string{"cp", "-a", "--", strings.TrimRight(target, "/") + "/.", src}
 	if rootOwned {
 		args = append([]string{"sudo"}, args...)
 	}
 	if err := runLogged(action, args[0], args[1:]...); err != nil {
-		copyErr := fmt.Errorf("merge cache target %s into %s: %w", target, src, err)
-		if restored {
-			return copyErr
-		}
-		// A later job uses a non-empty source as its hit signal, so a partial
-		// cold copy must never survive and masquerade as a restorable cache.
-		if cleanupErr := removeCacheDir(action, src); cleanupErr != nil {
-			return errors.Join(copyErr, fmt.Errorf("remove partial cache source %s: %w", src, cleanupErr))
-		}
-		return copyErr
+		return fmt.Errorf("merge cache target %s into %s: %w", target, src, err)
 	}
 	return nil
-}
-
-// removeMergeTypeConflicts makes the current checkout authoritative when a
-// restored entry changed between directory, regular file, or symlink. cp -a
-// cannot replace a destination directory with a file (or the reverse).
-func removeMergeTypeConflicts(action *githubactions.Action, target, src string, rootOwned bool) error {
-	return filepath.WalkDir(target, func(path string, entry os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return fmt.Errorf("inspect cache target %s: %w", path, walkErr)
-		}
-		rel, err := filepath.Rel(target, path)
-		if err != nil {
-			return fmt.Errorf("resolve cache target entry %s: %w", path, err)
-		}
-		if rel == "." {
-			return nil
-		}
-		destination := filepath.Join(src, rel)
-		destinationInfo, err := os.Lstat(destination)
-		if os.IsNotExist(err) {
-			return nil
-		}
-		if err != nil {
-			return fmt.Errorf("inspect restored cache entry %s: %w", destination, err)
-		}
-		sourceInfo, err := os.Lstat(path)
-		if err != nil {
-			return fmt.Errorf("inspect current cache entry %s: %w", path, err)
-		}
-		if sourceInfo.Mode().Type() == destinationInfo.Mode().Type() {
-			return nil
-		}
-
-		// Root-owned modes such as apt require elevated removal; ordinary
-		// workspace and home caches stay within runner-user permissions.
-		if rootOwned {
-			if err := removeCacheDir(action, destination); err != nil {
-				return fmt.Errorf("replace conflicting restored cache entry %s: %w", destination, err)
-			}
-			return nil
-		}
-		if err := os.RemoveAll(destination); err != nil {
-			return fmt.Errorf("replace conflicting restored cache entry %s: %w", destination, err)
-		}
-		return nil
-	})
 }
 
 // removeCacheDir deletes a cache directory on the sticky disk. Contents may be

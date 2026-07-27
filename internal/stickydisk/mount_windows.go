@@ -50,9 +50,6 @@ func cacheMount(action *githubactions.Action, mountRoot, target string, rootOwne
 
 	backup := strings.TrimRight(target, `\/`) + ".before-stickydisk"
 	if sameDirectory(target, src) {
-		// A previous recursive deletion may have left a partial backup on the
-		// runner disk. The junction fast path must still retry that cleanup.
-		retryWindowsCacheBackupCleanup(action, backup+".removing", os.RemoveAll)
 		action.Infof("Path %s already points at the expected sticky source", target)
 		return hit, nil
 	}
@@ -69,7 +66,7 @@ func cacheMount(action *githubactions.Action, mountRoot, target string, rootOwne
 	// image-provided files—including files added after a warm snapshot—would
 	// disappear behind the new junction.
 	if dirNonEmpty(target) {
-		if err := mergeTargetIntoCache(action, target, src, false, hit); err != nil {
+		if err := mergeTargetIntoCache(action, target, src, false); err != nil {
 			return false, err
 		}
 	}
@@ -84,7 +81,9 @@ func cacheMount(action *githubactions.Action, mountRoot, target string, rootOwne
 			}
 		} else {
 			if _, err := os.Lstat(backup); err == nil {
-				return hit, fmt.Errorf("cannot move existing cache path %s aside: backup path %s already exists", target, backup)
+				if err := os.RemoveAll(backup); err != nil {
+					return hit, fmt.Errorf("remove stale cache backup %s: %w", backup, err)
+				}
 			} else if !os.IsNotExist(err) {
 				return hit, fmt.Errorf("inspect cache backup path %s: %w", backup, err)
 			}
@@ -109,8 +108,8 @@ func cacheMount(action *githubactions.Action, mountRoot, target string, rootOwne
 		return hit, err
 	}
 	if hasBackup {
-		if err := removeWindowsCacheBackup(action, target, backup, os.RemoveAll); err != nil {
-			return hit, err
+		if err := os.RemoveAll(backup); err != nil {
+			action.Warningf("Could not remove cache backup %s: %v", backup, err)
 		}
 	}
 	return hit, nil
@@ -123,7 +122,7 @@ func isMountpoint(path string) bool {
 	return exec.Command("cmd", "/c", "mountvol", mountPath, "/L").Run() == nil
 }
 
-func mergeTargetIntoCache(_ *githubactions.Action, target, src string, _ bool, restored bool) error {
+func mergeTargetIntoCache(_ *githubactions.Action, target, src string, _ bool) error {
 	cmd := exec.Command("robocopy", robocopyMergeArgs(target, src)...)
 	out, err := cmd.CombinedOutput()
 	if err == nil {
@@ -133,14 +132,7 @@ func mergeTargetIntoCache(_ *githubactions.Action, target, src string, _ bool, r
 	if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() <= 7 {
 		return nil
 	}
-	copyErr := fmt.Errorf("merge cache target %s into %s: %w: %s", target, src, err, strings.TrimSpace(string(out)))
-	if restored {
-		return copyErr
-	}
-	if cleanupErr := os.RemoveAll(src); cleanupErr != nil {
-		return errors.Join(copyErr, fmt.Errorf("remove partial cache source %s: %w", src, cleanupErr))
-	}
-	return copyErr
+	return fmt.Errorf("merge cache target %s into %s: %w: %s", target, src, err, strings.TrimSpace(string(out)))
 }
 
 func robocopyMergeArgs(target, src string) []string {

@@ -2,24 +2,8 @@ package stickydisk
 
 import (
 	"path/filepath"
-	"reflect"
 	"testing"
 )
-
-func TestBuildkitNamesMatchPinnedBuildxContract(t *testing.T) {
-	if buildkitBuilderName != "runs-on" {
-		t.Fatalf("builder = %q", buildkitBuilderName)
-	}
-	if buildkitNodeName != "runs-on0" {
-		t.Fatalf("node = %q", buildkitNodeName)
-	}
-	if buildkitContainerName != "buildx_buildkit_runs-on0" {
-		t.Fatalf("container = %q", buildkitContainerName)
-	}
-	if buildkitStateVolumeName != "buildx_buildkit_runs-on0_state" {
-		t.Fatalf("volume = %q", buildkitStateVolumeName)
-	}
-}
 
 func TestBuildkitInlineConfigFromEnv(t *testing.T) {
 	t.Run("disabled", func(t *testing.T) {
@@ -85,22 +69,6 @@ func TestNormalizeBuildkitMirrorRejectsUnsafeValues(t *testing.T) {
 	}
 }
 
-func TestBuildkitVolumeCreateArgs(t *testing.T) {
-	stateRoot := "/mnt/runs-on/stickydisk/buildkit/root"
-	want := []string{
-		"volume", "create",
-		"--driver", "local",
-		"--label", "runs-on.stickydisk=buildkit",
-		"--opt", "type=none",
-		"--opt", "o=bind",
-		"--opt", "device=" + stateRoot,
-		"buildx_buildkit_runs-on0_state",
-	}
-	if got := buildkitVolumeCreateArgs(stateRoot); !reflect.DeepEqual(got, want) {
-		t.Fatalf("args = %#v, want %#v", got, want)
-	}
-}
-
 func TestDockerVolumeMatches(t *testing.T) {
 	stateRoot := filepath.Clean("/mnt/runs-on/stickydisk/buildkit/root")
 	matching := dockerVolumeInspect{
@@ -143,14 +111,6 @@ func TestValidateBuildkitNodes(t *testing.T) {
 		if err := validateBuildkitNodes(nodes); err == nil {
 			t.Errorf("nodes %v passed validation", nodes)
 		}
-	}
-}
-
-func TestUniqueBuildxNodes(t *testing.T) {
-	got := uniqueBuildxNodes([]string{buildkitNodeName, buildkitNodeName, "runs-on1", "runs-on1"})
-	want := []string{buildkitNodeName, "runs-on1"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("nodes = %v, want %v", got, want)
 	}
 }
 

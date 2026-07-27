@@ -36,6 +36,14 @@ func TestStickyWaitTimeoutDefaultsToFiveMinutes(t *testing.T) {
 	}
 }
 
+func TestStickyCacheRequestIsHandledOutsideRunsOn(t *testing.T) {
+	t.Setenv("RUNS_ON_RUNNER_NAME", "")
+	cfg := Config{StickyCache: []string{"go"}}
+	if !cfg.HasStickyDiskCache() {
+		t.Fatal("sticky cache request was silently ignored outside RunsOn")
+	}
+}
+
 func TestUndeclaredLegacyInputsRemainIgnored(t *testing.T) {
 	t.Setenv("INPUT_CACHE", "go,buildkit")
 	t.Setenv("INPUT_PATH", "vendor/cache")

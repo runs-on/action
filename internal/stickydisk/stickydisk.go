@@ -74,7 +74,15 @@ func Configure(action *githubactions.Action, opts Options) error {
 	if workspace == "" {
 		workspace, _ = os.Getwd()
 	}
-	if err := validateCacheOrdering(requests, runtime.GOOS, workspace); err != nil {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		if runtime.GOOS == "windows" {
+			home = `C:\Users\runner`
+		} else {
+			home = "/home/runner"
+		}
+	}
+	if err := validateCacheOrdering(requests, runtime.GOOS, workspace, home); err != nil {
 		return err
 	}
 
@@ -91,6 +99,7 @@ func Configure(action *githubactions.Action, opts Options) error {
 		if _, err := os.Stat(unavailableFile); err == nil {
 			return missing(action, fmt.Sprintf("sticky disk is unavailable (marker: %s)", unavailableFile))
 		}
+		return missing(action, "sticky disk is unavailable: RUNS_ON_STICKYDISK_DIR is not set")
 	}
 
 	timeout := opts.StickyWaitTimeout
@@ -110,31 +119,29 @@ func Configure(action *githubactions.Action, opts Options) error {
 	// caches report a miss and the next snapshot starts clean.
 	checkCritical(action, mountRoot)
 
-	home, err := os.UserHomeDir()
-	if err != nil {
-		if runtime.GOOS == "windows" {
-			home = `C:\Users\runner`
-		} else {
-			home = "/home/runner"
-		}
-	}
 	// Resolve all targets, deduplicating by absolute path.
 	type mountSpec struct {
 		target string
 		root   bool
 	}
+	type postSetup struct {
+		name    string
+		targets []string
+		run     func(action *githubactions.Action) error
+	}
 	var specs []mountSpec
-	var posts []func(action *githubactions.Action) error
+	var posts []postSetup
 	var results []mountResult
 	seen := map[string]bool{}
 	seenPosts := map[string]bool{}
-	addTarget := func(path string, root bool) {
+	addTarget := func(path string, root bool) string {
 		resolved := resolveTarget(path, home, workspace)
 		if seen[resolved] {
-			return
+			return resolved
 		}
 		seen[resolved] = true
 		specs = append(specs, mountSpec{target: resolved, root: root})
+		return resolved
 	}
 	for _, request := range requests {
 		if request.Custom {
@@ -164,13 +171,14 @@ func Configure(action *githubactions.Action, opts Options) error {
 			results = append(results, mountResult{Target: mode.Name, Hit: hit && err == nil, Err: err})
 			continue
 		}
+		var modeTargets []string
 		for _, path := range mode.pathsFor(runtime.GOOS) {
-			addTarget(path, mode.Root)
+			modeTargets = append(modeTargets, addTarget(path, mode.Root))
 		}
 		// A mode can be listed more than once, but its process-wide setup and
 		// saved post-job state must be established only once per invocation.
 		if mode.Post != nil && !seenPosts[mode.Name] {
-			posts = append(posts, mode.Post)
+			posts = append(posts, postSetup{name: mode.Name, targets: modeTargets, run: mode.Post})
 			seenPosts[mode.Name] = true
 		}
 	}
@@ -194,10 +202,12 @@ func Configure(action *githubactions.Action, opts Options) error {
 		return nil
 	}
 
+	mountErrors := make(map[string]error, len(specs))
 	for _, spec := range specs {
 		if err := recordMountedTarget(mountRoot, spec.target); err != nil {
 			action.Warningf("Failed to record cache target %s: %v", spec.target, err)
 			results = append(results, mountResult{Target: spec.target, Err: err})
+			mountErrors[spec.target] = err
 			continue
 		}
 		hit, err := cacheMount(action, mountRoot, spec.target, spec.root)
@@ -205,10 +215,15 @@ func Configure(action *githubactions.Action, opts Options) error {
 			action.Warningf("Failed to set up cache for %s: %v", spec.target, err)
 		}
 		results = append(results, mountResult{Target: spec.target, Hit: hit && err == nil, Err: err})
+		mountErrors[spec.target] = err
 	}
 
 	for _, post := range posts {
-		if err := post(action); err != nil {
+		if !postSetupMountsSucceeded(post.targets, mountErrors) {
+			action.Warningf("Skipping %s cache post-setup because a required cache mount failed.", post.name)
+			continue
+		}
+		if err := post.run(action); err != nil {
 			action.Warningf("Cache post-setup step failed: %v", err)
 		}
 	}
@@ -317,19 +332,37 @@ func allCacheResultsHit(results []mountResult) bool {
 	return true
 }
 
-func validateCacheOrdering(requests []CacheRequest, goos, workspace string) error {
+func postSetupMountsSucceeded(targets []string, mountErrors map[string]error) bool {
+	for _, target := range targets {
+		err, found := mountErrors[target]
+		if !found || err != nil {
+			return false
+		}
+	}
+	return true
+}
+
+func validateCacheOrdering(requests []CacheRequest, goos, workspace, home string) error {
 	if goos == "windows" {
 		return nil
 	}
 
 	hasGit := false
-	var workspaceModes []string
 	for _, request := range requests {
 		if !request.Custom && request.Mode.Name == "git" {
 			hasGit = true
+		}
+	}
+	if !hasGit {
+		return nil
+	}
+
+	var workspaceModes []string
+	var protectedModes []string
+	for _, request := range requests {
+		if !request.Custom && request.Mode.Name == "git" {
 			continue
 		}
-
 		paths := request.Paths
 		name := "custom"
 		if !request.Custom {
@@ -343,15 +376,47 @@ func validateCacheOrdering(requests []CacheRequest, goos, workspace string) erro
 			}
 			if inWorkspace {
 				workspaceModes = append(workspaceModes, name)
-				break
+			}
+			resolved := resolveTarget(path, home, workspace)
+			protected, err := gitCachePathHidesState(resolved, home)
+			if err != nil {
+				return fmt.Errorf("classify %s cache path %s against git state: %w", name, path, err)
+			}
+			if protected {
+				protectedModes = append(protectedModes, name)
 			}
 		}
 	}
 
-	if hasGit && len(workspaceModes) > 0 {
+	if len(protectedModes) > 0 {
+		return fmt.Errorf("git cache mode cannot be combined with cache targets that hide the runner home or git proxy state (%s); run git and those caches in separate runs-on/action steps", strings.Join(protectedModes, ", "))
+	}
+	if len(workspaceModes) > 0 {
 		return fmt.Errorf("git cache mode cannot be combined with workspace-relative cache modes (%s) in one invocation; run git before checkout, then run workspace-relative caches in a second runs-on/action step after checkout", strings.Join(workspaceModes, ", "))
 	}
 	return nil
+}
+
+func gitCachePathHidesState(target, home string) (bool, error) {
+	canonicalTarget, err := canonicalCacheTarget(target)
+	if err != nil {
+		return false, err
+	}
+	protected := []string{
+		home,
+		filepath.Dir(gitProxyStateFile),
+		gitProxyLogFile,
+	}
+	for _, path := range protected {
+		canonicalProtected, err := canonicalCacheTarget(path)
+		if err != nil {
+			return false, err
+		}
+		if pathContains(canonicalTarget, canonicalProtected) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func isWorkspaceCachePath(path, workspace string) (bool, error) {

@@ -95,6 +95,8 @@ func TestValidateCacheOrdering(t *testing.T) {
 	}{
 		{name: "git with home cache", entries: []string{"git", "go"}},
 		{name: "git with absolute custom cache", entries: []string{"git", "custom,path=/opt/cache"}},
+		{name: "git with runner home", entries: []string{"git", "custom,path=~"}, wantErr: true},
+		{name: "git with tmp", entries: []string{"git", "custom,path=/tmp"}, wantErr: true},
 		{name: "git with absolute workspace cache", entries: []string{"git", "custom,path=/home/runner/work/repo/repo/vendor/cache"}, wantErr: true},
 		{name: "git with ruby workspace cache", entries: []string{"git", "ruby"}, wantErr: true},
 		{name: "git with relative custom cache", entries: []string{"git", "custom,path=vendor/cache"}, wantErr: true},
@@ -104,8 +106,8 @@ func TestValidateCacheOrdering(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			err = validateCacheOrdering(requests, "linux", "/home/runner/work/repo/repo")
-			if tt.wantErr && (err == nil || !strings.Contains(err.Error(), "second runs-on/action step")) {
+			err = validateCacheOrdering(requests, "linux", "/home/runner/work/repo/repo", "/home/runner")
+			if tt.wantErr && (err == nil || !strings.Contains(err.Error(), "separate runs-on/action steps") && !strings.Contains(err.Error(), "second runs-on/action step")) {
 				t.Fatalf("validation error = %v", err)
 			}
 			if !tt.wantErr && err != nil {
@@ -131,7 +133,7 @@ func TestValidateCacheOrderingResolvesWorkspaceSymlinks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = validateCacheOrdering(requests, "linux", workspace)
+	err = validateCacheOrdering(requests, "linux", workspace, filepath.Join(root, "home"))
 	if err == nil || !strings.Contains(err.Error(), "second runs-on/action step") {
 		t.Fatalf("symlinked workspace cache ordering error = %v", err)
 	}
@@ -228,7 +230,7 @@ func TestSameDirectory(t *testing.T) {
 	}
 }
 
-func TestWindowsWarmBackupCleanupRestoresTarget(t *testing.T) {
+func TestWindowsPartialBackupCleanupKeepsCompleteJunction(t *testing.T) {
 	root := t.TempDir()
 	target := filepath.Join(root, "target")
 	backup := target + ".before-stickydisk"
@@ -238,24 +240,48 @@ func TestWindowsWarmBackupCleanupRestoresTarget(t *testing.T) {
 	if err := os.MkdirAll(backup, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	marker := filepath.Join(backup, "original")
-	if err := os.WriteFile(marker, []byte("keep"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(target, "sticky"), []byte("complete"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(backup, "removed"), []byte("original"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(backup, "busy"), []byte("original"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	cleanupErr := errors.New("backup is busy")
 
-	err := removeWindowsCacheBackup(target, backup, func(string) error {
+	err := removeWindowsCacheBackup(githubactions.New(), target, backup, func(path string) error {
+		if err := os.Remove(filepath.Join(path, "removed")); err != nil {
+			t.Fatal(err)
+		}
 		return cleanupErr
 	})
-	if !errors.Is(err, cleanupErr) {
-		t.Fatalf("cleanup error = %v, want %v", err, cleanupErr)
+	if err != nil {
+		t.Fatalf("partial backup cleanup failed the active cache: %v", err)
 	}
-	data, err := os.ReadFile(filepath.Join(target, "original"))
-	if err != nil || string(data) != "keep" {
-		t.Fatalf("restored target marker = %q, err = %v", data, err)
+	data, err := os.ReadFile(filepath.Join(target, "sticky"))
+	if err != nil || string(data) != "complete" {
+		t.Fatalf("complete sticky target marker = %q, err = %v", data, err)
 	}
 	if _, err := os.Stat(backup); !os.IsNotExist(err) {
-		t.Fatalf("backup remains after rollback: %v", err)
+		t.Fatalf("reserved backup path remains after cleanup started: %v", err)
+	}
+	if _, err := os.Stat(backup + ".removing"); err != nil {
+		t.Fatalf("partial cleanup path was not retained for retry: %v", err)
+	}
+}
+
+func TestPostSetupRequiresSuccessfulMounts(t *testing.T) {
+	targets := []string{"/var/cache/apt/archives"}
+	if postSetupMountsSucceeded(targets, map[string]error{}) {
+		t.Fatal("post-setup ran without a mount result")
+	}
+	if postSetupMountsSucceeded(targets, map[string]error{targets[0]: errors.New("mount failed")}) {
+		t.Fatal("post-setup ran after a failed mount")
+	}
+	if !postSetupMountsSucceeded(targets, map[string]error{targets[0]: nil}) {
+		t.Fatal("post-setup did not run after a successful mount")
 	}
 }
 

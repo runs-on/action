@@ -131,11 +131,11 @@ func (c *Config) HasSccache() bool {
 	return c.IsUsingRunsOn() && c.IsUsingLinux() && c.Sccache != ""
 }
 
-// HasStickyDiskCache reports whether sticky disk caching was requested. The
-// Linux check happens inside the stickydisk package so non-Linux runners get
-// an explicit warning instead of a silent skip.
+// HasStickyDiskCache reports whether sticky disk caching was requested.
+// Platform and RunsOn availability checks happen inside the stickydisk package
+// so an explicit persistence request never degrades into a silent no-op.
 func (c *Config) HasStickyDiskCache() bool {
-	return c.IsUsingRunsOn() && len(c.StickyCache) > 0
+	return len(c.StickyCache) > 0
 }
 
 func (c *Config) IsUsingRunsOn() bool {

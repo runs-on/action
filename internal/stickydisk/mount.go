@@ -70,22 +70,43 @@ func sameDirectory(a, b string) bool {
 	return aErr == nil && bErr == nil && os.SameFile(aInfo, bInfo)
 }
 
-// removeWindowsCacheBackup finalizes the directory-to-junction swap. A failed
-// backup removal must put the original target back instead of leaving a
-// junction and backup that cannot survive sticky-disk detachment cleanly.
-func removeWindowsCacheBackup(target, backup string, removeBackup func(string) error) error {
-	cleanupErr := removeBackup(backup)
+// removeWindowsCacheBackup finalizes the directory-to-junction swap. The
+// intact backup is first renamed away from the reserved rollback path. If its
+// recursive deletion then fails partway through, the complete sticky junction
+// remains active instead of being replaced by a partially deleted backup.
+func removeWindowsCacheBackup(action *githubactions.Action, target, backup string, removeBackup func(string) error) error {
+	cleanup := backup + ".removing"
+	if _, err := os.Lstat(cleanup); err == nil {
+		if cleanupErr := removeBackup(cleanup); cleanupErr != nil {
+			result := fmt.Errorf("remove stale cache backup cleanup path %s: %w", cleanup, cleanupErr)
+			return rollbackWindowsCacheSwap(target, backup, result)
+		}
+	} else if !os.IsNotExist(err) {
+		result := fmt.Errorf("inspect stale cache backup cleanup path %s: %w", cleanup, err)
+		return rollbackWindowsCacheSwap(target, backup, result)
+	}
+	if err := os.Rename(backup, cleanup); err != nil {
+		result := fmt.Errorf("move cache backup %s to cleanup path %s: %w", backup, cleanup, err)
+		return rollbackWindowsCacheSwap(target, backup, result)
+	}
+
+	cleanupErr := removeBackup(cleanup)
 	if cleanupErr == nil {
 		return nil
 	}
-	result := fmt.Errorf("remove cache backup %s after junction creation: %w", backup, cleanupErr)
-	if _, err := os.Lstat(backup); os.IsNotExist(err) {
+	if _, err := os.Lstat(cleanup); os.IsNotExist(err) {
 		// Some removal implementations can report a late error after the
-		// backup has already disappeared; the junction is safe in that case.
+		// cleanup path has already disappeared.
 		return nil
 	} else if err != nil {
-		return errors.Join(result, fmt.Errorf("inspect cache backup %s after failed removal: %w", backup, err))
+		action.Warningf("Could not verify partially removed cache backup %s after cleanup failed: %v (cleanup error: %v). Keeping the complete sticky junction active.", cleanup, err, cleanupErr)
+		return nil
 	}
+	action.Warningf("Could not fully remove cache backup %s: %v. Keeping the complete sticky junction active; the partial cleanup path will be retried by a later invocation.", cleanup, cleanupErr)
+	return nil
+}
+
+func rollbackWindowsCacheSwap(target, backup string, result error) error {
 	if err := os.Remove(target); err != nil && !os.IsNotExist(err) {
 		return errors.Join(result, fmt.Errorf("remove failed cache junction %s: %w", target, err))
 	}

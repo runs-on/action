@@ -6,48 +6,45 @@ import (
 )
 
 func TestBuildkitInlineConfigFromEnv(t *testing.T) {
-	t.Run("disabled", func(t *testing.T) {
-		t.Setenv("RUNS_ON_ECR_PULL_THROUGH_CACHE", "123456789012.dkr.ecr.us-east-1.amazonaws.com")
-		t.Setenv("RUNS_ON_ECR_PULL_THROUGH_CACHE_DOCKER_HUB_MIRROR", "false")
+	t.Run("unset", func(t *testing.T) {
+		t.Setenv("RUNS_ON_DOCKER_HUB_MIRROR_URL", "")
 		got, err := buildkitInlineConfigFromEnv()
 		if err != nil || got != "" {
 			t.Fatalf("config = %q, err = %v", got, err)
 		}
 	})
 
-	t.Run("hostname", func(t *testing.T) {
-		t.Setenv("RUNS_ON_ECR_PULL_THROUGH_CACHE", "123456789012.dkr.ecr.us-east-1.amazonaws.com")
-		t.Setenv("RUNS_ON_ECR_PULL_THROUGH_CACHE_DOCKER_HUB_MIRROR", "true")
+	t.Run("runner-local mirror", func(t *testing.T) {
+		t.Setenv("RUNS_ON_DOCKER_HUB_MIRROR_URL", "http://10.0.1.5:6871")
 		got, err := buildkitInlineConfigFromEnv()
-		want := "[registry.\"docker.io\"]\n  mirrors = [\"123456789012.dkr.ecr.us-east-1.amazonaws.com\"]\n"
+		want := "[registry.\"docker.io\"]\n  mirrors = [\"10.0.1.5:6871\"]\n" +
+			"\n[registry.\"10.0.1.5:6871\"]\n  http = true\n"
 		if err != nil || got != want {
 			t.Fatalf("config = %q, want %q, err = %v", got, want, err)
 		}
 	})
 
-	t.Run("https URL", func(t *testing.T) {
-		t.Setenv("RUNS_ON_ECR_PULL_THROUGH_CACHE", "https://123456789012.dkr.ecr.us-east-1.amazonaws.com/")
-		t.Setenv("RUNS_ON_ECR_PULL_THROUGH_CACHE_DOCKER_HUB_MIRROR", "TRUE")
+	t.Run("https mirror omits the http stanza", func(t *testing.T) {
+		t.Setenv("RUNS_ON_DOCKER_HUB_MIRROR_URL", "https://mirror.example")
 		got, err := buildkitInlineConfigFromEnv()
-		want := "[registry.\"docker.io\"]\n  mirrors = [\"123456789012.dkr.ecr.us-east-1.amazonaws.com\"]\n"
+		want := "[registry.\"docker.io\"]\n  mirrors = [\"mirror.example\"]\n"
 		if err != nil || got != want {
 			t.Fatalf("config = %q, want %q, err = %v", got, want, err)
 		}
 	})
 
-	t.Run("ECR repository prefix", func(t *testing.T) {
-		t.Setenv("RUNS_ON_ECR_PULL_THROUGH_CACHE", "https://123456789012.dkr.ecr.us-east-1.amazonaws.com/docker-hub/")
-		t.Setenv("RUNS_ON_ECR_PULL_THROUGH_CACHE_DOCKER_HUB_MIRROR", "true")
+	t.Run("trailing slash", func(t *testing.T) {
+		t.Setenv("RUNS_ON_DOCKER_HUB_MIRROR_URL", "http://10.0.1.5:6871/")
 		got, err := buildkitInlineConfigFromEnv()
-		want := "[registry.\"docker.io\"]\n  mirrors = [\"123456789012.dkr.ecr.us-east-1.amazonaws.com/docker-hub\"]\n"
+		want := "[registry.\"docker.io\"]\n  mirrors = [\"10.0.1.5:6871\"]\n" +
+			"\n[registry.\"10.0.1.5:6871\"]\n  http = true\n"
 		if err != nil || got != want {
 			t.Fatalf("config = %q, want %q, err = %v", got, want, err)
 		}
 	})
 
-	t.Run("missing registry", func(t *testing.T) {
-		t.Setenv("RUNS_ON_ECR_PULL_THROUGH_CACHE", "")
-		t.Setenv("RUNS_ON_ECR_PULL_THROUGH_CACHE_DOCKER_HUB_MIRROR", "true")
+	t.Run("invalid URL", func(t *testing.T) {
+		t.Setenv("RUNS_ON_DOCKER_HUB_MIRROR_URL", "10.0.1.5:6871")
 		if got, err := buildkitInlineConfigFromEnv(); err == nil || got != "" {
 			t.Fatalf("config = %q, err = %v", got, err)
 		}
@@ -56,15 +53,17 @@ func TestBuildkitInlineConfigFromEnv(t *testing.T) {
 
 func TestNormalizeBuildkitMirrorRejectsUnsafeValues(t *testing.T) {
 	for _, value := range []string{
-		"http://mirror.example",
-		"https://user:pass@mirror.example",
-		"https://mirror.example?query=1",
-		"https://mirror.example/#fragment",
-		"mirror.example\nother.example",
-		"https://mirror.example/docker%0Ahub",
+		"",
+		"mirror.example",
+		"ftp://mirror.example",
+		"http://user:pass@mirror.example",
+		"http://mirror.example/path",
+		"http://mirror.example?query=1",
+		"http://mirror.example/#fragment",
+		"http://mirror.example\nother.example",
 	} {
-		if got, err := normalizeBuildkitMirror(value); err == nil {
-			t.Errorf("normalizeBuildkitMirror(%q) = %q, expected error", value, got)
+		if host, _, err := normalizeBuildkitMirror(value); err == nil {
+			t.Errorf("normalizeBuildkitMirror(%q) = %q, expected error", value, host)
 		}
 	}
 }

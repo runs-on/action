@@ -49,4 +49,4 @@ outputs:
   buildkit-builder:
     description: 'Stable Buildx builder name to pass to docker/setup-buildx-action and docker/build-push-action'
   buildkit-inline-config:
-    description: 'BuildKit TOML for the RunsOn ECR Docker Hub pull-through mirror, or an empty string when unavailable'
+    description: 'BuildKit TOML pointing docker.io at the runner-local RunsOn Docker Hub mirror (ECR pull-through), or an empty string when the mirror is unavailable'

@@ -52,45 +52,47 @@ func SetBuildkitOutputs(action *githubactions.Action) {
 
 	config, err := buildkitInlineConfigFromEnv()
 	if err != nil {
-		action.Warningf("Cannot configure the BuildKit ECR pull-through mirror: %v", err)
+		action.Warningf("Cannot configure the BuildKit Docker Hub mirror: %v", err)
 		config = ""
 	}
 	action.SetOutput("buildkit-inline-config", config)
 }
 
+// buildkitInlineConfigFromEnv renders the buildkitd registry stanza for the
+// runner-local Docker Hub mirror published by the RunsOn agent. buildx
+// docker-container builders cannot reach the host loopback, so the agent
+// exports the private-IP bind of its mirror in RUNS_ON_DOCKER_HUB_MIRROR_URL.
 func buildkitInlineConfigFromEnv() (string, error) {
-	if !strings.EqualFold(strings.TrimSpace(os.Getenv("RUNS_ON_ECR_PULL_THROUGH_CACHE_DOCKER_HUB_MIRROR")), "true") {
+	raw := strings.TrimSpace(os.Getenv("RUNS_ON_DOCKER_HUB_MIRROR_URL"))
+	if raw == "" {
 		return "", nil
 	}
 
-	mirror, err := normalizeBuildkitMirror(os.Getenv("RUNS_ON_ECR_PULL_THROUGH_CACHE"))
+	host, plainHTTP, err := normalizeBuildkitMirror(raw)
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("[registry.\"docker.io\"]\n  mirrors = [%q]\n", mirror), nil
+	config := fmt.Sprintf("[registry.\"docker.io\"]\n  mirrors = [%q]\n", host)
+	if plainHTTP {
+		config += fmt.Sprintf("\n[registry.%q]\n  http = true\n", host)
+	}
+	return config, nil
 }
 
-func normalizeBuildkitMirror(value string) (string, error) {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return "", fmt.Errorf("RUNS_ON_ECR_PULL_THROUGH_CACHE is empty")
-	}
-
-	candidate := value
-	if !strings.Contains(candidate, "://") {
-		candidate = "https://" + candidate
-	}
-	parsed, err := url.Parse(candidate)
+func normalizeBuildkitMirror(value string) (host string, plainHTTP bool, err error) {
+	parsed, err := url.Parse(value)
 	if err != nil {
-		return "", fmt.Errorf("invalid ECR registry %q: %w", value, err)
+		return "", false, fmt.Errorf("invalid RUNS_ON_DOCKER_HUB_MIRROR_URL %q: %w", value, err)
 	}
-	if parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
-		return "", fmt.Errorf("invalid ECR registry %q: expected an HTTPS registry host or repository prefix without credentials, query, or fragment", value)
+	if (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" ||
+		parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" ||
+		(parsed.Path != "" && parsed.Path != "/") {
+		return "", false, fmt.Errorf("invalid RUNS_ON_DOCKER_HUB_MIRROR_URL %q: expected http(s)://host[:port] without credentials, path, query, or fragment", value)
 	}
-	if strings.ContainsAny(parsed.Host+parsed.Path, "\r\n\t \"'") {
-		return "", fmt.Errorf("invalid ECR registry or repository prefix %q", value)
+	if strings.ContainsAny(parsed.Host, "\r\n\t \"'") {
+		return "", false, fmt.Errorf("invalid RUNS_ON_DOCKER_HUB_MIRROR_URL %q", value)
 	}
-	return parsed.Host + strings.TrimSuffix(parsed.EscapedPath(), "/"), nil
+	return parsed.Host, parsed.Scheme == "http", nil
 }
 
 // setupBuildkit pre-creates the state volume expected by Buildx's single-node

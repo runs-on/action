@@ -423,7 +423,7 @@ jobs:
 
 Sticky BuildKit caching supports one `docker-container` node named by the `buildkit-builder` output. The RunsOn post step verifies that setup-buildx mounted the expected sticky volume, then stops and removes the builder before the disk is snapshotted. A missing setup step, reversed action order, different builder name, appended node, or setup-buildx cleanup causes a clear failure instead of silently using ephemeral cache storage.
 
-The action always emits `buildkit-builder` and `buildkit-inline-config`, even without a sticky disk. When the RunsOn `ecr-pull-through` extra transparently mirrors Docker Hub, the inline config contains the matching BuildKit registry mirror; otherwise it is empty. This also supports a regular non-sticky builder:
+The action always emits `buildkit-builder` and `buildkit-inline-config`, even without a sticky disk. When the RunsOn `ecr-pull-through` extra transparently mirrors Docker Hub, the agent exports the runner-local mirror URL (`RUNS_ON_DOCKER_HUB_MIRROR_URL`) and the inline config points `docker.io` at it, so builder pulls resolve through the ECR pull-through cache; otherwise it is empty. Container builders cannot reach the host loopback, so the URL uses the runner's private-IP bind. This also supports a regular non-sticky builder:
 
 ```yaml
 - id: runs-on
@@ -472,7 +472,7 @@ Other related inputs:
 
 * `sticky_wait_timeout` - how long to wait for the sticky disk to be ready, as a Go duration (default `5m`)
 
-The action sets a `cache-hit` output: `true` when every requested path was restored from a previous snapshot. It also sets `buildkit-builder` to the stable builder name and `buildkit-inline-config` to the ECR mirror TOML described above.
+The action sets a `cache-hit` output: `true` when every requested path was restored from a previous snapshot. It also sets `buildkit-builder` to the stable builder name and `buildkit-inline-config` to the Docker Hub mirror TOML described above.
 
 ## Development
 

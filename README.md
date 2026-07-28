@@ -412,7 +412,6 @@ jobs:
           driver: docker-container
           driver-opts: |
             image=moby/buildkit:v0.31.1
-          buildkitd-config-inline: ${{ steps.runs-on.outputs.buildkit-inline-config }}
           cleanup: false
       - uses: docker/build-push-action@v7
         with:
@@ -423,16 +422,12 @@ jobs:
 
 Sticky BuildKit caching supports one `docker-container` node named by the `buildkit-builder` output. The RunsOn post step verifies that setup-buildx mounted the expected sticky volume, then stops and removes the builder before the disk is snapshotted. A missing setup step, reversed action order, different builder name, appended node, or setup-buildx cleanup causes a clear failure instead of silently using ephemeral cache storage.
 
-The action always emits `buildkit-builder` and `buildkit-inline-config`, even without a sticky disk. When the RunsOn `ecr-pull-through` extra transparently mirrors Docker Hub, the agent exports the runner-local mirror URL (`RUNS_ON_DOCKER_HUB_MIRROR_URL`) and the inline config points `docker.io` at it, so builder pulls resolve through the ECR pull-through cache; otherwise it is empty. Container builders cannot reach the host loopback, so the URL uses the runner's private-IP bind. This also supports a regular non-sticky builder:
-
-```yaml
-- id: runs-on
-  uses: runs-on/action@v2
-- uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
-  with:
-    name: ${{ steps.runs-on.outputs.buildkit-builder }}
-    buildkitd-config-inline: ${{ steps.runs-on.outputs.buildkit-inline-config }}
-```
+The action always emits `buildkit-builder`, even without a sticky disk. When
+the RunsOn `ecr-pull-through` extra is enabled, the runner agent writes
+Buildx's standard `~/.docker/buildx/buildkitd.default.toml` before the job.
+`docker/setup-buildx-action` discovers that file automatically, so sticky and
+regular `docker-container` builders use the prefixed ECR Docker Hub cache
+without an action-specific mirror URL or inline configuration.
 
 Use `docker buildx build` (or `docker/build-push-action`) with the emitted builder; add `--load` when you need the built image in the local Docker daemon. `docker pull` and plain `docker build` do not use this cache.
 
@@ -472,7 +467,7 @@ Other related inputs:
 
 * `sticky_wait_timeout` - how long to wait for the sticky disk to be ready, as a Go duration (default `5m`)
 
-The action sets a `cache-hit` output: `true` when every requested path was restored from a previous snapshot. It also sets `buildkit-builder` to the stable builder name and `buildkit-inline-config` to the Docker Hub mirror TOML described above.
+The action sets a `cache-hit` output: `true` when every requested path was restored from a previous snapshot. It also sets `buildkit-builder` to the stable builder name.
 
 ## Development
 

@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -45,54 +44,10 @@ type dockerContainerInspect struct {
 	Mounts []dockerMount `json:"Mounts"`
 }
 
-// SetBuildkitOutputs publishes the stable builder name and the platform-owned
-// BuildKit configuration even when sticky-disk caching is not requested.
+// SetBuildkitOutputs publishes the stable builder name even when sticky-disk
+// caching is not requested.
 func SetBuildkitOutputs(action *githubactions.Action) {
 	action.SetOutput("buildkit-builder", buildkitBuilderName)
-
-	config, err := buildkitInlineConfigFromEnv()
-	if err != nil {
-		action.Warningf("Cannot configure the BuildKit Docker Hub mirror: %v", err)
-		config = ""
-	}
-	action.SetOutput("buildkit-inline-config", config)
-}
-
-// buildkitInlineConfigFromEnv renders the buildkitd registry stanza for the
-// runner-local Docker Hub mirror published by the RunsOn agent. buildx
-// docker-container builders cannot reach the host loopback, so the agent
-// exports the private-IP bind of its mirror in RUNS_ON_DOCKER_HUB_MIRROR_URL.
-func buildkitInlineConfigFromEnv() (string, error) {
-	raw := strings.TrimSpace(os.Getenv("RUNS_ON_DOCKER_HUB_MIRROR_URL"))
-	if raw == "" {
-		return "", nil
-	}
-
-	host, plainHTTP, err := normalizeBuildkitMirror(raw)
-	if err != nil {
-		return "", err
-	}
-	config := fmt.Sprintf("[registry.\"docker.io\"]\n  mirrors = [%q]\n", host)
-	if plainHTTP {
-		config += fmt.Sprintf("\n[registry.%q]\n  http = true\n", host)
-	}
-	return config, nil
-}
-
-func normalizeBuildkitMirror(value string) (host string, plainHTTP bool, err error) {
-	parsed, err := url.Parse(value)
-	if err != nil {
-		return "", false, fmt.Errorf("invalid RUNS_ON_DOCKER_HUB_MIRROR_URL %q: %w", value, err)
-	}
-	if (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" ||
-		parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" ||
-		(parsed.Path != "" && parsed.Path != "/") {
-		return "", false, fmt.Errorf("invalid RUNS_ON_DOCKER_HUB_MIRROR_URL %q: expected http(s)://host[:port] without credentials, path, query, or fragment", value)
-	}
-	if strings.ContainsAny(parsed.Host, "\r\n\t \"'") {
-		return "", false, fmt.Errorf("invalid RUNS_ON_DOCKER_HUB_MIRROR_URL %q", value)
-	}
-	return parsed.Host, parsed.Scheme == "http", nil
 }
 
 // setupBuildkit pre-creates the state volume expected by Buildx's single-node

@@ -40,14 +40,22 @@ jobs:
           driver: docker-container
           driver-opts: |
             image=moby/buildkit:v0.31.1
-          buildkitd-config-inline: ${{ steps.runs-on.outputs.buildkit-inline-config }}
           cleanup: false
-      - name: Populate BuildKit cache
+      - name: Prepare cold BuildKit fixture
         shell: bash
         run: |
           mkdir -p /tmp/runs-on-buildkit-test
-          printf 'FROM busybox:1.36\nRUN dd if=/dev/zero of=/layer.bin bs=1M count=16\n' > /tmp/runs-on-buildkit-test/Dockerfile
-          docker buildx build --builder "${{ steps.runs-on.outputs.buildkit-builder }}" --progress=plain --load --tag runs-on-buildkit-test:cold /tmp/runs-on-buildkit-test
+          printf "FROM busybox:1.36\nRUN --mount=type=secret,id=cache-proof test \"\$(cat /run/secrets/cache-proof)\" = cold\nRUN dd if=/dev/zero of=/layer.bin bs=1M count=16\n" > /tmp/runs-on-buildkit-test/Dockerfile
+          printf 'cold\n' > /tmp/runs-on-buildkit-cache-proof
+      - name: Populate BuildKit cache through build-push-action
+        uses: docker/build-push-action@v7
+        with:
+          builder: ${{ steps.runs-on.outputs.buildkit-builder }}
+          context: /tmp/runs-on-buildkit-test
+          load: true
+          tags: runs-on-buildkit-test:cold
+          secret-files: |
+            cache-proof=/tmp/runs-on-buildkit-cache-proof
 
   wait-for-snapshot:
     needs: cold
@@ -91,15 +99,25 @@ jobs:
           driver: docker-container
           driver-opts: |
             image=moby/buildkit:v0.31.1
-          buildkitd-config-inline: ${{ steps.runs-on.outputs.buildkit-inline-config }}
           cleanup: false
-      - name: Verify cached build
+      - name: Prepare warm BuildKit fixture
         shell: bash
         run: |
           mkdir -p /tmp/runs-on-buildkit-test
-          printf 'FROM busybox:1.36\nRUN dd if=/dev/zero of=/layer.bin bs=1M count=16\n' > /tmp/runs-on-buildkit-test/Dockerfile
-          docker buildx build --builder "${{ steps.runs-on.outputs.buildkit-builder }}" --progress=plain --load --tag runs-on-buildkit-test:warm /tmp/runs-on-buildkit-test 2>&1 | tee /tmp/runs-on-buildkit.log
-          grep -q 'CACHED' /tmp/runs-on-buildkit.log
+          printf "FROM busybox:1.36\nRUN --mount=type=secret,id=cache-proof test \"\$(cat /run/secrets/cache-proof)\" = cold\nRUN dd if=/dev/zero of=/layer.bin bs=1M count=16\n" > /tmp/runs-on-buildkit-test/Dockerfile
+          # Secret contents do not participate in BuildKit cache checksums.
+          # A cold execution would fail, so success proves the RUN layer came
+          # from the sticky state restored from the cold job.
+          printf 'warm\n' > /tmp/runs-on-buildkit-cache-proof
+      - name: Verify restored BuildKit cache through build-push-action
+        uses: docker/build-push-action@v7
+        with:
+          builder: ${{ steps.runs-on.outputs.buildkit-builder }}
+          context: /tmp/runs-on-buildkit-test
+          load: true
+          tags: runs-on-buildkit-test:warm
+          secret-files: |
+            cache-proof=/tmp/runs-on-buildkit-cache-proof
 
   missing-sticky-disk:
     runs-on: runs-on=${{ github.run_id }}/env=bootstrap/cpu=2/family=m7/image=ubuntu24-full-x64

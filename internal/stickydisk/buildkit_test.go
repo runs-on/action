@@ -5,69 +5,6 @@ import (
 	"testing"
 )
 
-func TestBuildkitInlineConfigFromEnv(t *testing.T) {
-	t.Run("unset", func(t *testing.T) {
-		t.Setenv("RUNS_ON_DOCKER_HUB_MIRROR_URL", "")
-		got, err := buildkitInlineConfigFromEnv()
-		if err != nil || got != "" {
-			t.Fatalf("config = %q, err = %v", got, err)
-		}
-	})
-
-	t.Run("runner-local mirror", func(t *testing.T) {
-		t.Setenv("RUNS_ON_DOCKER_HUB_MIRROR_URL", "http://10.0.1.5:6871")
-		got, err := buildkitInlineConfigFromEnv()
-		want := "[registry.\"docker.io\"]\n  mirrors = [\"10.0.1.5:6871\"]\n" +
-			"\n[registry.\"10.0.1.5:6871\"]\n  http = true\n"
-		if err != nil || got != want {
-			t.Fatalf("config = %q, want %q, err = %v", got, want, err)
-		}
-	})
-
-	t.Run("https mirror omits the http stanza", func(t *testing.T) {
-		t.Setenv("RUNS_ON_DOCKER_HUB_MIRROR_URL", "https://mirror.example")
-		got, err := buildkitInlineConfigFromEnv()
-		want := "[registry.\"docker.io\"]\n  mirrors = [\"mirror.example\"]\n"
-		if err != nil || got != want {
-			t.Fatalf("config = %q, want %q, err = %v", got, want, err)
-		}
-	})
-
-	t.Run("trailing slash", func(t *testing.T) {
-		t.Setenv("RUNS_ON_DOCKER_HUB_MIRROR_URL", "http://10.0.1.5:6871/")
-		got, err := buildkitInlineConfigFromEnv()
-		want := "[registry.\"docker.io\"]\n  mirrors = [\"10.0.1.5:6871\"]\n" +
-			"\n[registry.\"10.0.1.5:6871\"]\n  http = true\n"
-		if err != nil || got != want {
-			t.Fatalf("config = %q, want %q, err = %v", got, want, err)
-		}
-	})
-
-	t.Run("invalid URL", func(t *testing.T) {
-		t.Setenv("RUNS_ON_DOCKER_HUB_MIRROR_URL", "10.0.1.5:6871")
-		if got, err := buildkitInlineConfigFromEnv(); err == nil || got != "" {
-			t.Fatalf("config = %q, err = %v", got, err)
-		}
-	})
-}
-
-func TestNormalizeBuildkitMirrorRejectsUnsafeValues(t *testing.T) {
-	for _, value := range []string{
-		"",
-		"mirror.example",
-		"ftp://mirror.example",
-		"http://user:pass@mirror.example",
-		"http://mirror.example/path",
-		"http://mirror.example?query=1",
-		"http://mirror.example/#fragment",
-		"http://mirror.example\nother.example",
-	} {
-		if host, _, err := normalizeBuildkitMirror(value); err == nil {
-			t.Errorf("normalizeBuildkitMirror(%q) = %q, expected error", value, host)
-		}
-	}
-}
-
 func TestDockerVolumeMatches(t *testing.T) {
 	stateRoot := filepath.Clean("/mnt/runs-on/stickydisk/buildkit/root")
 	matching := dockerVolumeInspect{

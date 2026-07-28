@@ -48,5 +48,3 @@ outputs:
     description: 'Set to "true" when every requested cache path was restored from a previous snapshot, "false" otherwise'
   buildkit-builder:
     description: 'Stable Buildx builder name to pass to docker/setup-buildx-action and docker/build-push-action'
-  buildkit-inline-config:
-    description: 'BuildKit TOML pointing docker.io at the runner-local RunsOn Docker Hub mirror (ECR pull-through), or an empty string when the mirror is unavailable'

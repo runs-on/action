@@ -186,8 +186,14 @@ func Configure(action *githubactions.Action, opts Options) error {
 	for _, spec := range specs {
 		targets = append(targets, spec.target)
 	}
-	if err := validateNoOverlappingTargets(targets, mountRoot); err != nil {
-		return err
+	if len(targets) > 0 {
+		mountedTargets, err := mountedCacheTargets(mountRoot)
+		if err != nil {
+			return fmt.Errorf("inspect cache targets mounted by earlier action invocations: %w", err)
+		}
+		if err := validateNoOverlappingTargetsWithMounted(targets, mountedTargets, mountRoot); err != nil {
+			return err
+		}
 	}
 	if len(specs) == 0 && len(results) == 0 {
 		action.Warningf("No cache paths to set up.")
@@ -231,6 +237,10 @@ func Configure(action *githubactions.Action, opts Options) error {
 }
 
 func validateNoOverlappingTargets(targets []string, mountRoot string) error {
+	return validateNoOverlappingTargetsWithMounted(targets, nil, mountRoot)
+}
+
+func validateNoOverlappingTargetsWithMounted(targets, mountedTargets []string, mountRoot string) error {
 	canonical := make([]string, len(targets))
 	for i, target := range targets {
 		canonical[i] = filepath.Clean(target)
@@ -248,6 +258,17 @@ func validateNoOverlappingTargets(targets []string, mountRoot string) error {
 		for j := i + 1; j < len(canonical); j++ {
 			if pathContains(canonical[i], canonical[j]) || pathContains(canonical[j], canonical[i]) {
 				return fmt.Errorf("sticky cache paths overlap: %s and %s; combine them into one cache target", targets[i], targets[j])
+			}
+		}
+	}
+	for i, target := range canonical {
+		for j, mountedTarget := range mountedTargets {
+			mountedTarget = filepath.Clean(mountedTarget)
+			if target == mountedTarget {
+				continue
+			}
+			if pathContains(target, mountedTarget) || pathContains(mountedTarget, target) {
+				return fmt.Errorf("sticky cache path %s overlaps %s mounted by an earlier runs-on/action invocation", targets[i], mountedTargets[j])
 			}
 		}
 	}

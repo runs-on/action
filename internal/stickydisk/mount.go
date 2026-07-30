@@ -67,6 +67,54 @@ func sameDirectory(a, b string) bool {
 	return aErr == nil && bErr == nil && os.SameFile(aInfo, bInfo)
 }
 
+// ensureRealDirectoryPath creates missing directories below root one component
+// at a time and rejects links. Persisted cache state is runner-writable, so
+// following a restored link could redirect privileged cache operations off the
+// sticky disk.
+func ensureRealDirectoryPath(root, target string) error {
+	root = filepath.Clean(root)
+	target = filepath.Clean(target)
+	rel, err := filepath.Rel(root, target)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("path %s is outside sticky disk %s", target, root)
+	}
+	if err := requireRealDirectory(root); err != nil {
+		return err
+	}
+	if rel == "." {
+		return nil
+	}
+	current := root
+	for _, component := range strings.Split(rel, string(filepath.Separator)) {
+		current = filepath.Join(current, component)
+		info, err := os.Lstat(current)
+		if os.IsNotExist(err) {
+			if err := os.Mkdir(current, 0o755); err != nil && !os.IsExist(err) {
+				return fmt.Errorf("create cache directory %s: %w", current, err)
+			}
+			info, err = os.Lstat(current)
+		}
+		if err != nil {
+			return fmt.Errorf("inspect cache directory %s: %w", current, err)
+		}
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("sticky cache path component %s is not a real directory", current)
+		}
+	}
+	return nil
+}
+
+func requireRealDirectory(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return fmt.Errorf("inspect directory %s: %w", path, err)
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("%s is not a real directory", path)
+	}
+	return nil
+}
+
 // liveUnrelatedCacheLink distinguishes an active junction or symbolic link
 // from a broken link left behind by a detached volume.
 func liveUnrelatedCacheLink(path string) (bool, error) {

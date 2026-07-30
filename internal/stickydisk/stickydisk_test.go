@@ -126,6 +126,19 @@ func TestValidateNoOverlappingTargets(t *testing.T) {
 	}
 }
 
+func TestValidateNoOverlappingTargetsIncludesEarlierInvocations(t *testing.T) {
+	mounted := []string{"/workspace/vendor"}
+	if err := validateNoOverlappingTargetsWithMounted([]string{"/workspace/vendor/cache"}, mounted, "/runs-on/stickydisk"); err == nil || !strings.Contains(err.Error(), "earlier runs-on/action invocation") {
+		t.Fatalf("nested target from a later invocation error = %v", err)
+	}
+	if err := validateNoOverlappingTargetsWithMounted([]string{"/workspace/vendor"}, mounted, "/runs-on/stickydisk"); err != nil {
+		t.Fatalf("repeated target was rejected: %v", err)
+	}
+	if err := validateNoOverlappingTargetsWithMounted([]string{"/home/runner/.cache"}, mounted, "/runs-on/stickydisk"); err != nil {
+		t.Fatalf("independent later target was rejected: %v", err)
+	}
+}
+
 func TestValidateStickyMount(t *testing.T) {
 	root := t.TempDir()
 	if err := validateStickyMountWith(root, func(string) bool { return true }); err != nil {
@@ -382,6 +395,18 @@ func TestModePathsForWindows(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", "/tmp/xdg")
 	if got, want := strings.Join(pnpm.pathsFor("linux"), ","), "/tmp/xdg/pnpm/store"; got != want {
 		t.Errorf("pnpm XDG path = %s, want %s", got, want)
+	}
+}
+
+func TestRubyModeExcludesGlobalBundlerConfig(t *testing.T) {
+	paths := cacheModes["ruby"].pathsFor("linux")
+	if got := strings.Join(paths, ","); got != "~/.bundle/cache,vendor/bundle" {
+		t.Fatalf("ruby cache paths = %q", got)
+	}
+	for _, path := range paths {
+		if path == "~/.bundle" {
+			t.Fatal("ruby mode caches Bundler's global config directory")
+		}
 	}
 }
 

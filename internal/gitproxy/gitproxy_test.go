@@ -277,6 +277,109 @@ func TestMirrorEnsureRepo(t *testing.T) {
 	}
 }
 
+func TestNewMirrorRejectsSymlinkedRoot(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation requires elevated privileges on Windows")
+	}
+	parent := t.TempDir()
+	outside := t.TempDir()
+	root := filepath.Join(parent, "mirrors")
+	if err := os.Symlink(outside, root); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if _, err := NewMirror(root, time.Hour, slog.New(slog.NewTextHandler(io.Discard, nil))); err == nil || !strings.Contains(err.Error(), "real directory") {
+		t.Fatalf("symlinked mirror root error = %v", err)
+	}
+}
+
+func TestMirrorRejectsSymlinkedParentBeforeClone(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation requires elevated privileges on Windows")
+	}
+	upstreamBase, _ := newUpstreamRepo(t)
+	root := t.TempDir()
+	mirror, err := NewMirror(root, time.Hour, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mirror.Close()
+
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(root, "github.com")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if _, _, err := mirror.EnsureRepo(t.Context(), "github.com", "owner", "repo", upstreamBase+"/owner/repo.git", "Basic privileged"); err == nil || !strings.Contains(err.Error(), "real directory") {
+		t.Fatalf("symlinked mirror parent error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(outside, "owner")); !os.IsNotExist(err) {
+		t.Fatalf("authenticated clone wrote through symlinked parent: %v", err)
+	}
+}
+
+func TestMirrorReclonesBrokenReachableObjectGraph(t *testing.T) {
+	upstreamBase, _ := newUpstreamRepo(t)
+	mirror, err := NewMirror(t.TempDir(), time.Hour, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mirror.Close()
+
+	repoPath, _, err := mirror.EnsureRepo(t.Context(), "github.com", "owner", "repo", upstreamBase+"/owner/repo.git", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	packs, err := filepath.Glob(filepath.Join(repoPath, "objects", "pack", "*.pack"))
+	if err != nil || len(packs) == 0 {
+		t.Fatalf("mirror packs = %v, err = %v", packs, err)
+	}
+	if err := os.Remove(packs[0]); err != nil {
+		t.Fatal(err)
+	}
+	if IsUsableRepo(t.Context(), repoPath) {
+		t.Fatal("mirror with a broken reachable object graph was accepted")
+	}
+
+	mirror.lastSync.Delete("github.com/owner/repo")
+	if _, status, err := mirror.EnsureRepo(t.Context(), "github.com", "owner", "repo", upstreamBase+"/owner/repo.git", ""); err != nil || status != StatusClone {
+		t.Fatalf("repair broken mirror: status=%s err=%v", status, err)
+	}
+}
+
+func TestMirrorReclonesSymlinkedObjectStore(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation requires elevated privileges on Windows")
+	}
+	upstreamBase, _ := newUpstreamRepo(t)
+	mirror, err := NewMirror(t.TempDir(), time.Hour, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mirror.Close()
+
+	repoPath, _, err := mirror.EnsureRepo(t.Context(), "github.com", "owner", "repo", upstreamBase+"/owner/repo.git", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	outsideObjects := filepath.Join(t.TempDir(), "objects")
+	if err := os.Rename(filepath.Join(repoPath, "objects"), outsideObjects); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outsideObjects, filepath.Join(repoPath, "objects")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if IsUsableRepo(t.Context(), repoPath) {
+		t.Fatal("mirror with a symlinked object store was accepted")
+	}
+
+	mirror.lastSync.Delete("github.com/owner/repo")
+	if _, status, err := mirror.EnsureRepo(t.Context(), "github.com", "owner", "repo", upstreamBase+"/owner/repo.git", ""); err != nil || status != StatusClone {
+		t.Fatalf("repair symlinked object store: status=%s err=%v", status, err)
+	}
+	if _, err := os.Stat(outsideObjects); err != nil {
+		t.Fatalf("repair followed and removed the external object store: %v", err)
+	}
+}
+
 func TestAuthenticatedSyncIgnoresPersistedNetworkConfig(t *testing.T) {
 	upstreamBase, headSHA := newUpstreamRepo(t)
 	mirror, err := NewMirror(t.TempDir(), time.Hour, slog.New(slog.NewTextHandler(io.Discard, nil)))
@@ -306,6 +409,7 @@ func TestAuthenticatedSyncIgnoresPersistedNetworkConfig(t *testing.T) {
 	gitCmd(t, repoPath, "config", "url."+attacker.URL+"/.insteadOf", upstreamURL)
 	gitCmd(t, repoPath, "config", "http.extraHeader", "Authorization: persisted")
 	gitCmd(t, repoPath, "config", "core.hooksPath", filepath.Join(repoPath, "hooks-from-earlier-job"))
+	gitCmd(t, repoPath, "config", "core.alternateRefsCommand", "false")
 
 	exfiltratedToken := filepath.Join(t.TempDir(), "exfiltrated-token")
 	hook := fmt.Sprintf("#!/bin/sh\nprintf '%%s' \"$GIT_CONFIG_VALUE_0\" > %q\n", exfiltratedToken)
@@ -328,6 +432,11 @@ func TestAuthenticatedSyncIgnoresPersistedNetworkConfig(t *testing.T) {
 		t.Fatalf("persisted reference-transaction hook received %q", token)
 	} else if !os.IsNotExist(err) {
 		t.Fatal(err)
+	}
+	config := exec.Command("git", "-C", repoPath, "config", "--local", "--get", "core.alternateRefsCommand")
+	config.Env = gitEnv("")
+	if output, err := config.CombinedOutput(); err == nil {
+		t.Fatalf("persisted core.alternateRefsCommand survived authenticated sync: %s", output)
 	}
 }
 

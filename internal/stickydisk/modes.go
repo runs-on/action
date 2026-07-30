@@ -44,7 +44,7 @@ var cacheModes = map[string]CacheMode{
 	"node":       {Name: "node", Paths: []string{"~/.npm"}, WindowsPaths: []string{"~/AppData/Local/npm-cache"}},
 	"yarn":       {Name: "yarn", Paths: []string{"~/.cache/yarn"}, WindowsPaths: []string{"~/AppData/Local/Yarn/Cache"}},
 	"pnpm":       {Name: "pnpm", Paths: []string{"~/.local/share/pnpm/store"}, WindowsPaths: []string{"~/AppData/Local/pnpm/store"}},
-	"ruby":       {Name: "ruby", Paths: []string{"~/.bundle", "vendor/bundle"}},
+	"ruby":       {Name: "ruby", Paths: []string{"~/.bundle/cache", "vendor/bundle"}},
 	"rust":       {Name: "rust", Paths: []string{"~/.cargo/registry", "~/.cargo/git"}},
 	"python":     {Name: "python", Paths: []string{"~/.cache/pip"}, WindowsPaths: []string{"~/AppData/Local/pip/cache"}},
 	"uv":         {Name: "uv", Paths: []string{"~/.cache/uv"}, WindowsPaths: []string{"~/AppData/Local/uv/cache"}},

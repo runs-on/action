@@ -125,8 +125,7 @@ func removeBuildkitBuilderKeepState(action *githubactions.Action) error {
 	if err == nil {
 		return nil
 	}
-	notFound := fmt.Sprintf("no builder %q found", buildkitBuilderName)
-	if !strings.Contains(strings.ToLower(err.Error()), strings.ToLower(notFound)) {
+	if !isMissingBuildxBuilderError(err) {
 		return err
 	}
 
@@ -277,13 +276,21 @@ func isMissingBuildkitContainer(err error) bool {
 }
 
 func removeBuildkitBuilder(action *githubactions.Action) error {
-	if err := runLogged(action, "docker", "buildx", "rm", "--force", buildkitBuilderName); err == nil {
+	builderErr := runLogged(action, "docker", "buildx", "rm", "--force", buildkitBuilderName)
+	if builderErr == nil {
 		return nil
-	} else {
-		action.Warningf("Buildx cleanup failed, removing its container directly: %v", err)
 	}
+	if isMissingBuildxBuilderError(builderErr) {
+		return removeBuildkitContainer()
+	}
+	action.Warningf("Buildx cleanup failed, removing its container directly: %v", builderErr)
 
-	return removeBuildkitContainer()
+	return errors.Join(builderErr, removeBuildkitContainer())
+}
+
+func isMissingBuildxBuilderError(err error) bool {
+	notFound := fmt.Sprintf("no builder %q found", buildkitBuilderName)
+	return err != nil && strings.Contains(strings.ToLower(err.Error()), strings.ToLower(notFound))
 }
 
 func removeBuildkitContainer() error {

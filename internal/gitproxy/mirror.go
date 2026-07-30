@@ -61,6 +61,9 @@ func NewMirror(root string, staleAfter time.Duration, log *slog.Logger) (*Mirror
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return nil, fmt.Errorf("create mirror root: %w", err)
 	}
+	if err := requireRealDirectory(root); err != nil {
+		return nil, fmt.Errorf("validate mirror root: %w", err)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Mirror{root: root, staleAfter: staleAfter, log: log, ctx: ctx, cancel: cancel}, nil
 }
@@ -81,8 +84,19 @@ func (m *Mirror) EnsureRepo(ctx context.Context, host, owner, repo, upstreamURL,
 	// Clone goes through singleflight so a concurrent request never sees a
 	// half-created directory: it waits for the in-flight clone instead.
 	result, err, _ := m.group.Do("clone:"+key, func() (interface{}, error) {
-		_, statErr := os.Stat(repoPath)
-		if statErr == nil && !m.IsUsable(ctx, repoPath) {
+		if err := ensureRealSubdirectories(m.root, filepath.Dir(repoPath)); err != nil {
+			return StatusClone, fmt.Errorf("validate mirror parent: %w", err)
+		}
+		info, statErr := os.Lstat(repoPath)
+		if statErr == nil && (!info.IsDir() || info.Mode()&os.ModeSymlink != 0) {
+			m.log.Warn("removing unsafe persisted mirror path", "repo", key, "path", repoPath)
+			if err := os.RemoveAll(repoPath); err != nil {
+				return StatusClone, fmt.Errorf("remove unsafe mirror path: %w", err)
+			}
+			statErr = os.ErrNotExist
+		}
+		_, validatedThisJob := m.lastSync.Load(key)
+		if statErr == nil && !validatedThisJob && !m.IsUsable(ctx, repoPath) {
 			m.log.Warn("removing unusable persisted mirror", "repo", key, "path", repoPath)
 			if err := os.RemoveAll(repoPath); err != nil {
 				return StatusClone, fmt.Errorf("remove unusable mirror: %w", err)
@@ -242,7 +256,7 @@ func (m *Mirror) validateAuth(ctx context.Context, upstreamURL, authHeader strin
 // cloneRepo creates a new bare mirror.
 func (m *Mirror) cloneRepo(ctx context.Context, repoPath, upstreamURL, authHeader string) error {
 	m.log.Info("cloning mirror", "path", repoPath, "hasAuth", authHeader != "")
-	if err := os.MkdirAll(filepath.Dir(repoPath), 0o755); err != nil {
+	if err := ensureRealSubdirectories(m.root, filepath.Dir(repoPath)); err != nil {
 		return fmt.Errorf("create parent dir: %w", err)
 	}
 
@@ -387,7 +401,9 @@ func unsafePersistedNetworkKey(key string) bool {
 			return true
 		}
 	}
-	return lower == "core.hookspath" || lower == "core.sshcommand"
+	return lower == "core.alternaterefscommand" ||
+		lower == "core.hookspath" ||
+		lower == "core.sshcommand"
 }
 
 func syncMirrorHEAD(ctx context.Context, repoPath, upstreamURL, authHeader string) error {
@@ -427,8 +443,74 @@ func (m *Mirror) IsUsable(ctx context.Context, repoPath string) bool {
 }
 
 func IsUsableRepo(ctx context.Context, repoPath string) bool {
+	if err := validateMirrorStorage(repoPath); err != nil {
+		return false
+	}
 	out, err := exec.CommandContext(ctx, "git", "--git-dir", repoPath, "rev-parse", "--is-bare-repository").Output()
-	return err == nil && strings.TrimSpace(string(out)) == "true"
+	if err != nil || strings.TrimSpace(string(out)) != "true" {
+		return false
+	}
+	cmd := exec.CommandContext(ctx, "git", "--git-dir", repoPath, "fsck", "--connectivity-only", "--no-dangling", "--no-reflogs")
+	cmd.Env = gitEnv("")
+	return cmd.Run() == nil
+}
+
+func validateMirrorStorage(repoPath string) error {
+	for _, path := range []string{
+		repoPath,
+		filepath.Join(repoPath, "objects"),
+		filepath.Join(repoPath, "objects", "info"),
+		filepath.Join(repoPath, "objects", "pack"),
+	} {
+		if err := requireRealDirectory(path); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func ensureRealSubdirectories(root, target string) error {
+	root = filepath.Clean(root)
+	target = filepath.Clean(target)
+	rel, err := filepath.Rel(root, target)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("path %s is outside mirror root %s", target, root)
+	}
+	if err := requireRealDirectory(root); err != nil {
+		return err
+	}
+	if rel == "." {
+		return nil
+	}
+	current := root
+	for _, component := range strings.Split(rel, string(filepath.Separator)) {
+		current = filepath.Join(current, component)
+		info, err := os.Lstat(current)
+		if os.IsNotExist(err) {
+			if err := os.Mkdir(current, 0o755); err != nil && !os.IsExist(err) {
+				return fmt.Errorf("create directory %s: %w", current, err)
+			}
+			info, err = os.Lstat(current)
+		}
+		if err != nil {
+			return fmt.Errorf("inspect directory %s: %w", current, err)
+		}
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("mirror path component %s is not a real directory", current)
+		}
+	}
+	return nil
+}
+
+func requireRealDirectory(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return fmt.Errorf("inspect directory %s: %w", path, err)
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("%s is not a real directory", path)
+	}
+	return nil
 }
 
 // optimizeRepo runs maintenance tasks: bitmaps and commit-graphs make

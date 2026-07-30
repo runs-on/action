@@ -28,6 +28,9 @@ func cacheMount(action *githubactions.Action, mountRoot, target string, rootOwne
 	}
 
 	src := filepath.Join(mountRoot, "mounts", sourceDirName(target))
+	if err := ensureRealDirectoryPath(mountRoot, src); err != nil {
+		return false, fmt.Errorf("validate sticky cache source %s: %w", src, err)
+	}
 	hit = dirNonEmpty(src)
 	if !hit {
 		// A cold source populated from checkout/image files must not survive a
@@ -40,11 +43,6 @@ func cacheMount(action *githubactions.Action, mountRoot, target string, rootOwne
 				err = errors.Join(err, fmt.Errorf("remove failed cold cache source %s: %w", src, cleanupErr))
 			}
 		}()
-	}
-
-	// The sticky disk root is owned by the runner user, so no sudo needed here.
-	if err := os.MkdirAll(src, 0755); err != nil {
-		return hit, fmt.Errorf("failed to create source dir %s: %w", src, err)
 	}
 
 	if isMountpoint(target) {
@@ -102,6 +100,39 @@ func cacheMount(action *githubactions.Action, mountRoot, target string, rootOwne
 	}
 
 	return hit, nil
+}
+
+func mountedCacheTargets(mountRoot string) ([]string, error) {
+	data, err := os.ReadFile("/proc/self/mountinfo")
+	if err != nil {
+		return nil, fmt.Errorf("read active mounts: %w", err)
+	}
+	return mountedCacheTargetsFromMountInfo(data, mountRoot), nil
+}
+
+func mountedCacheTargetsFromMountInfo(data []byte, mountRoot string) []string {
+	var targets []string
+	for _, line := range strings.Split(string(data), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 5 {
+			continue
+		}
+		target := decodeMountInfoPath(fields[4])
+		src := filepath.Join(mountRoot, "mounts", sourceDirName(target))
+		if sameDirectory(target, src) {
+			targets = append(targets, target)
+		}
+	}
+	return targets
+}
+
+func decodeMountInfoPath(path string) string {
+	return strings.NewReplacer(
+		`\040`, " ",
+		`\011`, "\t",
+		`\012`, "\n",
+		`\134`, `\`,
+	).Replace(path)
 }
 
 func mergeTargetIntoCache(action *githubactions.Action, target, src string, rootOwned bool) error {

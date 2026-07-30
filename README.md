@@ -378,7 +378,7 @@ Supported cache modes and the directories they persist:
 | `node` | `npm` | `~/.npm` |
 | `yarn` | | `~/.cache/yarn` |
 | `pnpm` | | `~/.local/share/pnpm/store` (or `$XDG_DATA_HOME/pnpm/store`) |
-| `ruby` | `bundler` | `~/.bundle`, `vendor/bundle` |
+| `ruby` | `bundler` | `~/.bundle/cache`, `vendor/bundle` |
 | `rust` | `cargo` | `~/.cargo/registry`, `~/.cargo/git` |
 | `python` | `pip` | `~/.cache/pip` |
 | `uv` | | `~/.cache/uv` |

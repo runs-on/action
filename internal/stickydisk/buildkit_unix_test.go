@@ -92,6 +92,29 @@ exit 1
 	}
 }
 
+func TestRemoveBuildkitBuilderPreservesMetadataRemovalError(t *testing.T) {
+	bin := t.TempDir()
+	script := `#!/bin/sh
+if [ "$1 $2 $3 $4" = "buildx rm --force runs-on" ]; then
+  echo 'failed to update builder metadata' >&2
+  exit 1
+fi
+if [ "$1 $2 $3" = "rm --force buildx_buildkit_runs-on0" ]; then
+  exit 0
+fi
+exit 1
+`
+	if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	err := removeBuildkitBuilder(githubactions.New())
+	if err == nil || !strings.Contains(err.Error(), "failed to update builder metadata") {
+		t.Fatalf("builder cleanup error = %v", err)
+	}
+}
+
 func TestCleanupBuildkitTreatsCompletedForcedRemovalAsSafe(t *testing.T) {
 	previousState, previousErr := os.ReadFile(buildkitPreparedStateFile)
 	t.Cleanup(func() {

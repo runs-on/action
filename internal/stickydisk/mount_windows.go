@@ -115,6 +115,10 @@ func cacheMount(action *githubactions.Action, mountRoot, target string, rootOwne
 	return hit, nil
 }
 
+func mountedCacheTargets(string) ([]string, error) {
+	return nil, nil
+}
+
 // isMountpoint uses mountvol so an ordinary directory on the system drive
 // cannot satisfy a stale sticky-disk ready marker.
 func isMountpoint(path string) bool {

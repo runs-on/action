@@ -49,6 +49,9 @@ func setupGit(action *githubactions.Action, mountRoot string) (hit bool, err err
 	}
 
 	mirrorDir := gitMirrorDir(mountRoot)
+	if err := ensureRealDirectoryPath(mountRoot, mirrorDir); err != nil {
+		return false, fmt.Errorf("validate Git mirror directory: %w", err)
+	}
 	if repo := os.Getenv("GITHUB_REPOSITORY"); repo != "" {
 		hit = gitMirrorCacheHit(mirrorDir, repo)
 	}

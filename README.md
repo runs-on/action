@@ -388,7 +388,8 @@ Supported cache modes and the directories they persist:
 | `poetry` | | `~/.cache/pypoetry` |
 | `apt` | | `/var/cache/apt/archives` |
 | `buildkit` | `buildx` | BuildKit layer cache (the official setup-buildx builder stores its state on the sticky disk) |
-| `git` | `checkout` | Git repository mirrors (local git proxy serving github.com fetches from the sticky disk) |
+| `git` | `checkout` | Current workflow repository history (local Git proxy serving the workflow SHA from the sticky disk) |
+| `git-full` | | Full Git repository mirrors for workflows that need arbitrary refs or repositories |
 | `gradle` | | `~/.gradle/caches`, `~/.gradle/wrapper` |
 | `maven` | | `~/.m2/repository` |
 | `playwright` | | `~/.cache/ms-playwright` |
@@ -437,7 +438,9 @@ Use `docker buildx build` (or `docker/build-push-action`) with the emitted build
 
 #### `git` mode (fast checkouts)
 
-The `git` mode accelerates `actions/checkout` — and any other `git fetch`/`git clone` of a github.com repository during the job — without changing your checkout step. It starts a local git proxy whose bare repository mirrors live on the sticky disk, and rewrites `https://github.com/` fetch URLs to it (global `url.insteadOf`). The mirror syncs once per repo per job (only new objects cross the network); the fetch itself, including shallow `fetch-depth: 1` packs, is served at disk speed by `git upload-pack` on the runner.
+The `git` mode accelerates `actions/checkout` without changing the checkout step. It starts a local Git proxy whose bare repository lives on the sticky disk, and rewrites `https://github.com/` fetch URLs to it (global `url.insteadOf`). The cache starts with the complete history reachable from `GITHUB_SHA`, so deeper shallow checkouts work without downloading every ref. GitHub still supplies the live ref advertisement. When the workflow repository requests additional branch or tag tips, including with `fetch-depth: 0`, the proxy adds those objects under its private scoped namespace and serves the checkout locally. Secondary repositories and exact SHAs unavailable from current branch or tag tips go upstream unchanged.
+
+Use `git-full` when the workflow must discover or checkout arbitrary refs, or when it repeatedly checks out secondary repositories. This mode preserves full mirror behavior: every requested github.com repository and all of its refs are cached. Its cold download and disk usage can be much larger.
 
 Unlike other modes, the `git` mode must run **before** `actions/checkout`:
 
@@ -459,7 +462,7 @@ second invocation does not calculate or print the job cost again.
 
 Notes and limitations:
 
-* Mirror syncs authenticate with the `token` input (default: `${{ github.token }}`). Checking out **other private repositories** requires passing a PAT with access to them, since the rewritten URLs no longer match the credentials configured by `actions/checkout`.
+* Mirror syncs authenticate with the `token` input (default: `${{ github.token }}`). In both Git modes, checking out **other private repositories** requires passing a PAT with access to them, since the rewritten URLs no longer match the credentials configured by `actions/checkout`.
 * `git push` is pinned to upstream (`pushInsteadOf`) and never goes through the proxy; Git LFS and anything else the proxy cannot serve is transparently forwarded to github.com. If mirroring fails for any reason, fetches fall back to upstream — the mode never breaks a build.
 * SSH remotes (`git@github.com:`) are not rewritten, and container jobs (`container:`) are not accelerated (the proxy listens on the host's loopback). GitHub Enterprise Server is not supported. Linux only.
 

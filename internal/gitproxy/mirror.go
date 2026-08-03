@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -34,6 +35,11 @@ const (
 	StatusHit   Status = "mirror-hit"   // served from an existing fresh mirror
 	StatusClone Status = "mirror-clone" // had to clone a new mirror
 	StatusSync  Status = "mirror-sync"  // had to sync a stale mirror
+
+	scopedMirrorRef       = "refs/heads/runs-on/current"
+	scopedExpandedRefBase = "refs/runs-on/upstream/"
+	scopedPruneMarker     = ".runs-on-prune-required"
+	maintenanceWorkers    = 2
 
 	// canonicalMirrorConfig is the complete local configuration for every
 	// cached mirror. Restored mirrors are runner-writable state, so their
@@ -56,13 +62,13 @@ type Mirror struct {
 	root       string
 	staleAfter time.Duration
 	log        *slog.Logger
-	ctx        context.Context
-	cancel     context.CancelFunc
 
 	group      singleflight.Group
-	maintGroup singleflight.Group
+	mutations  sync.Map // map[repoKey]*sync.Mutex; serializes fetch, prune, and recovery
 	maintMu    sync.Mutex
-	maintWG    sync.WaitGroup
+	pending    map[string]struct{}
+	maintain   func(string)
+	prune      func(context.Context, string) error
 	closed     bool
 	lastSync   sync.Map // map[repoKey]time.Time
 	validated  sync.Map // map[repoKey]bool; persisted repo was canonicalized and fscked this job
@@ -81,8 +87,15 @@ func NewMirror(root string, staleAfter time.Duration, log *slog.Logger) (*Mirror
 	if err := requireRealDirectory(root); err != nil {
 		return nil, fmt.Errorf("validate mirror root: %w", err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	return &Mirror{root: root, staleAfter: staleAfter, log: log, ctx: ctx, cancel: cancel}, nil
+	mirror := &Mirror{
+		root:       root,
+		staleAfter: staleAfter,
+		log:        log,
+		pending:    make(map[string]struct{}),
+	}
+	mirror.maintain = mirror.optimizeRepo
+	mirror.prune = pruneScopedRepo
+	return mirror, nil
 }
 
 // RepoPath returns the filesystem path for a repo mirror.
@@ -93,10 +106,12 @@ func (m *Mirror) RepoPath(host, owner, repo string) string {
 // EnsureRepo ensures the mirror exists and is fresh enough to serve.
 // authHeader is the Authorization header value from the client request (can
 // be empty). Returns the path to the bare repo and what had to be done.
-func (m *Mirror) EnsureRepo(ctx context.Context, host, owner, repo, upstreamURL, authHeader string) (string, Status, error) {
+func (m *Mirror) EnsureRepo(ctx context.Context, host, owner, repo, upstreamURL, authHeader, ref string) (string, Status, error) {
 	start := time.Now()
 	repoPath := m.RepoPath(host, owner, repo)
 	key := fmt.Sprintf("%s/%s/%s", host, owner, repo)
+	unlock := m.lockRepoMutation(key)
+	defer unlock()
 
 	// Clone goes through singleflight so a concurrent request never sees a
 	// half-created directory: it waits for the in-flight clone instead.
@@ -126,6 +141,17 @@ func (m *Mirror) EnsureRepo(ctx context.Context, host, owner, repo, upstreamURL,
 					return StatusClone, fmt.Errorf("remove unusable mirror: %w", err)
 				}
 				statErr = os.ErrNotExist
+			} else if ref != "" && !isScopedMirror(ctx, repoPath) {
+				// A mirror restored from the previous all-ref policy, or populated
+				// by git-full, retains both its refs and their packed objects. Rebuild
+				// it instead of trying to subtract an open-ended set of refs and
+				// unreachable objects from persisted state.
+				m.log.Info("recreating full mirror for scoped policy", "repo", key, "path", repoPath)
+				m.validated.Delete(key)
+				if err := os.RemoveAll(repoPath); err != nil {
+					return StatusClone, fmt.Errorf("remove full mirror before scoped clone: %w", err)
+				}
+				statErr = os.ErrNotExist
 			}
 		}
 		if statErr == nil {
@@ -136,7 +162,7 @@ func (m *Mirror) EnsureRepo(ctx context.Context, host, owner, repo, upstreamURL,
 			return StatusHit, fmt.Errorf("inspect mirror: %w", statErr)
 		}
 		if os.IsNotExist(statErr) {
-			if err := m.cloneRepo(ctx, repoPath, upstreamURL, authHeader); err != nil {
+			if err := m.cloneRepo(ctx, repoPath, upstreamURL, authHeader, ref); err != nil {
 				// cloneRepo can fail after creating a usable bare repository
 				// (for example during upload-pack configuration). Keep every
 				// protocol-v2 follow-up upstream until a later setup succeeds.
@@ -174,7 +200,7 @@ func (m *Mirror) EnsureRepo(ctx context.Context, host, owner, repo, upstreamURL,
 					return nil, err
 				}
 			}
-			if err := m.syncRepo(ctx, repoPath, upstreamURL, authHeader); err != nil {
+			if err := m.syncRepo(ctx, repoPath, upstreamURL, authHeader, ref); err != nil {
 				return nil, err
 			}
 			m.markAuthorized(key, repoPath, authHeader)
@@ -198,7 +224,7 @@ func (m *Mirror) EnsureRepo(ctx context.Context, host, owner, repo, upstreamURL,
 		if err := m.authorizeRepo(ctx, key, repoPath, upstreamURL, authHeader); err != nil {
 			return "", "", fmt.Errorf("authentication required: %w", err)
 		}
-		m.scheduleOptimize(repoPath, false)
+		m.scheduleOptimize(repoPath)
 		m.log.Info("mirror synced", "repo", key, "duration_ms", time.Since(start).Milliseconds())
 		return repoPath, StatusSync, nil
 	}
@@ -218,20 +244,103 @@ func (m *Mirror) SyncFailed(host, owner, repo string) bool {
 	return failed
 }
 
+// ExpandScopedRepo caches the workflow repository's current branch and tag
+// tips under a private ref namespace. It is used only when a checkout asks
+// for objects outside the workflow commit history, such as fetch-depth: 0.
+// Keeping these refs outside refs/heads and refs/tags distinguishes an
+// expanded scoped mirror from a git-full mirror restored on the same disk.
+func (m *Mirror) ExpandScopedRepo(ctx context.Context, host, owner, repo, upstreamURL, authHeader string) error {
+	key := fmt.Sprintf("%s/%s/%s", host, owner, repo)
+	repoPath := m.RepoPath(host, owner, repo)
+	unlock := m.lockRepoMutation(key)
+	defer unlock()
+	_, err, _ := m.group.Do("expand:"+key, func() (interface{}, error) {
+		if err := m.prepareRepoForServe(ctx, key, repoPath); err != nil {
+			return nil, err
+		}
+		if !isScopedMirror(ctx, repoPath) {
+			return nil, fmt.Errorf("repository is not a scoped mirror")
+		}
+		if err := m.authorizeRepo(ctx, key, repoPath, upstreamURL, authHeader); err != nil {
+			return nil, err
+		}
+		before := expandedRefs(ctx, repoPath)
+		pendingPrune := scopedPruneRequired(repoPath)
+		marked := pendingPrune || len(before) > 0
+		if !pendingPrune && marked {
+			if err := markScopedPruneRequired(repoPath); err != nil {
+				return nil, err
+			}
+		}
+		if output, err := fetchExpandedScopedRefs(ctx, repoPath, upstreamURL, authHeader); err != nil {
+			return nil, fmt.Errorf("fetch expanded scoped refs: %w\noutput: %s", err, output)
+		}
+		if pendingPrune || expandedRefsRemovedOrRetargeted(before, expandedRefs(ctx, repoPath)) {
+			if err := m.prune(ctx, repoPath); err != nil {
+				return nil, err
+			}
+		}
+		if marked {
+			if err := clearScopedPruneRequired(repoPath); err != nil {
+				return nil, err
+			}
+		}
+		m.markAuthorized(key, repoPath, authHeader)
+		m.scheduleOptimize(repoPath)
+		return nil, nil
+	})
+	return err
+}
+
+// WantsAreAdvertisedTips reports whether every missing want is a current
+// branch or tag tip (including a peeled annotated-tag target). Arbitrary exact
+// SHAs must bypass scoped expansion; fetching all refs cannot make them local
+// and would recreate the cold-transfer problem before the request falls back.
+func (m *Mirror) WantsAreAdvertisedTips(ctx context.Context, upstreamURL, authHeader string, wants []string) bool {
+	cmd := exec.CommandContext(ctx, "git", "ls-remote", "--heads", "--tags", "--", upstreamURL)
+	cmd.Env = gitEnv(authHeader)
+	out, err := cmd.Output()
+	if err != nil {
+		return false
+	}
+	tips := make(map[string]struct{})
+	for _, line := range strings.Split(string(out), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 2 {
+			tips[fields[0]] = struct{}{}
+		}
+	}
+	for _, want := range wants {
+		if _, ok := tips[want]; !ok {
+			return false
+		}
+	}
+	return len(wants) > 0
+}
+
 // PrepareForServe canonicalizes and validates a persisted mirror before any local
 // upload-pack CGI can read it. The expensive connectivity fsck runs once per
 // repository per proxy process, not once per protocol-v2 POST.
 func (m *Mirror) PrepareForServe(ctx context.Context, host, owner, repo string) error {
 	key := fmt.Sprintf("%s/%s/%s", host, owner, repo)
+	unlock := m.lockRepoMutation(key)
+	defer unlock()
 	return m.prepareRepoForServe(ctx, key, m.RepoPath(host, owner, repo))
 }
 
+func (m *Mirror) lockRepoMutation(key string) func() {
+	value, _ := m.mutations.LoadOrStore(key, &sync.Mutex{})
+	mu := value.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
+}
+
 func (m *Mirror) prepareRepoForServe(ctx context.Context, key, repoPath string) error {
-	if _, ok := m.validated.Load(key); ok {
+	if _, ok := m.validated.Load(key); ok && !scopedPruneRequired(repoPath) {
 		return nil
 	}
 	_, err, _ := m.group.Do("validate:"+key, func() (interface{}, error) {
-		if _, ok := m.validated.Load(key); ok {
+		if _, ok := m.validated.Load(key); ok && !scopedPruneRequired(repoPath) {
 			return nil, nil
 		}
 		// Direct protocol-v2 POSTs reach this path without EnsureRepo, so the
@@ -252,6 +361,14 @@ func (m *Mirror) prepareRepoForServe(ctx context.Context, key, repoPath string) 
 		}
 		if !isUsableCanonicalRepo(ctx, repoPath) {
 			return nil, fmt.Errorf("mirror is not a usable bare repository")
+		}
+		if scopedPruneRequired(repoPath) {
+			if err := m.prune(ctx, repoPath); err != nil {
+				return nil, err
+			}
+			if err := clearScopedPruneRequired(repoPath); err != nil {
+				return nil, err
+			}
 		}
 		m.validated.Store(key, true)
 		return nil, nil
@@ -313,30 +430,34 @@ func (m *Mirror) validateAuth(ctx context.Context, upstreamURL, authHeader strin
 }
 
 // cloneRepo creates a new bare mirror.
-func (m *Mirror) cloneRepo(ctx context.Context, repoPath, upstreamURL, authHeader string) error {
+func (m *Mirror) cloneRepo(ctx context.Context, repoPath, upstreamURL, authHeader, ref string) error {
 	m.log.Info("cloning mirror", "path", repoPath, "hasAuth", authHeader != "")
 	if err := ensureRealSubdirectories(m.root, filepath.Dir(repoPath)); err != nil {
 		return fmt.Errorf("create parent dir: %w", err)
 	}
 
-	// Disable GC and delta recompression during clone to reduce CPU/memory
-	// pressure: the received pack is stored as-is, optimizeRepo repacks later.
-	args := []string{
-		"-c", "gc.auto=0",
-		"-c", "core.compression=0",
-		"-c", "pack.window=0",
-		"-c", "pack.depth=0",
-		"-c", "pack.deltaCacheSize=1",
-		"-c", "pack.threads=1",
-		"clone", "--mirror", "--", upstreamURL, repoPath,
+	var output []byte
+	var err error
+	if ref == "" {
+		cmd := exec.CommandContext(ctx, "git", "-c", "gc.auto=0", "clone", "--mirror", "--", upstreamURL, repoPath)
+		cmd.Env = gitEnv(authHeader)
+		output, err = cmd.CombinedOutput()
+	} else {
+		cmd := exec.CommandContext(ctx, "git", "init", "--bare", "--", repoPath)
+		cmd.Env = gitEnv("")
+		output, err = cmd.CombinedOutput()
+		if err == nil {
+			err = replaceMirrorConfig(repoPath)
+		}
+		if err == nil {
+			output, err = fetchScopedRepo(ctx, repoPath, upstreamURL, authHeader, ref)
+		}
 	}
-	cmd := exec.CommandContext(ctx, "git", args...)
-	cmd.Env = gitEnv(authHeader)
-	if output, err := cmd.CombinedOutput(); err != nil {
+	if err != nil {
 		// git may leave a partial directory behind; remove it so the next
 		// attempt does not mistake it for a valid mirror.
 		os.RemoveAll(repoPath)
-		return fmt.Errorf("git clone failed: %w\noutput: %s", err, output)
+		return fmt.Errorf("create mirror failed: %w\noutput: %s", err, output)
 	}
 
 	// Mark authenticated mirrors before any fallible post-clone setup. If
@@ -351,7 +472,7 @@ func (m *Mirror) cloneRepo(ctx context.Context, repoPath, upstreamURL, authHeade
 		return err
 	}
 
-	m.scheduleOptimize(repoPath, true)
+	m.scheduleOptimize(repoPath)
 	return nil
 }
 
@@ -371,16 +492,44 @@ func markPrivateMirror(repoPath string) error {
 }
 
 // syncRepo fetches updates from upstream.
-func (m *Mirror) syncRepo(ctx context.Context, repoPath, upstreamURL, authHeader string) error {
+func (m *Mirror) syncRepo(ctx context.Context, repoPath, upstreamURL, authHeader, ref string) error {
 	start := time.Now()
+	if ref != "" {
+		oldRef := resolveObject(ctx, repoPath, scopedMirrorRef)
+		beforeExpanded := expandedRefs(ctx, repoPath)
+		pendingPrune := scopedPruneRequired(repoPath)
+		if !pendingPrune {
+			if err := markScopedPruneRequired(repoPath); err != nil {
+				return err
+			}
+		}
+		output, err := fetchScopedRepo(ctx, repoPath, upstreamURL, authHeader, ref)
+		if err != nil {
+			return fmt.Errorf("git fetch failed: %w\noutput: %s", err, output)
+		}
+		if len(beforeExpanded) > 0 {
+			output, err = fetchExpandedScopedRefs(ctx, repoPath, upstreamURL, authHeader)
+			if err != nil {
+				return fmt.Errorf("git fetch expanded refs failed: %w\noutput: %s", err, output)
+			}
+		}
+		newRef := resolveObject(ctx, repoPath, scopedMirrorRef)
+		forceUpdated := oldRef != "" && oldRef != newRef && !isAncestor(ctx, repoPath, oldRef, newRef)
+		expandedChanged := expandedRefsRemovedOrRetargeted(beforeExpanded, expandedRefs(ctx, repoPath))
+		if pendingPrune || forceUpdated || expandedChanged {
+			if err := m.prune(ctx, repoPath); err != nil {
+				return err
+			}
+		}
+		if err := clearScopedPruneRequired(repoPath); err != nil {
+			return err
+		}
+		m.log.Debug("sync complete", "path", repoPath, "duration_ms", time.Since(start).Milliseconds())
+		return nil
+	}
 	args := []string{
 		"-C", repoPath,
 		"-c", "gc.auto=0",
-		"-c", "core.compression=0",
-		"-c", "pack.window=0",
-		"-c", "pack.depth=0",
-		"-c", "pack.deltaCacheSize=1",
-		"-c", "pack.threads=1",
 		// The bare repository is persisted runner-writable state. A previous
 		// job can place executable hooks in its default hooks directory even
 		// after unsafe config keys are removed.
@@ -397,6 +546,149 @@ func (m *Mirror) syncRepo(ctx context.Context, repoPath, upstreamURL, authHeader
 	}
 	m.log.Debug("sync complete", "path", repoPath, "duration_ms", time.Since(start).Milliseconds())
 	return nil
+}
+
+func fetchScopedRepo(ctx context.Context, repoPath, upstreamURL, authHeader, ref string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, "git",
+		"-C", repoPath,
+		"-c", "gc.auto=0",
+		"-c", "core.hooksPath=/dev/null",
+		"fetch", "--no-tags", "--force", "--", upstreamURL, "+"+ref+":"+scopedMirrorRef,
+	)
+	cmd.Env = gitEnv(authHeader)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return output, err
+	}
+	cmd = exec.CommandContext(ctx, "git", "-c", "core.hooksPath=/dev/null", "--git-dir", repoPath, "symbolic-ref", "HEAD", scopedMirrorRef)
+	cmd.Env = gitEnv("")
+	if headOutput, headErr := cmd.CombinedOutput(); headErr != nil {
+		return append(output, headOutput...), headErr
+	}
+	return output, nil
+}
+
+func fetchExpandedScopedRefs(ctx context.Context, repoPath, upstreamURL, authHeader string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, "git",
+		"-C", repoPath,
+		"-c", "gc.auto=0",
+		"-c", "core.hooksPath=/dev/null",
+		"fetch", "--no-tags", "--prune", "--force", "--", upstreamURL,
+		"+refs/heads/*:"+scopedExpandedRefBase+"heads/*",
+		"+refs/tags/*:"+scopedExpandedRefBase+"tags/*",
+	)
+	cmd.Env = gitEnv(authHeader)
+	return cmd.CombinedOutput()
+}
+
+func resolveObject(ctx context.Context, repoPath, ref string) string {
+	cmd := exec.CommandContext(ctx, "git", "-c", "core.hooksPath=/dev/null", "--git-dir", repoPath, "rev-parse", "--verify", ref+"^{object}")
+	cmd.Env = gitEnv("")
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func isAncestor(ctx context.Context, repoPath, ancestor, descendant string) bool {
+	cmd := exec.CommandContext(ctx, "git", "-c", "core.hooksPath=/dev/null", "--git-dir", repoPath, "merge-base", "--is-ancestor", ancestor, descendant)
+	cmd.Env = gitEnv("")
+	return cmd.Run() == nil
+}
+
+func expandedRefs(ctx context.Context, repoPath string) map[string]string {
+	cmd := exec.CommandContext(ctx, "git", "-c", "core.hooksPath=/dev/null", "--git-dir", repoPath, "for-each-ref", "--format=%(refname) %(objectname)", scopedExpandedRefBase)
+	cmd.Env = gitEnv("")
+	out, err := cmd.Output()
+	if err != nil {
+		return nil
+	}
+	refs := make(map[string]string)
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 2 {
+			refs[fields[0]] = fields[1]
+		}
+	}
+	return refs
+}
+
+func expandedRefsRemovedOrRetargeted(before, after map[string]string) bool {
+	for ref, oid := range before {
+		if after[ref] != oid {
+			return true
+		}
+	}
+	return false
+}
+
+func scopedPruneRequired(repoPath string) bool {
+	_, err := os.Lstat(filepath.Join(repoPath, scopedPruneMarker))
+	return err == nil
+}
+
+func markScopedPruneRequired(repoPath string) error {
+	if err := writeMarkerFresh(filepath.Join(repoPath, scopedPruneMarker), []byte("1"), 0o644); err != nil {
+		return fmt.Errorf("mark scoped mirror for pruning: %w", err)
+	}
+	return nil
+}
+
+func clearScopedPruneRequired(repoPath string) error {
+	if err := os.Remove(filepath.Join(repoPath, scopedPruneMarker)); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("clear scoped mirror prune marker: %w", err)
+	}
+	return nil
+}
+
+// pruneScopedRepo removes packed histories no longer reachable from the
+// workflow ref or the latest expanded branch/tag tips. This runs before the
+// mirror can serve another request, so an orphaned exact SHA cannot leak from
+// a prior force-push and disk usage cannot grow without a live scoped ref.
+func pruneScopedRepo(ctx context.Context, repoPath string) error {
+	for _, args := range [][]string{
+		{"-C", repoPath, "repack", "-a", "-d"},
+		{"-C", repoPath, "prune", "--expire=now"},
+	} {
+		cmd := exec.CommandContext(ctx, "git", args...)
+		cmd.Env = gitEnv("")
+		if output, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("git %s failed: %w\noutput: %s", strings.Join(args[2:], " "), err, output)
+		}
+	}
+	return nil
+}
+
+// isScopedMirror reports whether every persisted ref belongs to the scoped
+// policy. Expanded fetch-depth: 0 refs live below refs/runs-on/upstream;
+// ordinary refs/heads or refs/tags identify an incompatible full mirror.
+func isScopedMirror(ctx context.Context, repoPath string) bool {
+	head := exec.CommandContext(ctx, "git", "-c", "core.hooksPath=/dev/null", "--git-dir", repoPath, "symbolic-ref", "HEAD")
+	head.Env = gitEnv("")
+	headOut, err := head.Output()
+	if err != nil || strings.TrimSpace(string(headOut)) != scopedMirrorRef {
+		return false
+	}
+	cmd := exec.CommandContext(ctx, "git", "-c", "core.hooksPath=/dev/null", "--git-dir", repoPath, "for-each-ref", "--format=%(refname)")
+	cmd.Env = gitEnv("")
+	out, err := cmd.Output()
+	if err != nil {
+		return false
+	}
+	refs := strings.Fields(string(out))
+	foundCurrent := false
+	for _, ref := range refs {
+		if ref == scopedMirrorRef {
+			foundCurrent = true
+			continue
+		}
+		if !strings.HasPrefix(ref, scopedExpandedRefBase+"heads/") &&
+			!strings.HasPrefix(ref, scopedExpandedRefBase+"tags/") {
+			return false
+		}
+	}
+	return foundCurrent
 }
 
 // replaceMirrorConfig atomically replaces attacker-controlled persisted config
@@ -466,7 +758,9 @@ func syncMirrorHEAD(ctx context.Context, repoPath, upstreamURL, authHeader strin
 	if !strings.HasPrefix(headRef, "refs/heads/") {
 		return fmt.Errorf("resolve upstream HEAD: no branch symref in output")
 	}
-	if out, err := exec.CommandContext(ctx, "git", "-c", "core.hooksPath=/dev/null", "--git-dir", repoPath, "symbolic-ref", "HEAD", headRef).CombinedOutput(); err != nil {
+	cmd = exec.CommandContext(ctx, "git", "-c", "core.hooksPath=/dev/null", "--git-dir", repoPath, "symbolic-ref", "HEAD", headRef)
+	cmd.Env = gitEnv("")
+	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("update mirror HEAD to %s: %w\noutput: %s", headRef, err, out)
 	}
 	return nil
@@ -501,6 +795,13 @@ func IsUsableRepo(ctx context.Context, root, repoPath string) bool {
 		return false
 	}
 	return isUsableCanonicalRepo(ctx, repoPath)
+}
+
+// IsScopedUsableRepo additionally requires the persisted ref namespace to be
+// compatible with scoped mode. A restored git-full mirror is usable Git data,
+// but scoped mode must report it as a miss because it will be rebuilt.
+func IsScopedUsableRepo(ctx context.Context, root, repoPath string) bool {
+	return IsUsableRepo(ctx, root, repoPath) && isScopedMirror(ctx, repoPath)
 }
 
 // isUsableCanonicalRepo requires that the caller already passed repoPath
@@ -627,64 +928,80 @@ func requireRealDirectory(path string) error {
 	return nil
 }
 
-// optimizeRepo runs maintenance tasks: bitmaps and commit-graphs make
-// upload-pack on warm jobs fast for large repos, and persist in the snapshot.
-// If full is true (after clone), repack with bitmap; otherwise (after sync)
-// only midx+commit-graph.
-func (m *Mirror) optimizeRepo(ctx context.Context, repoPath string, full bool) {
+// optimizeRepo runs maintenance after the proxy has stopped serving fetches.
+// Packing loose objects plus bitmaps and commit-graphs keeps warm upload-pack
+// fast without rewriting an existing pack.
+func (m *Mirror) optimizeRepo(repoPath string) {
+	ctx := context.Background()
 	// Avoid lock contention if another git process is writing commit-graph.
 	if _, err := os.Stat(filepath.Join(repoPath, "objects", "info", "commit-graph.lock")); err == nil {
 		return
 	}
-	if full {
-		// Keep unreachable objects in the new pack: actions/checkout commonly
-		// fetches the event's exact SHA, which can become orphaned by a
-		// force-push while background maintenance is running.
-		cmd := exec.CommandContext(ctx, "git", "-C", repoPath, "repack", "-A", "-d", "-b", "--write-bitmap-index")
-		if output, err := cmd.CombinedOutput(); err != nil {
-			m.log.Warn("git repack failed", "path", repoPath, "err", err, "output", string(output))
-		}
+	cmd := exec.CommandContext(ctx, "git", "-C", repoPath, "repack", "-d")
+	cmd.Env = gitEnv("")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		m.log.Warn("git repack failed", "path", repoPath, "err", err, "output", string(output))
 	}
-	cmd := exec.CommandContext(ctx, "git", "-C", repoPath, "commit-graph", "write", "--reachable")
+	cmd = exec.CommandContext(ctx, "git", "-C", repoPath, "commit-graph", "write", "--reachable")
+	cmd.Env = gitEnv("")
 	if output, err := cmd.CombinedOutput(); err != nil {
 		m.log.Warn("git commit-graph write failed", "path", repoPath, "err", err, "output", string(output))
 	}
 	cmd = exec.CommandContext(ctx, "git", "-C", repoPath, "multi-pack-index", "write", "--bitmap")
+	cmd.Env = gitEnv("")
 	if output, err := cmd.CombinedOutput(); err != nil {
 		m.log.Warn("git multi-pack-index write failed", "path", repoPath, "err", err, "output", string(output))
 	}
 }
 
-// scheduleOptimize runs optimizeRepo in the background with a per-repo
-// singleflight to avoid concurrent maintenance.
-func (m *Mirror) scheduleOptimize(repoPath string, full bool) {
+// scheduleOptimize records maintenance for shutdown, after active checkouts
+// have finished using the runner's CPU and disk.
+func (m *Mirror) scheduleOptimize(repoPath string) {
+	m.maintMu.Lock()
+	defer m.maintMu.Unlock()
+	if m.closed {
+		return
+	}
+	m.pending[repoPath] = struct{}{}
+}
+
+// Close runs queued maintenance with bounded concurrency after HTTP shutdown
+// and returns only when no git child can keep writing to the sticky disk.
+// Multiple full mirrors therefore do not put their cumulative maintenance
+// time on one serial post-step path.
+func (m *Mirror) Close() {
 	m.maintMu.Lock()
 	if m.closed {
 		m.maintMu.Unlock()
 		return
 	}
-	m.maintWG.Add(1)
-	m.maintMu.Unlock()
-
-	go func() {
-		defer m.maintWG.Done()
-		m.maintGroup.Do(repoPath, func() (interface{}, error) {
-			m.optimizeRepo(m.ctx, repoPath, full)
-			return nil, nil
-		})
-	}()
-}
-
-// Close cancels and joins background repository maintenance so no git child
-// can keep writing to the sticky disk after the proxy exits for snapshotting.
-func (m *Mirror) Close() {
-	m.maintMu.Lock()
-	if !m.closed {
-		m.closed = true
-		m.cancel()
+	m.closed = true
+	paths := make([]string, 0, len(m.pending))
+	for repoPath := range m.pending {
+		paths = append(paths, repoPath)
 	}
 	m.maintMu.Unlock()
-	m.maintWG.Wait()
+	sort.Strings(paths)
+	workers := min(maintenanceWorkers, len(paths))
+	if workers == 0 {
+		return
+	}
+	jobs := make(chan string)
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	for range workers {
+		go func() {
+			defer wg.Done()
+			for repoPath := range jobs {
+				m.maintain(repoPath)
+			}
+		}()
+	}
+	for _, repoPath := range paths {
+		jobs <- repoPath
+	}
+	close(jobs)
+	wg.Wait()
 }
 
 // gitEnv returns the environment for git commands talking to upstream. The

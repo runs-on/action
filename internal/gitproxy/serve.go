@@ -26,6 +26,9 @@ const (
 	// Authorization headers; like the health token it travels through
 	// GITHUB_ENV between steps.
 	EnvClientToken = "RUNS_ON_GIT_PROXY_CLIENT_TOKEN"
+	EnvRepository  = "RUNS_ON_GIT_PROXY_REPOSITORY"
+	EnvRef         = "RUNS_ON_GIT_PROXY_REF"
+	EnvAllRefs     = "RUNS_ON_GIT_PROXY_ALL_REFS"
 	EnvDebug       = "RUNS_ON_GIT_PROXY_DEBUG"
 )
 
@@ -91,6 +94,9 @@ func runFromEnv(ctx context.Context) error {
 		// process for this process's whole lifetime, while stdin is consumed
 		// once here and never observable again.
 		UpstreamToken: readTokenFrom(os.Stdin),
+		Repository:    os.Getenv(EnvRepository),
+		Ref:           os.Getenv(EnvRef),
+		AllRefs:       os.Getenv(EnvAllRefs) == "true",
 		Logger:        log,
 	})
 	if err != nil {

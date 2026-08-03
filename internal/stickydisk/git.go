@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -25,6 +26,11 @@ const (
 	gitProxyStartWait = 10 * time.Second
 	gitProxyStopWait  = 12 * time.Second
 	gitProxyKillWait  = 2 * time.Second
+
+	gitProxyPIDStateKey       = "runs_on_git_proxy_pid"
+	gitProxyPIDStateEnv       = "STATE_" + gitProxyPIDStateKey
+	gitProxyMirrorDirStateKey = "runs_on_git_proxy_mirror_dir"
+	gitProxyMirrorDirStateEnv = "STATE_" + gitProxyMirrorDirStateKey
 )
 
 func gitProxyStateFile() string {
@@ -122,6 +128,7 @@ func ensureGitProxy(action *githubactions.Action, mirrorDir string) (gitproxy.St
 	action.SetEnv(gitProxyUpstreamDigestEnv, upstreamDigest)
 	if state, err := gitproxy.ReadStateFile(gitProxyStateFile()); err == nil {
 		if sameUpstream && gitProxyHealthy(state.Port, healthToken) && gitProxyStateMatches(state, mirrorDir, owner) {
+			saveGitProxyPostState(action, state)
 			action.Infof("Reusing running git proxy on port %d", state.Port)
 			return state, clientToken, nil
 		}
@@ -173,6 +180,7 @@ func ensureGitProxy(action *githubactions.Action, mirrorDir string) (gitproxy.St
 	if err := cmd.Start(); err != nil {
 		return gitproxy.State{}, "", fmt.Errorf("failed to start git proxy: %w", err)
 	}
+	saveGitProxyPostState(action, gitproxy.State{PID: cmd.Process.Pid, MirrorDir: mirrorDir})
 	// The proxy must outlive this step: it serves fetches for the whole job
 	// and is stopped by the post step.
 	if err := cmd.Process.Release(); err != nil {
@@ -477,18 +485,65 @@ func shouldRestoreGitProxyRewrites(state gitproxy.State, owner string, healthy b
 	return state.Owner != owner || !healthy
 }
 
+func saveGitProxyPostState(action *githubactions.Action, state gitproxy.State) {
+	action.SaveState(gitProxyPIDStateKey, strconv.Itoa(state.PID))
+	action.SaveState(gitProxyMirrorDirStateKey, state.MirrorDir)
+}
+
+func loadGitProxyPostState() (gitproxy.State, bool, error) {
+	pidValue := strings.TrimSpace(os.Getenv(gitProxyPIDStateEnv))
+	mirrorDir := strings.TrimSpace(os.Getenv(gitProxyMirrorDirStateEnv))
+	if pidValue == "" && mirrorDir == "" {
+		return gitproxy.State{}, false, nil
+	}
+	if pidValue == "" || mirrorDir == "" {
+		return gitproxy.State{}, false, fmt.Errorf("incomplete saved Git proxy state")
+	}
+	pid, err := strconv.Atoi(pidValue)
+	if err != nil || pid <= 0 {
+		return gitproxy.State{}, false, fmt.Errorf("invalid saved Git proxy PID %q", pidValue)
+	}
+	return gitproxy.State{PID: pid, MirrorDir: mirrorDir}, true, nil
+}
+
 // stopGit removes the URL rewrites then stops the proxy, in that order: git
 // config must never point at a dead proxy. Runs in the post step, before the
 // runner's job-completed hook unmounts and snapshots the sticky disk.
 func stopGit(action *githubactions.Action) error {
+	var stoppedState gitproxy.State
 	err := restoreRewritesThenStop(restoreGitProxyRewrites, func() error {
-		if state, err := gitproxy.ReadStateFile(gitProxyStateFile()); err == nil {
-			return terminateGitProxy(action, state.PID)
+		state, found, err := loadGitProxyPostState()
+		if err != nil {
+			return err
 		}
+		if !found {
+			return nil
+		}
+		if err := terminateGitProxy(action, state.PID); err != nil {
+			return err
+		}
+		stoppedState = state
 		return nil
 	})
 	if err != nil {
 		return fmt.Errorf("git cache mode cleanup: %w", err)
+	}
+	if stoppedState.MirrorDir != "" {
+		mountRoot := os.Getenv("RUNS_ON_STICKYDISK_DIR")
+		if err := validateStickyMount(mountRoot); err != nil {
+			return fmt.Errorf("git cache mode cleanup: validate sticky disk: %w", err)
+		}
+		mirrorDir := gitMirrorDir(mountRoot)
+		if filepath.Clean(stoppedState.MirrorDir) != filepath.Clean(mirrorDir) {
+			return fmt.Errorf("git cache mode cleanup: proxy mirror root %s does not match sticky disk mirror root %s", stoppedState.MirrorDir, mirrorDir)
+		}
+		removed, err := gitproxy.CleanupInterruptedRepacks(mirrorDir)
+		if err != nil {
+			return fmt.Errorf("git cache mode cleanup: remove interrupted repack files: %w", err)
+		}
+		if removed > 0 {
+			action.Infof("Removed %d temporary Git pack file(s) left by interrupted repacks.", removed)
+		}
 	}
 
 	if os.Getenv("RUNNER_DEBUG") == "1" {

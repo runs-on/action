@@ -144,6 +144,197 @@ func TestMountedCacheTargetsFindsEarlierInvocation(t *testing.T) {
 	}
 }
 
+func TestMergeTargetIntoCacheReplacesDestinationSymlink(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "target")
+	src := filepath.Join(root, "src")
+	outside := filepath.Join(root, "outside")
+	for _, dir := range []string{target, src, outside} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(target, "shared"), []byte("current"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	outsideMarker := filepath.Join(outside, "must-not-be-written")
+	if err := os.WriteFile(outsideMarker, []byte("outside"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	redirect := filepath.Join(src, "shared")
+	if err := os.Symlink(outsideMarker, redirect); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	if err := mergeTargetIntoCache(githubactions.New(), target, src, false); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Lstat(redirect)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		t.Fatal("destination symlink survived the merge")
+	}
+	if got, err := os.ReadFile(redirect); err != nil || string(got) != "current" {
+		t.Fatalf("merged destination = %q, err = %v", got, err)
+	}
+	if got, err := os.ReadFile(outsideMarker); err != nil || string(got) != "outside" {
+		t.Fatalf("external marker = %q, err = %v", got, err)
+	}
+}
+
+func TestMergeTargetIntoCacheReplacesTypeConflicts(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		createTarget func(t *testing.T, path string)
+		createCache  func(t *testing.T, path, outside string)
+		checkResult  func(t *testing.T, path string)
+	}{
+		{
+			name: "file replaces directory",
+			createTarget: func(t *testing.T, path string) {
+				t.Helper()
+				if err := os.WriteFile(path, []byte("current"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			},
+			createCache: func(t *testing.T, path, _ string) {
+				t.Helper()
+				if err := os.MkdirAll(path, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(path, "cached"), []byte("cached"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			},
+			checkResult: func(t *testing.T, path string) {
+				t.Helper()
+				if got, err := os.ReadFile(path); err != nil || string(got) != "current" {
+					t.Fatalf("merged file = %q, err = %v", got, err)
+				}
+			},
+		},
+		{
+			name: "directory replaces symlink",
+			createTarget: func(t *testing.T, path string) {
+				t.Helper()
+				if err := os.MkdirAll(path, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(path, "current"), []byte("current"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			},
+			createCache: func(t *testing.T, path, outside string) {
+				t.Helper()
+				if err := os.Symlink(outside, path); err != nil {
+					t.Skipf("symlinks unavailable: %v", err)
+				}
+			},
+			checkResult: func(t *testing.T, path string) {
+				t.Helper()
+				info, err := os.Lstat(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !info.IsDir() {
+					t.Fatalf("merged destination mode = %v, want directory", info.Mode())
+				}
+				if got, err := os.ReadFile(filepath.Join(path, "current")); err != nil || string(got) != "current" {
+					t.Fatalf("merged directory file = %q, err = %v", got, err)
+				}
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			target := filepath.Join(root, "target")
+			src := filepath.Join(root, "src")
+			outside := filepath.Join(root, "outside")
+			for _, dir := range []string{target, src, outside} {
+				if err := os.MkdirAll(dir, 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			outsideMarker := filepath.Join(outside, "must-not-be-written")
+			if err := os.WriteFile(outsideMarker, []byte("outside"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			sharedTarget := filepath.Join(target, "shared")
+			sharedCache := filepath.Join(src, "shared")
+			test.createTarget(t, sharedTarget)
+			test.createCache(t, sharedCache, outside)
+
+			if err := mergeTargetIntoCache(githubactions.New(), target, src, false); err != nil {
+				t.Fatal(err)
+			}
+			test.checkResult(t, sharedCache)
+			if got, err := os.ReadFile(outsideMarker); err != nil || string(got) != "outside" {
+				t.Fatalf("external marker = %q, err = %v", got, err)
+			}
+		})
+	}
+}
+
+func TestMergeRootOwnedTargetRemovesConflictWithoutRunnerScan(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "target")
+	src := filepath.Join(root, "src")
+	outside := filepath.Join(root, "outside")
+	blocked := filepath.Join(target, "partial")
+	if err := os.MkdirAll(blocked, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(blocked, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(blocked, 0o700) })
+	if err := os.MkdirAll(outside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	outsideMarker := filepath.Join(outside, "must-not-be-written")
+	if err := os.WriteFile(outsideMarker, []byte("outside"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	redirect := filepath.Join(src, "partial")
+	if err := os.Symlink(outside, redirect); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "cp"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	find := `#!/bin/sh
+case "$1" in
+  */target) printf 'partial\0d\0' ;;
+  */src) printf 'partial\0l\0' ;;
+esac
+`
+	if err := os.WriteFile(filepath.Join(bin, "find"), []byte(find), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bin, "sudo"), []byte("#!/bin/sh\nexec \"$@\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	if err := mergeTargetIntoCache(githubactions.New(), target, src, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(redirect); !os.IsNotExist(err) {
+		t.Fatalf("root-owned destination conflict survived: %v", err)
+	}
+	if got, err := os.ReadFile(outsideMarker); err != nil || string(got) != "outside" {
+		t.Fatalf("external marker = %q, err = %v", got, err)
+	}
+}
+
 // A merge that dies partway (e.g. the disk filling) leaves a warm source with
 // truncated entries; it must be discarded rather than snapshotted as a hit.
 func TestCacheMountDiscardsWarmSourceAfterFailedMerge(t *testing.T) {

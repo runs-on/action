@@ -371,6 +371,26 @@ func TestUpstreamTokenDigest(t *testing.T) {
 	}
 }
 
+func TestCurrentGitProxyPolicy(t *testing.T) {
+	t.Setenv("GITHUB_REPOSITORY", "Runs-On/Action")
+	t.Setenv("GITHUB_SHA", strings.Repeat("a", 40))
+
+	policy, err := currentGitProxyPolicy(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if policy.allRefs || policy.repository != "runs-on/action" || policy.ref != strings.Repeat("a", 40) {
+		t.Fatalf("scoped policy = %#v", policy)
+	}
+	full, err := currentGitProxyPolicy(true)
+	if err != nil || !full.allRefs || full.repository != "" || full.ref != "" {
+		t.Fatalf("full policy = %#v, %v", full, err)
+	}
+	if policy.digest() == full.digest() {
+		t.Fatal("scoped and full policies share a digest")
+	}
+}
+
 // The long-lived proxy must not inherit credential-bearing variables: its
 // /proc/<pid>/environ is readable by any same-uid process for the whole job.
 func TestProxyChildEnvironStripsCredentials(t *testing.T) {

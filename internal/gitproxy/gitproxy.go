@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -45,7 +46,13 @@ type Options struct {
 	// UpstreamToken is the GitHub token (job token or PAT) used upstream when
 	// a request authenticates with ClientToken. Held only in this process.
 	UpstreamToken string
-	Logger        *slog.Logger
+	// Repository and Ref select the workflow repository history cached by the
+	// default mode. AllRefs opts into mirroring every requested repository and
+	// all of its refs.
+	Repository string
+	Ref        string
+	AllRefs    bool
+	Logger     *slog.Logger
 }
 
 // BasicAuthHeader returns the Authorization header value git sends for an
@@ -103,6 +110,16 @@ func NewServer(opts Options) (*Server, error) {
 	if len(opts.AllowedHosts) == 0 {
 		opts.AllowedHosts = []string{"github.com"}
 	}
+	if !opts.AllRefs {
+		parts := strings.Split(opts.Repository, "/")
+		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+			return nil, fmt.Errorf("repository must use owner/name")
+		}
+		if !validObjectID(opts.Ref) {
+			return nil, fmt.Errorf("ref must be a 40- or 64-character object ID")
+		}
+		opts.Repository = strings.ToLower(opts.Repository)
+	}
 	gitPath, err := exec.LookPath("git")
 	if err != nil {
 		return nil, fmt.Errorf("git not found in PATH: %w", err)
@@ -134,6 +151,25 @@ func NewServer(opts Options) (*Server, error) {
 			InheritEnv: []string{"PATH"},
 		},
 	}, nil
+}
+
+func validObjectID(value string) bool {
+	if len(value) != 40 && len(value) != 64 {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil
+}
+
+func (s *Server) shouldMirror(t target) bool {
+	return s.opts.AllRefs || (t.host == "github.com" && t.owner+"/"+t.repo == s.opts.Repository)
+}
+
+func (s *Server) mirrorRef() string {
+	if s.opts.AllRefs {
+		return ""
+	}
+	return s.opts.Ref
 }
 
 // Handler returns the proxy's HTTP handler.
@@ -244,8 +280,12 @@ func (s *Server) resolveTarget(r *http.Request) (target, error) {
 // client) then serves the ref advertisement locally. Every git fetch starts
 // with info/refs, so this is the once-per-job upstream sync point.
 func (s *Server) handleInfoRefs(w http.ResponseWriter, r *http.Request, t target) {
+	if !s.shouldMirror(t) {
+		s.forwardUpstream(w, r, t, r.Body, "outside-cache-scope")
+		return
+	}
 	upstreamURL := fmt.Sprintf("%s/%s/%s.git", s.upstreamBase(t.host), t.owner, t.repo)
-	repoPath, status, err := s.mirror.EnsureRepo(r.Context(), t.host, t.owner, t.repo, upstreamURL, s.upstreamAuth(r))
+	repoPath, status, err := s.mirror.EnsureRepo(r.Context(), t.host, t.owner, t.repo, upstreamURL, s.upstreamAuth(r), s.mirrorRef())
 	if err != nil {
 		// Never break a build because mirroring failed: forward the request
 		// upstream and let git talk to the real host. Subsequent
@@ -255,6 +295,13 @@ func (s *Server) handleInfoRefs(w http.ResponseWriter, r *http.Request, t target
 		return
 	}
 	s.log.Info("info/refs", "repo", t.repoKey(), "status", status, "path", repoPath)
+	if !s.opts.AllRefs {
+		// Keep branch and tag discovery exact without storing every advertised
+		// ref. Stateless upload-pack requests are still served locally when the
+		// requested objects are reachable from the cached workflow commit.
+		s.forwardUpstream(w, r, t, r.Body, "live-ref-advertisement")
+		return
+	}
 	w.Header().Set(statusHeader, string(status))
 	s.serveCGI(w, r, t.cgiPath("/info/refs"))
 }

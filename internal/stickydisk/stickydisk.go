@@ -424,13 +424,18 @@ func validateCacheOrdering(requests []CacheRequest, goos, home, workspace string
 	}
 
 	hasGit := false
+	gitModes := 0
 	for _, request := range requests {
 		if !request.Custom {
 			switch request.Mode.Name {
-			case "git":
+			case "git", "git-full":
 				hasGit = true
+				gitModes++
 			}
 		}
+	}
+	if gitModes > 1 {
+		return fmt.Errorf("git and git-full cache modes are mutually exclusive")
 	}
 	if !hasGit {
 		return nil
@@ -438,7 +443,7 @@ func validateCacheOrdering(requests []CacheRequest, goos, home, workspace string
 
 	var workspaceModes []string
 	for _, request := range requests {
-		if !request.Custom && request.Mode.Name == "git" {
+		if !request.Custom && (request.Mode.Name == "git" || request.Mode.Name == "git-full") {
 			continue
 		}
 		paths := request.Paths

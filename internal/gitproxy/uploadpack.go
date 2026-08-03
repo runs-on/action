@@ -21,6 +21,10 @@ var wantRe = regexp.MustCompile(`(?m)^want ([0-9a-f]{40,64})`)
 // force-push between the workflow event and now): those requests are
 // forwarded upstream so the fetch behaves exactly like a vanilla checkout.
 func (s *Server) handleUploadPack(w http.ResponseWriter, r *http.Request, t target) {
+	if !s.shouldMirror(t) {
+		s.forwardUpstream(w, r, t, r.Body, "outside-cache-scope")
+		return
+	}
 	repoPath := s.mirror.RepoPath(t.host, t.owner, t.repo)
 
 	body, overflow, err := bufferBody(r.Body, maxParseBody)
@@ -33,6 +37,14 @@ func (s *Server) handleUploadPack(w http.ResponseWriter, r *http.Request, t targ
 	restored := io.Reader(bytes.NewReader(body))
 	if overflow != nil {
 		restored = io.MultiReader(restored, overflow)
+	}
+	wants := parseWants(body, r.Header.Get("Content-Encoding"))
+	if !s.opts.AllRefs && len(wants) == 0 {
+		// Protocol v2 discovers refs through a want-less ls-refs POST. Use the
+		// upstream advertisement so refs outside the scoped mirror remain
+		// addressable by name.
+		s.forwardUpstream(w, r, t, restored, "live-ref-advertisement")
+		return
 	}
 
 	if s.mirror.SyncFailed(t.host, t.owner, t.repo) {
@@ -54,7 +66,7 @@ func (s *Server) handleUploadPack(w http.ResponseWriter, r *http.Request, t targ
 		return
 	}
 
-	for _, want := range parseWants(body, r.Header.Get("Content-Encoding")) {
+	for _, want := range wants {
 		if !s.mirror.HasObject(r.Context(), repoPath, want) {
 			s.log.Warn("want not in mirror, forwarding upstream", "repo", t.repoKey(), "want", want)
 			s.forwardUpstream(w, r, t, restored, "missing-want")

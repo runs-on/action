@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -34,6 +35,8 @@ const (
 	StatusHit   Status = "mirror-hit"   // served from an existing fresh mirror
 	StatusClone Status = "mirror-clone" // had to clone a new mirror
 	StatusSync  Status = "mirror-sync"  // had to sync a stale mirror
+
+	scopedMirrorRef = "refs/runs-on/current"
 
 	// canonicalMirrorConfig is the complete local configuration for every
 	// cached mirror. Restored mirrors are runner-writable state, so their
@@ -56,13 +59,11 @@ type Mirror struct {
 	root       string
 	staleAfter time.Duration
 	log        *slog.Logger
-	ctx        context.Context
-	cancel     context.CancelFunc
 
 	group      singleflight.Group
-	maintGroup singleflight.Group
 	maintMu    sync.Mutex
-	maintWG    sync.WaitGroup
+	pending    map[string]struct{}
+	maintain   func(string)
 	closed     bool
 	lastSync   sync.Map // map[repoKey]time.Time
 	validated  sync.Map // map[repoKey]bool; persisted repo was canonicalized and fscked this job
@@ -81,8 +82,14 @@ func NewMirror(root string, staleAfter time.Duration, log *slog.Logger) (*Mirror
 	if err := requireRealDirectory(root); err != nil {
 		return nil, fmt.Errorf("validate mirror root: %w", err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	return &Mirror{root: root, staleAfter: staleAfter, log: log, ctx: ctx, cancel: cancel}, nil
+	mirror := &Mirror{
+		root:       root,
+		staleAfter: staleAfter,
+		log:        log,
+		pending:    make(map[string]struct{}),
+	}
+	mirror.maintain = mirror.optimizeRepo
+	return mirror, nil
 }
 
 // RepoPath returns the filesystem path for a repo mirror.
@@ -93,7 +100,7 @@ func (m *Mirror) RepoPath(host, owner, repo string) string {
 // EnsureRepo ensures the mirror exists and is fresh enough to serve.
 // authHeader is the Authorization header value from the client request (can
 // be empty). Returns the path to the bare repo and what had to be done.
-func (m *Mirror) EnsureRepo(ctx context.Context, host, owner, repo, upstreamURL, authHeader string) (string, Status, error) {
+func (m *Mirror) EnsureRepo(ctx context.Context, host, owner, repo, upstreamURL, authHeader, ref string) (string, Status, error) {
 	start := time.Now()
 	repoPath := m.RepoPath(host, owner, repo)
 	key := fmt.Sprintf("%s/%s/%s", host, owner, repo)
@@ -136,7 +143,7 @@ func (m *Mirror) EnsureRepo(ctx context.Context, host, owner, repo, upstreamURL,
 			return StatusHit, fmt.Errorf("inspect mirror: %w", statErr)
 		}
 		if os.IsNotExist(statErr) {
-			if err := m.cloneRepo(ctx, repoPath, upstreamURL, authHeader); err != nil {
+			if err := m.cloneRepo(ctx, repoPath, upstreamURL, authHeader, ref); err != nil {
 				// cloneRepo can fail after creating a usable bare repository
 				// (for example during upload-pack configuration). Keep every
 				// protocol-v2 follow-up upstream until a later setup succeeds.
@@ -174,7 +181,7 @@ func (m *Mirror) EnsureRepo(ctx context.Context, host, owner, repo, upstreamURL,
 					return nil, err
 				}
 			}
-			if err := m.syncRepo(ctx, repoPath, upstreamURL, authHeader); err != nil {
+			if err := m.syncRepo(ctx, repoPath, upstreamURL, authHeader, ref); err != nil {
 				return nil, err
 			}
 			m.markAuthorized(key, repoPath, authHeader)
@@ -198,7 +205,7 @@ func (m *Mirror) EnsureRepo(ctx context.Context, host, owner, repo, upstreamURL,
 		if err := m.authorizeRepo(ctx, key, repoPath, upstreamURL, authHeader); err != nil {
 			return "", "", fmt.Errorf("authentication required: %w", err)
 		}
-		m.scheduleOptimize(repoPath, false)
+		m.scheduleOptimize(repoPath)
 		m.log.Info("mirror synced", "repo", key, "duration_ms", time.Since(start).Milliseconds())
 		return repoPath, StatusSync, nil
 	}
@@ -313,30 +320,34 @@ func (m *Mirror) validateAuth(ctx context.Context, upstreamURL, authHeader strin
 }
 
 // cloneRepo creates a new bare mirror.
-func (m *Mirror) cloneRepo(ctx context.Context, repoPath, upstreamURL, authHeader string) error {
+func (m *Mirror) cloneRepo(ctx context.Context, repoPath, upstreamURL, authHeader, ref string) error {
 	m.log.Info("cloning mirror", "path", repoPath, "hasAuth", authHeader != "")
 	if err := ensureRealSubdirectories(m.root, filepath.Dir(repoPath)); err != nil {
 		return fmt.Errorf("create parent dir: %w", err)
 	}
 
-	// Disable GC and delta recompression during clone to reduce CPU/memory
-	// pressure: the received pack is stored as-is, optimizeRepo repacks later.
-	args := []string{
-		"-c", "gc.auto=0",
-		"-c", "core.compression=0",
-		"-c", "pack.window=0",
-		"-c", "pack.depth=0",
-		"-c", "pack.deltaCacheSize=1",
-		"-c", "pack.threads=1",
-		"clone", "--mirror", "--", upstreamURL, repoPath,
+	var output []byte
+	var err error
+	if ref == "" {
+		cmd := exec.CommandContext(ctx, "git", "-c", "gc.auto=0", "clone", "--mirror", "--", upstreamURL, repoPath)
+		cmd.Env = gitEnv(authHeader)
+		output, err = cmd.CombinedOutput()
+	} else {
+		cmd := exec.CommandContext(ctx, "git", "init", "--bare", "--", repoPath)
+		cmd.Env = gitEnv("")
+		output, err = cmd.CombinedOutput()
+		if err == nil {
+			err = replaceMirrorConfig(repoPath)
+		}
+		if err == nil {
+			output, err = fetchScopedRepo(ctx, repoPath, upstreamURL, authHeader, ref)
+		}
 	}
-	cmd := exec.CommandContext(ctx, "git", args...)
-	cmd.Env = gitEnv(authHeader)
-	if output, err := cmd.CombinedOutput(); err != nil {
+	if err != nil {
 		// git may leave a partial directory behind; remove it so the next
 		// attempt does not mistake it for a valid mirror.
 		os.RemoveAll(repoPath)
-		return fmt.Errorf("git clone failed: %w\noutput: %s", err, output)
+		return fmt.Errorf("create mirror failed: %w\noutput: %s", err, output)
 	}
 
 	// Mark authenticated mirrors before any fallible post-clone setup. If
@@ -351,7 +362,7 @@ func (m *Mirror) cloneRepo(ctx context.Context, repoPath, upstreamURL, authHeade
 		return err
 	}
 
-	m.scheduleOptimize(repoPath, true)
+	m.scheduleOptimize(repoPath)
 	return nil
 }
 
@@ -371,16 +382,19 @@ func markPrivateMirror(repoPath string) error {
 }
 
 // syncRepo fetches updates from upstream.
-func (m *Mirror) syncRepo(ctx context.Context, repoPath, upstreamURL, authHeader string) error {
+func (m *Mirror) syncRepo(ctx context.Context, repoPath, upstreamURL, authHeader, ref string) error {
 	start := time.Now()
+	if ref != "" {
+		output, err := fetchScopedRepo(ctx, repoPath, upstreamURL, authHeader, ref)
+		if err != nil {
+			return fmt.Errorf("git fetch failed: %w\noutput: %s", err, output)
+		}
+		m.log.Debug("sync complete", "path", repoPath, "duration_ms", time.Since(start).Milliseconds())
+		return nil
+	}
 	args := []string{
 		"-C", repoPath,
 		"-c", "gc.auto=0",
-		"-c", "core.compression=0",
-		"-c", "pack.window=0",
-		"-c", "pack.depth=0",
-		"-c", "pack.deltaCacheSize=1",
-		"-c", "pack.threads=1",
 		// The bare repository is persisted runner-writable state. A previous
 		// job can place executable hooks in its default hooks directory even
 		// after unsafe config keys are removed.
@@ -397,6 +411,26 @@ func (m *Mirror) syncRepo(ctx context.Context, repoPath, upstreamURL, authHeader
 	}
 	m.log.Debug("sync complete", "path", repoPath, "duration_ms", time.Since(start).Milliseconds())
 	return nil
+}
+
+func fetchScopedRepo(ctx context.Context, repoPath, upstreamURL, authHeader, ref string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, "git",
+		"-C", repoPath,
+		"-c", "gc.auto=0",
+		"-c", "core.hooksPath=/dev/null",
+		"fetch", "--no-tags", "--force", "--", upstreamURL, "+"+ref+":"+scopedMirrorRef,
+	)
+	cmd.Env = gitEnv(authHeader)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return output, err
+	}
+	cmd = exec.CommandContext(ctx, "git", "-c", "core.hooksPath=/dev/null", "--git-dir", repoPath, "symbolic-ref", "HEAD", scopedMirrorRef)
+	cmd.Env = gitEnv("")
+	if headOutput, headErr := cmd.CombinedOutput(); headErr != nil {
+		return append(output, headOutput...), headErr
+	}
+	return output, nil
 }
 
 // replaceMirrorConfig atomically replaces attacker-controlled persisted config
@@ -466,7 +500,9 @@ func syncMirrorHEAD(ctx context.Context, repoPath, upstreamURL, authHeader strin
 	if !strings.HasPrefix(headRef, "refs/heads/") {
 		return fmt.Errorf("resolve upstream HEAD: no branch symref in output")
 	}
-	if out, err := exec.CommandContext(ctx, "git", "-c", "core.hooksPath=/dev/null", "--git-dir", repoPath, "symbolic-ref", "HEAD", headRef).CombinedOutput(); err != nil {
+	cmd = exec.CommandContext(ctx, "git", "-c", "core.hooksPath=/dev/null", "--git-dir", repoPath, "symbolic-ref", "HEAD", headRef)
+	cmd.Env = gitEnv("")
+	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("update mirror HEAD to %s: %w\noutput: %s", headRef, err, out)
 	}
 	return nil
@@ -627,64 +663,61 @@ func requireRealDirectory(path string) error {
 	return nil
 }
 
-// optimizeRepo runs maintenance tasks: bitmaps and commit-graphs make
-// upload-pack on warm jobs fast for large repos, and persist in the snapshot.
-// If full is true (after clone), repack with bitmap; otherwise (after sync)
-// only midx+commit-graph.
-func (m *Mirror) optimizeRepo(ctx context.Context, repoPath string, full bool) {
+// optimizeRepo runs maintenance after the proxy has stopped serving fetches.
+// Packing loose objects plus bitmaps and commit-graphs keeps warm upload-pack
+// fast without rewriting an existing pack.
+func (m *Mirror) optimizeRepo(repoPath string) {
+	ctx := context.Background()
 	// Avoid lock contention if another git process is writing commit-graph.
 	if _, err := os.Stat(filepath.Join(repoPath, "objects", "info", "commit-graph.lock")); err == nil {
 		return
 	}
-	if full {
-		// Keep unreachable objects in the new pack: actions/checkout commonly
-		// fetches the event's exact SHA, which can become orphaned by a
-		// force-push while background maintenance is running.
-		cmd := exec.CommandContext(ctx, "git", "-C", repoPath, "repack", "-A", "-d", "-b", "--write-bitmap-index")
-		if output, err := cmd.CombinedOutput(); err != nil {
-			m.log.Warn("git repack failed", "path", repoPath, "err", err, "output", string(output))
-		}
+	cmd := exec.CommandContext(ctx, "git", "-C", repoPath, "repack", "-d")
+	cmd.Env = gitEnv("")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		m.log.Warn("git repack failed", "path", repoPath, "err", err, "output", string(output))
 	}
-	cmd := exec.CommandContext(ctx, "git", "-C", repoPath, "commit-graph", "write", "--reachable")
+	cmd = exec.CommandContext(ctx, "git", "-C", repoPath, "commit-graph", "write", "--reachable")
+	cmd.Env = gitEnv("")
 	if output, err := cmd.CombinedOutput(); err != nil {
 		m.log.Warn("git commit-graph write failed", "path", repoPath, "err", err, "output", string(output))
 	}
 	cmd = exec.CommandContext(ctx, "git", "-C", repoPath, "multi-pack-index", "write", "--bitmap")
+	cmd.Env = gitEnv("")
 	if output, err := cmd.CombinedOutput(); err != nil {
 		m.log.Warn("git multi-pack-index write failed", "path", repoPath, "err", err, "output", string(output))
 	}
 }
 
-// scheduleOptimize runs optimizeRepo in the background with a per-repo
-// singleflight to avoid concurrent maintenance.
-func (m *Mirror) scheduleOptimize(repoPath string, full bool) {
+// scheduleOptimize records maintenance for shutdown, after active checkouts
+// have finished using the runner's CPU and disk.
+func (m *Mirror) scheduleOptimize(repoPath string) {
+	m.maintMu.Lock()
+	defer m.maintMu.Unlock()
+	if m.closed {
+		return
+	}
+	m.pending[repoPath] = struct{}{}
+}
+
+// Close runs queued maintenance after HTTP shutdown and returns only when no
+// git child can keep writing to the sticky disk during snapshotting.
+func (m *Mirror) Close() {
 	m.maintMu.Lock()
 	if m.closed {
 		m.maintMu.Unlock()
 		return
 	}
-	m.maintWG.Add(1)
-	m.maintMu.Unlock()
-
-	go func() {
-		defer m.maintWG.Done()
-		m.maintGroup.Do(repoPath, func() (interface{}, error) {
-			m.optimizeRepo(m.ctx, repoPath, full)
-			return nil, nil
-		})
-	}()
-}
-
-// Close cancels and joins background repository maintenance so no git child
-// can keep writing to the sticky disk after the proxy exits for snapshotting.
-func (m *Mirror) Close() {
-	m.maintMu.Lock()
-	if !m.closed {
-		m.closed = true
-		m.cancel()
+	m.closed = true
+	paths := make([]string, 0, len(m.pending))
+	for repoPath := range m.pending {
+		paths = append(paths, repoPath)
 	}
 	m.maintMu.Unlock()
-	m.maintWG.Wait()
+	sort.Strings(paths)
+	for _, repoPath := range paths {
+		m.maintain(repoPath)
+	}
 }
 
 // gitEnv returns the environment for git commands talking to upstream. The

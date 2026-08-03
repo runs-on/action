@@ -75,6 +75,7 @@ func newTestServer(t *testing.T, upstreamBase string) *Server {
 	server, err := NewServer(Options{
 		MirrorDir:   t.TempDir(),
 		HealthToken: "test-health-token",
+		AllRefs:     true,
 		Logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 	if err != nil {
@@ -85,6 +86,187 @@ func newTestServer(t *testing.T, upstreamBase string) *Server {
 		server.upstreamBase = func(host string) string { return upstreamBase }
 	}
 	return server
+}
+
+func TestScopedMirrorFetchesOnlyCurrentHistory(t *testing.T) {
+	upstreamBase, first := newUpstreamRepo(t)
+	work := t.TempDir()
+	gitCmd(t, work, "clone", upstreamBase+"/owner/repo.git", ".")
+	if err := os.WriteFile(filepath.Join(work, "second.txt"), []byte("second\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitCmd(t, work, "add", "second.txt")
+	gitCmd(t, work, "commit", "-m", "second")
+	current := strings.TrimSpace(gitCmd(t, work, "rev-parse", "HEAD"))
+	gitCmd(t, work, "push", "origin", "HEAD:main")
+	gitCmd(t, work, "checkout", "-b", "side", first)
+	if err := os.WriteFile(filepath.Join(work, "side.txt"), []byte("side\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitCmd(t, work, "add", "side.txt")
+	gitCmd(t, work, "commit", "-m", "side")
+	side := strings.TrimSpace(gitCmd(t, work, "rev-parse", "HEAD"))
+	gitCmd(t, work, "push", "origin", "HEAD:side")
+
+	mirror, err := NewMirror(t.TempDir(), time.Hour, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mirror.Close()
+
+	repoPath, status, err := mirror.EnsureRepo(t.Context(), "github.com", "owner", "repo", upstreamBase+"/owner/repo.git", "", current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status != StatusClone {
+		t.Fatalf("status = %s, want %s", status, StatusClone)
+	}
+	if !mirror.HasObject(t.Context(), repoPath, current) {
+		t.Fatal("current workflow commit is absent")
+	}
+	if !mirror.HasObject(t.Context(), repoPath, first) {
+		t.Fatal("current workflow commit history is incomplete")
+	}
+	if mirror.HasObject(t.Context(), repoPath, side) {
+		t.Fatal("unrelated branch entered the scoped mirror")
+	}
+	if got := strings.TrimSpace(gitCmd(t, repoPath, "symbolic-ref", "HEAD")); got != scopedMirrorRef {
+		t.Fatalf("HEAD = %q, want %q", got, scopedMirrorRef)
+	}
+}
+
+func TestServerMirrorsOnlyConfiguredRepository(t *testing.T) {
+	server := &Server{opts: Options{Repository: "owner/repo", Ref: strings.Repeat("a", 40)}}
+	if !server.shouldMirror(target{host: "github.com", owner: "owner", repo: "repo"}) {
+		t.Fatal("configured repository bypassed the mirror")
+	}
+	if server.shouldMirror(target{host: "github.com", owner: "owner", repo: "other"}) {
+		t.Fatal("unrelated repository entered the scoped mirror")
+	}
+	server.opts.AllRefs = true
+	if !server.shouldMirror(target{host: "github.com", owner: "owner", repo: "other"}) {
+		t.Fatal("full-ref mode did not mirror an unrelated repository")
+	}
+}
+
+func TestScopedServerUsesLiveRefAdvertisement(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "live refs")
+	}))
+	defer upstream.Close()
+
+	server, err := NewServer(Options{
+		MirrorDir:  t.TempDir(),
+		Repository: "owner/repo",
+		Ref:        strings.Repeat("a", 40),
+		Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close()
+	server.upstreamBase = func(string) string { return upstream.URL }
+	repoPath := server.mirror.RepoPath("github.com", "owner", "repo")
+	if err := os.MkdirAll(filepath.Dir(repoPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitCmd(t, t.TempDir(), "init", "--bare", repoPath)
+	server.mirror.lastSync.Store("github.com/owner/repo", time.Now())
+
+	ts := httptest.NewServer(server.Handler())
+	defer ts.Close()
+	resp, err := http.Get(ts.URL + "/github.com/owner/repo/info/refs?service=git-upload-pack")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if got := resp.Header.Get(statusHeader); got != "upstream-live-ref-advertisement" {
+		t.Fatalf("%s = %q", statusHeader, got)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if string(body) != "live refs" {
+		t.Fatalf("advertisement = %q", body)
+	}
+
+	lsRefs := pkt("command=ls-refs") + "0001" + pkt("ref-prefix refs/heads/side\n") + "0000"
+	resp, err = http.Post(ts.URL+"/github.com/owner/repo/git-upload-pack", "application/x-git-upload-pack-request", strings.NewReader(lsRefs))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if got := resp.Header.Get(statusHeader); got != "upstream-live-ref-advertisement" {
+		t.Fatalf("%s = %q", statusHeader, got)
+	}
+}
+
+func TestScopedServerFetchesUncachedRefUpstream(t *testing.T) {
+	upstreamBase, current := newUpstreamRepo(t)
+	work := t.TempDir()
+	gitCmd(t, work, "clone", upstreamBase+"/owner/repo.git", ".")
+	gitCmd(t, work, "checkout", "-b", "side")
+	if err := os.WriteFile(filepath.Join(work, "side.txt"), []byte("side\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitCmd(t, work, "add", "side.txt")
+	gitCmd(t, work, "commit", "-m", "side")
+	side := strings.TrimSpace(gitCmd(t, work, "rev-parse", "HEAD"))
+	gitCmd(t, work, "push", "origin", "HEAD:side")
+
+	upstreamProxy := newTestServer(t, upstreamBase)
+	upstreamHTTP := httptest.NewServer(upstreamProxy.Handler())
+	defer upstreamHTTP.Close()
+	scoped, err := NewServer(Options{
+		MirrorDir:  t.TempDir(),
+		Repository: "owner/repo",
+		Ref:        current,
+		Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer scoped.Close()
+	scoped.upstreamBase = func(string) string { return upstreamHTTP.URL + "/github.com" }
+	scopedHTTP := httptest.NewServer(scoped.Handler())
+	defer scopedHTTP.Close()
+
+	client := t.TempDir()
+	gitCmd(t, client, "init", ".")
+	gitCmd(t, client, "remote", "add", "origin", scopedHTTP.URL+"/github.com/owner/repo")
+	gitCmd(t, client, "fetch", "origin", "+"+current+":refs/remotes/origin/current")
+	gitCmd(t, client, "fetch", "origin", "+refs/heads/side:refs/remotes/origin/side")
+	if got := strings.TrimSpace(gitCmd(t, client, "rev-parse", "refs/remotes/origin/side")); got != side {
+		t.Fatalf("side ref = %s, want %s", got, side)
+	}
+
+	repoPath := scoped.mirror.RepoPath("github.com", "owner", "repo")
+	if !scoped.mirror.HasObject(t.Context(), repoPath, current) {
+		t.Fatal("workflow commit was not cached")
+	}
+	if scoped.mirror.HasObject(t.Context(), repoPath, side) {
+		t.Fatal("upstream-only ref entered the scoped mirror")
+	}
+}
+
+func TestMirrorDefersMaintenanceUntilClose(t *testing.T) {
+	mirror, err := NewMirror(t.TempDir(), time.Hour, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan string, 1)
+	mirror.maintain = func(repoPath string) { started <- repoPath }
+	mirror.scheduleOptimize("repo.git")
+
+	select {
+	case <-started:
+		t.Fatal("maintenance started before mirror shutdown")
+	default:
+	}
+
+	mirror.Close()
+	if got := <-started; got != "repo.git" {
+		t.Fatalf("maintained %q, want repo.git", got)
+	}
+	mirror.Close()
 }
 
 func TestResolveTarget(t *testing.T) {
@@ -275,7 +457,7 @@ func TestMirrorEnsureRepo(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	repoPath, status, err := mirror.EnsureRepo(ctx, "github.com", "owner", "repo", upstreamURL, "")
+	repoPath, status, err := mirror.EnsureRepo(ctx, "github.com", "owner", "repo", upstreamURL, "", "")
 	if err != nil || status != StatusClone {
 		t.Fatalf("first EnsureRepo: status=%s err=%v", status, err)
 	}
@@ -296,7 +478,7 @@ func TestMirrorEnsureRepo(t *testing.T) {
 		gitCmd(t, repoPath, "config", "--unset-all", key)
 	}
 	mirror.lastSync.Delete("github.com/owner/repo")
-	if _, _, err := mirror.EnsureRepo(ctx, "github.com", "owner", "repo", upstreamURL, ""); err != nil {
+	if _, _, err := mirror.EnsureRepo(ctx, "github.com", "owner", "repo", upstreamURL, "", ""); err != nil {
 		t.Fatalf("repair restored mirror settings: %v", err)
 	}
 	for _, key := range []string{"uploadpack.allowanysha1inwant", "uploadpack.allowfilter"} {
@@ -305,12 +487,12 @@ func TestMirrorEnsureRepo(t *testing.T) {
 		}
 	}
 
-	if _, status, _ = mirror.EnsureRepo(ctx, "github.com", "owner", "repo", upstreamURL, ""); status != StatusHit {
+	if _, status, _ = mirror.EnsureRepo(ctx, "github.com", "owner", "repo", upstreamURL, "", ""); status != StatusHit {
 		t.Errorf("fresh EnsureRepo: status=%s, want %s", status, StatusHit)
 	}
 
 	time.Sleep(60 * time.Millisecond)
-	if _, status, _ = mirror.EnsureRepo(ctx, "github.com", "owner", "repo", upstreamURL, ""); status != StatusSync {
+	if _, status, _ = mirror.EnsureRepo(ctx, "github.com", "owner", "repo", upstreamURL, "", ""); status != StatusSync {
 		t.Errorf("stale EnsureRepo: status=%s, want %s", status, StatusSync)
 	}
 
@@ -318,7 +500,7 @@ func TestMirrorEnsureRepo(t *testing.T) {
 	gitCmd(t, t.TempDir(), "--git-dir", upstreamRepo, "branch", "trunk", headSHA)
 	gitCmd(t, t.TempDir(), "--git-dir", upstreamRepo, "symbolic-ref", "HEAD", "refs/heads/trunk")
 	time.Sleep(60 * time.Millisecond)
-	if _, status, err = mirror.EnsureRepo(ctx, "github.com", "owner", "repo", upstreamURL, ""); err != nil || status != StatusSync {
+	if _, status, err = mirror.EnsureRepo(ctx, "github.com", "owner", "repo", upstreamURL, "", ""); err != nil || status != StatusSync {
 		t.Fatalf("default branch sync: status=%s err=%v", status, err)
 	}
 	if got := strings.TrimSpace(gitCmd(t, t.TempDir(), "--git-dir", repoPath, "symbolic-ref", "HEAD")); got != "refs/heads/trunk" {
@@ -336,7 +518,7 @@ func TestMirrorEnsureRepo(t *testing.T) {
 	// ref advertisement upstream instead of serving stale public refs.
 	brokenUpstreamURL := "file:///missing-upstream"
 	time.Sleep(60 * time.Millisecond)
-	if _, status, err = mirror.EnsureRepo(ctx, "github.com", "owner", "repo", brokenUpstreamURL, ""); err == nil || status != "" {
+	if _, status, err = mirror.EnsureRepo(ctx, "github.com", "owner", "repo", brokenUpstreamURL, "", ""); err == nil || status != "" {
 		t.Fatalf("broken public mirror sync: status=%s err=%v, want propagated error", status, err)
 	}
 	if !mirror.SyncFailed("github.com", "owner", "repo") {
@@ -350,7 +532,7 @@ func TestMirrorEnsureRepo(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repoPath, ".requires-auth"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, status, err = mirror.EnsureRepo(ctx, "github.com", "owner", "repo", brokenUpstreamURL, "Basic test"); err == nil || status != "" {
+	if _, status, err = mirror.EnsureRepo(ctx, "github.com", "owner", "repo", brokenUpstreamURL, "Basic test", ""); err == nil || status != "" {
 		t.Fatalf("broken private mirror sync: status=%s err=%v, want propagated error", status, err)
 	}
 	if !mirror.SyncFailed("github.com", "owner", "repo") {
@@ -389,7 +571,7 @@ func TestMirrorRejectsSymlinkedParentBeforeClone(t *testing.T) {
 	if err := os.Symlink(outside, filepath.Join(root, "github.com")); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
-	if _, _, err := mirror.EnsureRepo(t.Context(), "github.com", "owner", "repo", upstreamBase+"/owner/repo.git", "Basic privileged"); err == nil || !strings.Contains(err.Error(), "real directory") {
+	if _, _, err := mirror.EnsureRepo(t.Context(), "github.com", "owner", "repo", upstreamBase+"/owner/repo.git", "Basic privileged", ""); err == nil || !strings.Contains(err.Error(), "real directory") {
 		t.Fatalf("symlinked mirror parent error = %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(outside, "owner")); !os.IsNotExist(err) {
@@ -405,7 +587,7 @@ func TestMirrorReclonesBrokenReachableObjectGraph(t *testing.T) {
 	}
 	defer mirror.Close()
 
-	repoPath, _, err := mirror.EnsureRepo(t.Context(), "github.com", "owner", "repo", upstreamBase+"/owner/repo.git", "")
+	repoPath, _, err := mirror.EnsureRepo(t.Context(), "github.com", "owner", "repo", upstreamBase+"/owner/repo.git", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -421,7 +603,7 @@ func TestMirrorReclonesBrokenReachableObjectGraph(t *testing.T) {
 	}
 
 	mirror.lastSync.Delete("github.com/owner/repo")
-	if _, status, err := mirror.EnsureRepo(t.Context(), "github.com", "owner", "repo", upstreamBase+"/owner/repo.git", ""); err != nil || status != StatusClone {
+	if _, status, err := mirror.EnsureRepo(t.Context(), "github.com", "owner", "repo", upstreamBase+"/owner/repo.git", "", ""); err != nil || status != StatusClone {
 		t.Fatalf("repair broken mirror: status=%s err=%v", status, err)
 	}
 }
@@ -437,7 +619,7 @@ func TestMirrorReclonesSymlinkedObjectStore(t *testing.T) {
 	}
 	defer mirror.Close()
 
-	repoPath, _, err := mirror.EnsureRepo(t.Context(), "github.com", "owner", "repo", upstreamBase+"/owner/repo.git", "")
+	repoPath, _, err := mirror.EnsureRepo(t.Context(), "github.com", "owner", "repo", upstreamBase+"/owner/repo.git", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -453,7 +635,7 @@ func TestMirrorReclonesSymlinkedObjectStore(t *testing.T) {
 	}
 
 	mirror.lastSync.Delete("github.com/owner/repo")
-	if _, status, err := mirror.EnsureRepo(t.Context(), "github.com", "owner", "repo", upstreamBase+"/owner/repo.git", ""); err != nil || status != StatusClone {
+	if _, status, err := mirror.EnsureRepo(t.Context(), "github.com", "owner", "repo", upstreamBase+"/owner/repo.git", "", ""); err != nil || status != StatusClone {
 		t.Fatalf("repair symlinked object store: status=%s err=%v", status, err)
 	}
 	if _, err := os.Stat(outsideObjects); err != nil {
@@ -472,7 +654,7 @@ func TestMirrorReclonesSymlinkedRefsHierarchy(t *testing.T) {
 	}
 	defer mirror.Close()
 
-	repoPath, _, err := mirror.EnsureRepo(t.Context(), "github.com", "owner", "repo", upstreamBase+"/owner/repo.git", "")
+	repoPath, _, err := mirror.EnsureRepo(t.Context(), "github.com", "owner", "repo", upstreamBase+"/owner/repo.git", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -488,7 +670,7 @@ func TestMirrorReclonesSymlinkedRefsHierarchy(t *testing.T) {
 	}
 
 	mirror.lastSync.Delete("github.com/owner/repo")
-	if _, status, err := mirror.EnsureRepo(t.Context(), "github.com", "owner", "repo", upstreamBase+"/owner/repo.git", ""); err != nil || status != StatusClone {
+	if _, status, err := mirror.EnsureRepo(t.Context(), "github.com", "owner", "repo", upstreamBase+"/owner/repo.git", "", ""); err != nil || status != StatusClone {
 		t.Fatalf("repair symlinked refs hierarchy: status=%s err=%v", status, err)
 	}
 	if _, err := os.Stat(outsideRefs); err != nil {
@@ -552,11 +734,10 @@ func TestAuthenticatedSyncReplacesPersistedConfig(t *testing.T) {
 
 	ctx := t.Context()
 	upstreamURL := upstreamBase + "/owner/repo.git"
-	repoPath, _, err := mirror.EnsureRepo(ctx, "github.com", "owner", "repo", upstreamURL, "")
+	repoPath, _, err := mirror.EnsureRepo(ctx, "github.com", "owner", "repo", upstreamURL, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	mirror.maintWG.Wait()
 
 	attackerRequests := make(chan string, 10)
 	attacker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -589,7 +770,7 @@ func TestAuthenticatedSyncReplacesPersistedConfig(t *testing.T) {
 	gitCmd(t, t.TempDir(), "--git-dir", upstreamRepo, "branch", "post-clone", headSHA)
 
 	mirror.lastSync.Delete("github.com/owner/repo")
-	if _, status, err := mirror.EnsureRepo(ctx, "github.com", "owner", "repo", upstreamURL, "Basic privileged"); err != nil || status != StatusSync {
+	if _, status, err := mirror.EnsureRepo(ctx, "github.com", "owner", "repo", upstreamURL, "Basic privileged", ""); err != nil || status != StatusSync {
 		t.Fatalf("authenticated sync: status=%s err=%v", status, err)
 	}
 	select {
@@ -649,7 +830,7 @@ func TestMirrorRepairFailureReclonesPersistedRepository(t *testing.T) {
 
 	ctx := t.Context()
 	upstreamURL := upstreamBase + "/owner/repo.git"
-	repoPath, _, err := mirror.EnsureRepo(ctx, "github.com", "owner", "repo", upstreamURL, "")
+	repoPath, _, err := mirror.EnsureRepo(ctx, "github.com", "owner", "repo", upstreamURL, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -669,7 +850,7 @@ func TestMirrorRepairFailureReclonesPersistedRepository(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer mirror.Close()
-	if _, status, err := mirror.EnsureRepo(ctx, "github.com", "owner", "repo", upstreamURL, ""); err != nil || status != StatusClone {
+	if _, status, err := mirror.EnsureRepo(ctx, "github.com", "owner", "repo", upstreamURL, "", ""); err != nil || status != StatusClone {
 		t.Fatalf("repair through reclone: status=%s err=%v", status, err)
 	}
 	if mirror.SyncFailed("github.com", "owner", "repo") {
@@ -707,13 +888,13 @@ func TestAuthenticatedSyncMarksMirrorPrivate(t *testing.T) {
 
 	ctx := t.Context()
 	upstreamURL := upstreamBase + "/owner/repo.git"
-	repoPath, _, err := mirror.EnsureRepo(ctx, "github.com", "owner", "repo", upstreamURL, "")
+	repoPath, _, err := mirror.EnsureRepo(ctx, "github.com", "owner", "repo", upstreamURL, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	mirror.lastSync.Delete("github.com/owner/repo")
-	if _, status, err := mirror.EnsureRepo(ctx, "github.com", "owner", "repo", upstreamURL, "Basic test"); err != nil || status != StatusSync {
+	if _, status, err := mirror.EnsureRepo(ctx, "github.com", "owner", "repo", upstreamURL, "Basic test", ""); err != nil || status != StatusSync {
 		t.Fatalf("authenticated sync: status=%s err=%v", status, err)
 	}
 	if _, err := os.Stat(filepath.Join(repoPath, ".requires-auth")); err != nil {
@@ -759,7 +940,7 @@ exec %q "$@"
 	defer mirror.Close()
 
 	repoPath := mirror.RepoPath("github.com", "owner", "repo")
-	_, _, err = mirror.EnsureRepo(t.Context(), "github.com", "owner", "repo", upstreamBase+"/owner/repo.git", "Basic test")
+	_, _, err = mirror.EnsureRepo(t.Context(), "github.com", "owner", "repo", upstreamBase+"/owner/repo.git", "Basic test", "")
 	if err == nil || !strings.Contains(err.Error(), "canonical mirror config") {
 		t.Fatalf("private clone configuration error = %v", err)
 	}
@@ -806,7 +987,7 @@ func TestSharedCloneValidatesWaiterAuthorization(t *testing.T) {
 		close(release)
 	}()
 
-	_, _, err = mirror.EnsureRepo(t.Context(), "github.com", "owner", "repo", "file:///missing-upstream", "Basic waiter")
+	_, _, err = mirror.EnsureRepo(t.Context(), "github.com", "owner", "repo", "file:///missing-upstream", "Basic waiter", "")
 	<-finished
 	if err == nil || !strings.Contains(err.Error(), "authentication required") {
 		t.Fatalf("shared clone waiter authorization error = %v", err)
@@ -1198,7 +1379,7 @@ func TestIsUsableRepoRejectsPersistedAlternates(t *testing.T) {
 	}
 	defer mirror.Close()
 
-	repoPath, _, err := mirror.EnsureRepo(t.Context(), "github.com", "owner", "repo", upstreamBase+"/owner/repo.git", "")
+	repoPath, _, err := mirror.EnsureRepo(t.Context(), "github.com", "owner", "repo", upstreamBase+"/owner/repo.git", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}

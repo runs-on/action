@@ -1,10 +1,12 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/sethvargo/go-githubactions"
 )
@@ -17,6 +19,8 @@ type Config struct {
 	NetworkInterface    string
 	DiskDevice          string
 	Sccache             string
+	StickyCache         []string
+	StickyWaitTimeout   time.Duration
 	ZctionsResultsURL   string
 	ZctionsCacheURL     string
 	ActionsResultsURL   string
@@ -63,6 +67,29 @@ func NewConfigFromInputs(action *githubactions.Action) (*Config, error) {
 
 	cfg.Sccache = action.GetInput("sccache")
 
+	stickyCacheInput := action.GetInput("sticky_cache")
+	if stickyCacheInput != "" {
+		for _, entry := range strings.Split(stickyCacheInput, "\n") {
+			entry = strings.TrimSpace(entry)
+			if entry != "" {
+				cfg.StickyCache = append(cfg.StickyCache, entry)
+			}
+		}
+	}
+
+	cfg.StickyWaitTimeout = 15 * time.Minute
+	waitTimeoutStr := action.GetInput("sticky_wait_timeout")
+	if waitTimeoutStr != "" {
+		if timeout, err := time.ParseDuration(waitTimeoutStr); err == nil {
+			if timeout <= 0 {
+				return nil, fmt.Errorf("'sticky_wait_timeout' must be positive, got %q", waitTimeoutStr)
+			}
+			cfg.StickyWaitTimeout = timeout
+		} else {
+			return nil, fmt.Errorf("parse 'sticky_wait_timeout' input %q: %w", waitTimeoutStr, err)
+		}
+	}
+
 	cfg.ZctionsResultsURL = os.Getenv("ZCTIONS_RESULTS_URL")
 	cfg.ZctionsCacheURL = os.Getenv("ZCTIONS_CACHE_URL")
 	cfg.ActionsResultsURL = os.Getenv("ACTIONS_RESULTS_URL")
@@ -74,6 +101,8 @@ func NewConfigFromInputs(action *githubactions.Action) (*Config, error) {
 	action.Infof("Input 'network_interface': %s", cfg.NetworkInterface)
 	action.Infof("Input 'disk_device': %s", cfg.DiskDevice)
 	action.Infof("Input 'sccache': %s", cfg.Sccache)
+	action.Infof("Input 'sticky_cache': %v", cfg.StickyCache)
+	action.Infof("Input 'sticky_wait_timeout': %s", cfg.StickyWaitTimeout)
 
 	if cfg.ZctionsResultsURL != "" {
 		action.Infof("ZCTIONS_RESULTS_URL is set: %s", cfg.ZctionsResultsURL)
@@ -98,16 +127,19 @@ func (c *Config) HasShowEnv() bool {
 	return c.ShowEnv
 }
 
-func (c *Config) HasShowCosts() bool {
-	return c.ShowCosts != "inline"
-}
-
 func (c *Config) HasMetrics() bool {
 	return c.IsUsingRunsOn() && c.IsUsingLinux() && len(c.Metrics) > 0
 }
 
 func (c *Config) HasSccache() bool {
 	return c.IsUsingRunsOn() && c.IsUsingLinux() && c.Sccache != ""
+}
+
+// HasStickyDiskCache reports whether sticky disk caching was requested.
+// Platform and RunsOn availability checks happen inside the stickydisk package
+// so an explicit persistence request never degrades into a silent no-op.
+func (c *Config) HasStickyDiskCache() bool {
+	return len(c.StickyCache) > 0
 }
 
 func (c *Config) IsUsingRunsOn() bool {

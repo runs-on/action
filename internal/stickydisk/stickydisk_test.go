@@ -274,7 +274,7 @@ func TestWaitForReadyTimesOut(t *testing.T) {
 	}
 }
 
-func TestWaitForReadyWaitsForFallbackMarker(t *testing.T) {
+func TestWaitForReadyWaitsForReadyMarker(t *testing.T) {
 	root := t.TempDir()
 	readyFile := filepath.Join(root, "stickydisk.ready")
 	go func() {

@@ -1,13 +1,11 @@
 package stickydisk
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -16,28 +14,9 @@ import (
 )
 
 const (
-	defaultWaitTimeout    = 15 * time.Minute
-	readyPollInterval     = 500 * time.Millisecond
-	trackedCacheMountsEnv = "RUNS_ON_STICKY_CACHE_MOUNTS"
+	defaultWaitTimeout = 15 * time.Minute
+	readyPollInterval  = 500 * time.Millisecond
 )
-
-// defaultReadyFile mirrors the agent's STICKYDISK_READY_FILE; only a fallback,
-// the agent publishes RUNS_ON_STICKYDISK_READY_FILE.
-func defaultReadyFile() string {
-	if runtime.GOOS == "windows" {
-		return `C:\runs-on\stickydisk.ready`
-	}
-	return "/runs-on/stickydisk.ready"
-}
-
-// defaultUnavailableFile mirrors the agent fallback path; normally the agent
-// publishes RUNS_ON_STICKYDISK_UNAVAILABLE_FILE in the runner environment.
-func defaultUnavailableFile() string {
-	if runtime.GOOS == "windows" {
-		return `C:\runs-on\stickydisk.unavailable`
-	}
-	return "/runs-on/stickydisk.unavailable"
-}
 
 func supportedOS() bool {
 	return runtime.GOOS == "linux" || runtime.GOOS == "windows"
@@ -55,11 +34,6 @@ type mountResult struct {
 	Target string
 	Hit    bool
 	Err    error
-}
-
-type trackedCacheMount struct {
-	Target string `json:"target"`
-	Hit    bool   `json:"hit"`
 }
 
 // Configure bind-mounts the requested cache directories onto the job's sticky
@@ -98,37 +72,26 @@ func Configure(action *githubactions.Action, opts Options) error {
 		return err
 	}
 
-	readyFile := os.Getenv("RUNS_ON_STICKYDISK_READY_FILE")
-	if readyFile == "" {
-		readyFile = defaultReadyFile()
-	}
-	unavailableFile := os.Getenv("RUNS_ON_STICKYDISK_UNAVAILABLE_FILE")
-	if unavailableFile == "" {
-		unavailableFile = defaultUnavailableFile()
-	}
-
-	if os.Getenv("RUNS_ON_STICKYDISK_DIR") == "" {
-		if _, err := os.Stat(unavailableFile); err == nil {
-			return missing(action, fmt.Sprintf("sticky disk is unavailable (marker: %s)", unavailableFile))
-		}
-		return missing(action, "sticky disk is unavailable: RUNS_ON_STICKYDISK_DIR is not set")
+	contract, err := readStickyDiskContract()
+	if err != nil {
+		return missing(action, err.Error())
 	}
 
 	timeout := opts.StickyWaitTimeout
 	if timeout <= 0 {
 		timeout = defaultWaitTimeout
 	}
-	if err := waitForReady(action, readyFile, unavailableFile, timeout); err != nil {
+	if err := waitForReady(action, contract.ReadyFile, contract.UnavailableFile, timeout); err != nil {
 		return missing(action, err.Error())
 	}
 	// The ready marker is an existence-only signal: the mount root always
 	// comes from the agent-provided environment, never from file content that
 	// could be stale or point at an unrelated mount.
-	mountRoot := os.Getenv("RUNS_ON_STICKYDISK_DIR")
+	mountRoot := contract.MountRoot
 	if err := validateStickyMount(mountRoot); err != nil {
 		return missing(action, err.Error())
 	}
-	action.Infof("Sticky disk ready at %s (name: %s)", mountRoot, os.Getenv("RUNS_ON_STICKYDISK_NAME"))
+	action.Infof("Sticky disk ready at %s (name: %s)", mountRoot, os.Getenv(stickyDiskNameEnv))
 
 	// Self-heal a critically full volume before cache-hit detection: wiped
 	// caches report a miss and the next snapshot starts clean.
@@ -149,13 +112,9 @@ func Configure(action *githubactions.Action, opts Options) error {
 	var results []mountResult
 	seen := map[string]bool{}
 	seenPosts := map[string]bool{}
-	tracked, err := readTrackedCacheMounts()
+	state, err := readJobCacheState()
 	if err != nil {
-		return fmt.Errorf("read cache targets from earlier action invocations: %w", err)
-	}
-	trackedByTarget := make(map[string]bool, len(tracked))
-	for _, mount := range tracked {
-		trackedByTarget[canonicalPath(mount.Target)] = mount.Hit
+		return fmt.Errorf("read cache state from earlier action invocations: %w", err)
 	}
 	addTarget := func(path string, root bool) (string, error) {
 		resolved := resolveTarget(path, home, workspace)
@@ -198,7 +157,7 @@ func Configure(action *githubactions.Action, opts Options) error {
 			// A repeated invocation (e.g. the token-change proxy restart) must
 			// preserve the original cold/warm result: by now checkout has
 			// populated the mirror, which is not a restored snapshot.
-			if originalHit, found := trackedByTarget[setupModeTrackingKey(mode.Name)]; found {
+			if originalHit, found := state.Modes[mode.Name]; found {
 				hit = originalHit
 			}
 			if err != nil {
@@ -207,7 +166,7 @@ func Configure(action *githubactions.Action, opts Options) error {
 				}
 				action.Warningf("Failed to set up %s cache: %v", mode.Name, err)
 			} else {
-				trackedByTarget[setupModeTrackingKey(mode.Name)] = hit
+				state.Modes[mode.Name] = hit
 			}
 			results = append(results, mountResult{Target: mode.Name, Hit: hit && err == nil, Err: err})
 			continue
@@ -249,7 +208,8 @@ func Configure(action *githubactions.Action, opts Options) error {
 	mountErrors := make(map[string]error, len(specs))
 	for _, spec := range specs {
 		hit, err := cacheMount(action, mountRoot, spec.target, spec.root)
-		if originalHit, found := trackedByTarget[canonicalPath(spec.target)]; found {
+		key := canonicalPath(spec.target)
+		if originalHit, found := state.Mounts[key]; found {
 			// A repeated invocation in the same job must preserve the original
 			// cold/warm result instead of treating files written by an earlier
 			// step as a restored snapshot.
@@ -258,12 +218,14 @@ func Configure(action *githubactions.Action, opts Options) error {
 		if err != nil {
 			action.Warningf("Failed to set up cache for %s: %v", spec.target, err)
 		} else {
-			trackedByTarget[canonicalPath(spec.target)] = hit
+			state.Mounts[key] = hit
 		}
 		results = append(results, mountResult{Target: spec.target, Hit: hit && err == nil, Err: err})
 		mountErrors[spec.target] = err
 	}
-	writeTrackedCacheMounts(action, trackedByTarget)
+	if err := writeJobCacheState(action, state); err != nil {
+		return fmt.Errorf("write cache state for later action invocations: %w", err)
+	}
 
 	for _, post := range posts {
 		if !postSetupMountsSucceeded(post.targets, mountErrors) {
@@ -340,63 +302,6 @@ func canonicalPath(path string) string {
 		return strings.ToLower(path)
 	}
 	return path
-}
-
-func readTrackedCacheMounts() ([]trackedCacheMount, error) {
-	value := strings.TrimSpace(os.Getenv(trackedCacheMountsEnv))
-	if value == "" {
-		return nil, nil
-	}
-	var mounts []trackedCacheMount
-	if err := json.Unmarshal([]byte(value), &mounts); err != nil {
-		return nil, err
-	}
-	return mounts, nil
-}
-
-func activeCacheTargets(mountRoot string) ([]string, error) {
-	targets, err := mountedCacheTargets(mountRoot)
-	if err != nil {
-		return nil, err
-	}
-	tracked, err := readTrackedCacheMounts()
-	if err != nil {
-		return nil, err
-	}
-	seen := make(map[string]bool, len(targets)+len(tracked))
-	for _, target := range targets {
-		seen[canonicalPath(target)] = true
-	}
-	for _, mount := range tracked {
-		if strings.HasPrefix(mount.Target, "mode:") {
-			continue
-		}
-		if key := canonicalPath(mount.Target); !seen[key] {
-			targets = append(targets, mount.Target)
-			seen[key] = true
-		}
-	}
-	return targets, nil
-}
-
-// setupModeTrackingKey namespaces setup-owned modes (git, buildkit) in the
-// tracked-mounts record; the prefix cannot collide with a filesystem path and
-// is filtered out of overlap validation.
-func setupModeTrackingKey(name string) string {
-	return "mode:" + name
-}
-
-func writeTrackedCacheMounts(action *githubactions.Action, mounts map[string]bool) {
-	tracked := make([]trackedCacheMount, 0, len(mounts))
-	for target, hit := range mounts {
-		tracked = append(tracked, trackedCacheMount{Target: target, Hit: hit})
-	}
-	slices.SortFunc(tracked, func(a, b trackedCacheMount) int {
-		return strings.Compare(a.Target, b.Target)
-	})
-	if data, err := json.Marshal(tracked); err == nil {
-		action.SetEnv(trackedCacheMountsEnv, string(data))
-	}
 }
 
 func allCacheResultsHit(results []mountResult) bool {
@@ -542,12 +447,12 @@ func PostJob(action *githubactions.Action, cacheEntries []string) error {
 // DisplayUsage prints sticky disk timings and per-mount disk usage. Intended
 // for the post-execution phase, while the volume is still mounted.
 func DisplayUsage(action *githubactions.Action) {
-	if timingsFile := os.Getenv("RUNS_ON_STICKYDISK_TIMINGS_FILE"); timingsFile != "" {
+	if timingsFile := os.Getenv(stickyDiskTimingsFileEnv); timingsFile != "" {
 		if content, err := os.ReadFile(timingsFile); err == nil {
 			action.Infof("Sticky disk timings: %s", strings.TrimSpace(string(content)))
 		}
 	}
-	mountRoot := os.Getenv("RUNS_ON_STICKYDISK_DIR")
+	mountRoot := os.Getenv(stickyDiskDirEnv)
 	if mountRoot == "" {
 		return
 	}

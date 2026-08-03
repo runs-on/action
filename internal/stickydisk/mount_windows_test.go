@@ -79,7 +79,7 @@ func TestWindowsPathsAreCaseInsensitiveAndExpandBackslashHome(t *testing.T) {
 }
 
 func TestWindowsActiveCacheTargetsIncludeEarlierInvocation(t *testing.T) {
-	t.Setenv(trackedCacheMountsEnv, `[{"target":"C:\\Cache","hit":false}]`)
+	t.Setenv(jobCacheStateEnv, `{"mounts":{"C:\\Cache":false},"modes":{"git":true}}`)
 	targets, err := activeCacheTargets(`D:\runs-on\stickydisk`)
 	if err != nil {
 		t.Fatal(err)

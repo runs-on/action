@@ -261,6 +261,44 @@ func TestGitProxyStateMatchesMirrorRoot(t *testing.T) {
 	}
 }
 
+func TestGitProxyPostStateSurvivesMissingRuntimeStateFile(t *testing.T) {
+	stateFile := filepath.Join(t.TempDir(), "github-state")
+	t.Setenv("GITHUB_STATE", stateFile)
+	action := githubactions.New(githubactions.WithWriter(os.Stderr))
+	want := gitproxy.State{PID: 4321, MirrorDir: "/mnt/sticky/git/mirrors"}
+
+	saveGitProxyPostState(action, want)
+	contents, err := os.ReadFile(stateFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range []string{gitProxyPIDStateKey, "4321", gitProxyMirrorDirStateKey, want.MirrorDir} {
+		if !strings.Contains(string(contents), value) {
+			t.Fatalf("saved post state %q does not contain %q", contents, value)
+		}
+	}
+
+	// The mutable runtime state file is deliberately absent. GitHub exposes
+	// saved action state directly to this invocation's post step.
+	t.Setenv(gitProxyPIDStateEnv, "4321")
+	t.Setenv(gitProxyMirrorDirStateEnv, want.MirrorDir)
+	got, found, err := loadGitProxyPostState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found || got.PID != want.PID || got.MirrorDir != want.MirrorDir {
+		t.Fatalf("loaded post state = (%+v, %t), want (%+v, true)", got, found, want)
+	}
+}
+
+func TestLoadGitProxyPostStateRejectsInvalidPID(t *testing.T) {
+	t.Setenv(gitProxyPIDStateEnv, "not-a-pid")
+	t.Setenv(gitProxyMirrorDirStateEnv, "/mnt/sticky/git/mirrors")
+	if _, _, err := loadGitProxyPostState(); err == nil {
+		t.Fatal("invalid saved proxy PID was accepted")
+	}
+}
+
 func TestGitProxyOwnerDistinguishesMatrixExecutions(t *testing.T) {
 	t.Setenv("GITHUB_RUN_ID", "123")
 	t.Setenv("GITHUB_RUN_ATTEMPT", "1")

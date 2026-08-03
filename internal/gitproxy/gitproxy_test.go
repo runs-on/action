@@ -1584,6 +1584,85 @@ func TestServerFallbacks(t *testing.T) {
 	})
 }
 
+func TestLFSLockAuthentication(t *testing.T) {
+	type recorded struct {
+		method string
+		path   string
+		auth   string
+	}
+	var requests []recorded
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests = append(requests, recorded{
+			method: r.Method,
+			path:   r.URL.Path,
+			auth:   r.Header.Get("Authorization"),
+		})
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+
+	server := newTestServer(t, upstream.URL)
+	server.opts.ClientToken = "opaque-client"
+	server.opts.UpstreamToken = "real-upstream"
+	ts := httptest.NewServer(server.Handler())
+	defer ts.Close()
+
+	clientAuth := BasicAuthHeader("opaque-client")
+	upstreamAuth := BasicAuthHeader("real-upstream")
+	for _, tt := range []struct {
+		name     string
+		method   string
+		path     string
+		wantAuth string
+	}{
+		{
+			name:     "list locks is read-only",
+			method:   http.MethodGet,
+			path:     "/github.com/owner/repo.git/info/lfs/locks?limit=10",
+			wantAuth: upstreamAuth,
+		},
+		{
+			name:     "verify locks is read-only",
+			method:   http.MethodPost,
+			path:     "/github.com/owner/repo.git/info/lfs/locks/verify",
+			wantAuth: upstreamAuth,
+		},
+		{
+			name:     "create lock is a write",
+			method:   http.MethodPost,
+			path:     "/github.com/owner/repo.git/info/lfs/locks",
+			wantAuth: clientAuth,
+		},
+		{
+			name:     "unlock is a write",
+			method:   http.MethodPost,
+			path:     "/github.com/owner/repo.git/info/lfs/locks/123/unlock",
+			wantAuth: clientAuth,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			requests = nil
+			req, err := http.NewRequest(tt.method, ts.URL+tt.path, strings.NewReader(`{}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.Header.Set("Authorization", clientAuth)
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp.Body.Close()
+
+			if len(requests) != 1 {
+				t.Fatalf("upstream requests = %+v, want one", requests)
+			}
+			if got := requests[0]; got.method != tt.method || got.auth != tt.wantAuth {
+				t.Fatalf("upstream request = %+v, want method=%s auth=%q", got, tt.method, tt.wantAuth)
+			}
+		})
+	}
+}
+
 // A restored snapshot can replace the repo.git leaf (or any component above
 // it) with a symlink to a runner-writable directory. Probe callers reach the
 // persisted mirror before EnsureRepo validates it, and replaceMirrorConfig

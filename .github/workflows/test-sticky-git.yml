@@ -39,6 +39,10 @@ jobs:
           test "$GIT_CACHE_HIT" = false
           test "$WORKSPACE_CACHE_HIT" = false
           git config --global --get-regexp 'url\..*github\.com/\.insteadof' | grep -q '127\.0\.0\.1'
+          mirror="$RUNS_ON_STICKYDISK_DIR/git/mirrors/github.com/runs-on/action.git"
+          test "$(git --git-dir="$mirror" rev-parse refs/heads/runs-on/current)" = "$GITHUB_SHA"
+          git --git-dir="$mirror" cat-file -e "$GITHUB_SHA^"
+          test "$(git --git-dir="$mirror" for-each-ref --format='%(refname)' refs/heads refs/tags)" = "refs/heads/runs-on/current"
           git -C target fetch --depth=1 origin HEAD
           echo "two-invocation" > target/.runs-on-cache/marker
 
@@ -79,4 +83,6 @@ jobs:
           test "$WORKSPACE_CACHE_HIT" = true
           test "$(cat target/.runs-on-cache/marker)" = "two-invocation"
           git config --global --get-regexp 'url\..*github\.com/\.insteadof' | grep -q '127\.0\.0\.1'
+          mirror="$RUNS_ON_STICKYDISK_DIR/git/mirrors/github.com/runs-on/action.git"
+          test "$(git --git-dir="$mirror" rev-parse refs/heads/runs-on/current)" = "$GITHUB_SHA"
           git -C target fetch --depth=1 origin HEAD

@@ -11,7 +11,7 @@ inputs:
     required: false
     default: 'false'
   show_costs:
-    description: 'Control how execution costs are displayed: "inline" for log output, "summary" for GitHub job summary, any other value disables the feature'
+    description: 'Control how execution costs are displayed: "inline" for log output, "summary" for GitHub job summary, any other value disables the feature. When the action is used more than once in a job, only the first enabled invocation reports costs.'
     required: false
     default: 'inline'
   metrics:
@@ -30,3 +30,21 @@ inputs:
     description: 'Enable sccache. Can take either "s3" (RunsOn S3 cache bucket) or be empty (disabled). You still need to setup sccache in your workflow, for instance with mozilla-actions/sccache-action.'
     required: false
     default: ''
+  sticky_cache:
+    description: 'Newline-separated sticky-disk cache records. Each line is a mode followed by comma-separated key=value options, for example buildkit or custom,path=vendor/cache. Custom paths must be directories. Supported modes: go, node, yarn, pnpm, ruby, rust, python, uv, poetry, apt, buildkit, git, gradle, maven, playwright, custom. Requires a sticky=<size> or sticky=<name>:<size> label; the action fails if the disk is absent or not ready before sticky_wait_timeout. Linux and Windows (apt, buildkit and git modes are Linux only). Run after actions/checkout for workspace-relative caches; git must run before checkout and cannot share an invocation with workspace-relative caches; buildkit must run before docker/setup-buildx-action.'
+    required: false
+    default: ''
+  token:
+    description: 'GitHub token used by the git cache mode to sync repository mirrors from github.com. Supply a PAT if the job checks out private repositories other than the workflow repository.'
+    required: false
+    default: ${{ github.token }}
+  sticky_wait_timeout:
+    description: 'How long to wait for the sticky disk to be ready (positive Go duration, e.g. "15m")'
+    required: false
+    default: '15m'
+
+outputs:
+  cache-hit:
+    description: 'Set to "true" when every requested cache path was restored from a previous snapshot, "false" otherwise'
+  buildkit-builder:
+    description: 'Stable Buildx builder name to pass to docker/setup-buildx-action and docker/build-push-action'

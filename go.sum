@@ -34,3 +34,5 @@ github.com/guptarohit/asciigraph v0.8.1 h1:JBeHTGj2ntBODnZxLQhp+GQZdlZ/48S/m7J1i
 github.com/guptarohit/asciigraph v0.8.1/go.mod h1:dYl5wwK4gNsnFf9Zp+l06rFiDZ5YtXM6x7SRWZ3KGag=
 github.com/sethvargo/go-githubactions v1.3.2 h1:gkibLr/QjosgNWoCf1V58rTMRZw7xZtSB7dY4atbl1Y=
 github.com/sethvargo/go-githubactions v1.3.2/go.mod h1:7/4WeHgYfSz9U5vwuToCK9KPnELVHAhGtRwLREOQV80=
+golang.org/x/sync v0.22.0 h1:SZjpbeLmrCk4xhRSZFNZW5gFUeCeFgjekvI/+gfScek=
+golang.org/x/sync v0.22.0/go.mod h1:9xrNwdLfx4jkKbNva9FpL6vEN7evnE43NNNJQ2LF3+0=

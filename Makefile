@@ -25,19 +25,19 @@ js:
 
 .PHONY: main-linux-amd64
 main-linux-amd64: _require-upx
-	rm -f main-linux-amd64-*
+	rm -f "main-linux-amd64" main-linux-amd64-*
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -installsuffix static -o "main-linux-amd64" $(COMMAND)
 	upx -q -9 "main-linux-amd64"
 
 .PHONY: main-linux-arm64
 main-linux-arm64: _require-upx
-	rm -f main-linux-arm64-*
+	rm -f "main-linux-arm64" main-linux-arm64-*
 	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -installsuffix static -o "main-linux-arm64" $(COMMAND)
 	upx -q -9 "main-linux-arm64"
 
 .PHONY: main-windows-amd64
 main-windows-amd64: _require-upx
-	rm -f main-windows-amd64-*
+	rm -f "main-windows-amd64.exe" main-windows-amd64-*
 	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -installsuffix static -o "main-windows-amd64.exe" $(COMMAND)
 	upx -q -9 "main-windows-amd64.exe"
 

@@ -1,0 +1,82 @@
+name: Test / Sticky Git
+
+on:
+  push:
+    branches:
+      - main
+      - v*
+      - feature/*
+      - fix/*
+      - auto/*
+  workflow_dispatch:
+
+jobs:
+  cold:
+    runs-on: runs-on=${{ github.run_id }}/env=bootstrap/cpu=2/family=m7/image=ubuntu24-full-x64/sticky=git-two-invocation-${{ github.run_id }}:20gb
+    steps:
+      - name: Checkout action under test
+        uses: actions/checkout@v7
+      - name: Start sticky Git cache
+        id: git-cache
+        uses: ./
+        with:
+          sticky_cache: git
+      - name: Checkout through sticky Git proxy
+        uses: actions/checkout@v7
+        with:
+          path: target
+      - name: Mount workspace cache in a second invocation
+        id: workspace-cache
+        uses: ./
+        with:
+          sticky_cache: custom,path=target/.runs-on-cache
+      - name: Verify cold two-invocation setup
+        shell: bash
+        env:
+          GIT_CACHE_HIT: ${{ steps.git-cache.outputs.cache-hit }}
+          WORKSPACE_CACHE_HIT: ${{ steps.workspace-cache.outputs.cache-hit }}
+        run: |
+          test "$GIT_CACHE_HIT" = false
+          test "$WORKSPACE_CACHE_HIT" = false
+          git config --global --get-regexp 'url\..*github\.com/\.insteadof' | grep -q '127\.0\.0\.1'
+          git -C target fetch --depth=1 origin HEAD
+          echo "two-invocation" > target/.runs-on-cache/marker
+
+  wait-for-snapshot:
+    needs: cold
+    runs-on: ubuntu-slim
+    steps:
+      - name: Wait for the cold snapshot to become selectable
+        run: sleep 120
+
+  warm:
+    needs: wait-for-snapshot
+    runs-on: runs-on=${{ github.run_id }}/env=bootstrap/cpu=2/family=m7/image=ubuntu24-full-x64/sticky=git-two-invocation-${{ github.run_id }}:20gb
+    steps:
+      - name: Checkout action under test
+        uses: actions/checkout@v7
+      - name: Restore sticky Git cache
+        id: git-cache
+        uses: ./
+        with:
+          sticky_cache: git
+      - name: Checkout through restored Git proxy
+        uses: actions/checkout@v7
+        with:
+          path: target
+      - name: Restore workspace cache in a second invocation
+        id: workspace-cache
+        uses: ./
+        with:
+          sticky_cache: custom,path=target/.runs-on-cache
+      - name: Verify warm two-invocation setup
+        shell: bash
+        env:
+          GIT_CACHE_HIT: ${{ steps.git-cache.outputs.cache-hit }}
+          WORKSPACE_CACHE_HIT: ${{ steps.workspace-cache.outputs.cache-hit }}
+        run: |
+          test "$GIT_CACHE_HIT" = true
+          test "$WORKSPACE_CACHE_HIT" = true
+          test "$(cat target/.runs-on-cache/marker)" = "two-invocation"
+          git config --global --get-regexp 'url\..*github\.com/\.insteadof' | grep -q '127\.0\.0\.1'
+          git -C target fetch --depth=1 origin HEAD

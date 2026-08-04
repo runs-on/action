@@ -3,6 +3,7 @@ package gitproxy
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"io"
 	"net/http"
 	"regexp"
@@ -21,6 +22,10 @@ var wantRe = regexp.MustCompile(`(?m)^want ([0-9a-f]{40,64})`)
 // force-push between the workflow event and now): those requests are
 // forwarded upstream so the fetch behaves exactly like a vanilla checkout.
 func (s *Server) handleUploadPack(w http.ResponseWriter, r *http.Request, t target) {
+	if !s.shouldMirror(t) {
+		s.forwardUpstream(w, r, t, r.Body, "outside-cache-scope")
+		return
+	}
 	repoPath := s.mirror.RepoPath(t.host, t.owner, t.repo)
 
 	body, overflow, err := bufferBody(r.Body, maxParseBody)
@@ -33,6 +38,14 @@ func (s *Server) handleUploadPack(w http.ResponseWriter, r *http.Request, t targ
 	restored := io.Reader(bytes.NewReader(body))
 	if overflow != nil {
 		restored = io.MultiReader(restored, overflow)
+	}
+	wants := parseWants(body, r.Header.Get("Content-Encoding"))
+	if !s.opts.AllRefs && len(wants) == 0 {
+		// Protocol v2 discovers refs through a want-less ls-refs POST. Use the
+		// upstream advertisement so refs outside the scoped mirror remain
+		// addressable by name.
+		s.forwardUpstream(w, r, t, restored, "live-ref-advertisement")
+		return
 	}
 
 	if s.mirror.SyncFailed(t.host, t.owner, t.repo) {
@@ -54,17 +67,41 @@ func (s *Server) handleUploadPack(w http.ResponseWriter, r *http.Request, t targ
 		return
 	}
 
-	for _, want := range parseWants(body, r.Header.Get("Content-Encoding")) {
-		if !s.mirror.HasObject(r.Context(), repoPath, want) {
-			s.log.Warn("want not in mirror, forwarding upstream", "repo", t.repoKey(), "want", want)
-			s.forwardUpstream(w, r, t, restored, "missing-want")
-			return
+	missing := missingWants(r.Context(), s.mirror, repoPath, wants)
+	if len(missing) > 0 && !s.opts.AllRefs {
+		// A multi-ref checkout (notably actions/checkout fetch-depth: 0) can
+		// ask for tips outside the workflow commit history. Expand only this
+		// workflow repository into the scoped namespace, then serve the
+		// original request locally. Git negotiates against the existing pack,
+		// so the workflow history is not downloaded twice.
+		authHeader := s.upstreamAuth(r)
+		if !s.mirror.WantsAreAdvertisedTips(r.Context(), upstreamURL, authHeader, missing) {
+			s.log.Info("missing want is not an advertised branch or tag tip, forwarding without scoped expansion", "repo", t.repoKey(), "want", missing[0])
+		} else if err := s.mirror.ExpandScopedRepo(r.Context(), t.host, t.owner, t.repo, upstreamURL, authHeader); err != nil {
+			s.log.Warn("scoped mirror expansion failed, forwarding upstream", "repo", t.repoKey(), "err", err)
+		} else {
+			missing = missingWants(r.Context(), s.mirror, repoPath, wants)
 		}
+	}
+	if len(missing) > 0 {
+		s.log.Warn("want not in mirror, forwarding upstream", "repo", t.repoKey(), "want", missing[0])
+		s.forwardUpstream(w, r, t, restored, "missing-want")
+		return
 	}
 
 	req := r.Clone(r.Context())
 	req.Body = io.NopCloser(restored)
 	s.serveCGI(w, req, t.cgiPath("/git-upload-pack"))
+}
+
+func missingWants(ctx context.Context, mirror *Mirror, repoPath string, wants []string) []string {
+	missing := make([]string, 0, len(wants))
+	for _, want := range wants {
+		if !mirror.HasObject(ctx, repoPath, want) {
+			missing = append(missing, want)
+		}
+	}
+	return missing
 }
 
 // bufferBody reads up to limit bytes. When the body is larger, the buffered

@@ -45,6 +45,13 @@ func TestParseCacheRequests(t *testing.T) {
 	if len(requests) != 1 || requests[0].Mode.Name != "buildkit" {
 		t.Fatalf("unexpected requests: %#v", requests)
 	}
+	requests, err = ParseCacheRequests([]string{"git-full"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(requests) != 1 || requests[0].Mode.Name != "git-full" {
+		t.Fatalf("unexpected full Git request: %#v", requests)
+	}
 }
 
 func TestParseCacheRequestsMergesDuplicateBuiltins(t *testing.T) {
@@ -127,6 +134,25 @@ func TestValidateCacheOrdering(t *testing.T) {
 				t.Fatalf("validation failed: %v", err)
 			}
 		})
+	}
+}
+
+func TestValidateCacheOrderingRejectsBothGitModes(t *testing.T) {
+	requests, err := ParseCacheRequests([]string{"git", "git-full"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateCacheOrdering(requests, "linux", "/home/runner", "/workspace"); err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Fatalf("validation error = %v", err)
+	}
+}
+
+func TestGitModesShareCacheHitTracking(t *testing.T) {
+	if got, want := modeStateKey("git-full"), modeStateKey("git"); got != want {
+		t.Fatalf("git-full tracking key = %q, want %q", got, want)
+	}
+	if got := modeStateKey("buildkit"); got != "buildkit" {
+		t.Fatalf("buildkit tracking key = %q", got)
 	}
 }
 

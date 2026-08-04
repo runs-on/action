@@ -58,6 +58,16 @@ type jobCacheState struct {
 	Modes  map[string]bool `json:"modes"`
 }
 
+// Both Git policies use the same mirror directory. Preserve the original
+// cold/warm result when later invocations switch policy after checkout has
+// populated that directory.
+func modeStateKey(name string) string {
+	if name == "git-full" {
+		return "git"
+	}
+	return name
+}
+
 func readJobCacheState() (jobCacheState, error) {
 	state := jobCacheState{
 		Mounts: map[string]bool{},

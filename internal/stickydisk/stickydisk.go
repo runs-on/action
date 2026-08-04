@@ -154,10 +154,11 @@ func Configure(action *githubactions.Action, opts Options) error {
 		// Modes with a Setup function own their whole setup (no bind mounts).
 		if mode.Setup != nil {
 			hit, err := mode.Setup(action, mountRoot)
+			stateKey := modeStateKey(mode.Name)
 			// A repeated invocation (e.g. the token-change proxy restart) must
 			// preserve the original cold/warm result: by now checkout has
 			// populated the mirror, which is not a restored snapshot.
-			if originalHit, found := state.Modes[mode.Name]; found {
+			if originalHit, found := state.Modes[stateKey]; found {
 				hit = originalHit
 			}
 			if err != nil {
@@ -166,7 +167,7 @@ func Configure(action *githubactions.Action, opts Options) error {
 				}
 				action.Warningf("Failed to set up %s cache: %v", mode.Name, err)
 			} else {
-				state.Modes[mode.Name] = hit
+				state.Modes[stateKey] = hit
 			}
 			results = append(results, mountResult{Target: mode.Name, Hit: hit && err == nil, Err: err})
 			continue
@@ -329,13 +330,18 @@ func validateCacheOrdering(requests []CacheRequest, goos, home, workspace string
 	}
 
 	hasGit := false
+	gitModes := 0
 	for _, request := range requests {
 		if !request.Custom {
 			switch request.Mode.Name {
-			case "git":
+			case "git", "git-full":
 				hasGit = true
+				gitModes++
 			}
 		}
+	}
+	if gitModes > 1 {
+		return fmt.Errorf("git and git-full cache modes are mutually exclusive")
 	}
 	if !hasGit {
 		return nil
@@ -343,7 +349,7 @@ func validateCacheOrdering(requests []CacheRequest, goos, home, workspace string
 
 	var workspaceModes []string
 	for _, request := range requests {
-		if !request.Custom && request.Mode.Name == "git" {
+		if !request.Custom && (request.Mode.Name == "git" || request.Mode.Name == "git-full") {
 			continue
 		}
 		paths := request.Paths

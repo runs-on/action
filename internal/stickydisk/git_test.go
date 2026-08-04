@@ -261,6 +261,44 @@ func TestGitProxyStateMatchesMirrorRoot(t *testing.T) {
 	}
 }
 
+func TestGitProxyPostStateSurvivesMissingRuntimeStateFile(t *testing.T) {
+	stateFile := filepath.Join(t.TempDir(), "github-state")
+	t.Setenv("GITHUB_STATE", stateFile)
+	action := githubactions.New(githubactions.WithWriter(os.Stderr))
+	want := gitproxy.State{PID: 4321, MirrorDir: "/mnt/sticky/git/mirrors"}
+
+	saveGitProxyPostState(action, want)
+	contents, err := os.ReadFile(stateFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range []string{gitProxyPIDStateKey, "4321", gitProxyMirrorDirStateKey, want.MirrorDir} {
+		if !strings.Contains(string(contents), value) {
+			t.Fatalf("saved post state %q does not contain %q", contents, value)
+		}
+	}
+
+	// The mutable runtime state file is deliberately absent. GitHub exposes
+	// saved action state directly to this invocation's post step.
+	t.Setenv(gitProxyPIDStateEnv, "4321")
+	t.Setenv(gitProxyMirrorDirStateEnv, want.MirrorDir)
+	got, found, err := loadGitProxyPostState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found || got.PID != want.PID || got.MirrorDir != want.MirrorDir {
+		t.Fatalf("loaded post state = (%+v, %t), want (%+v, true)", got, found, want)
+	}
+}
+
+func TestLoadGitProxyPostStateRejectsInvalidPID(t *testing.T) {
+	t.Setenv(gitProxyPIDStateEnv, "not-a-pid")
+	t.Setenv(gitProxyMirrorDirStateEnv, "/mnt/sticky/git/mirrors")
+	if _, _, err := loadGitProxyPostState(); err == nil {
+		t.Fatal("invalid saved proxy PID was accepted")
+	}
+}
+
 func TestGitProxyOwnerDistinguishesMatrixExecutions(t *testing.T) {
 	t.Setenv("GITHUB_RUN_ID", "123")
 	t.Setenv("GITHUB_RUN_ATTEMPT", "1")
@@ -295,16 +333,16 @@ func TestGitMirrorCacheHitRequiresBareRepository(t *testing.T) {
 	if err := os.MkdirAll(repoPath, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if gitMirrorCacheHit(mirrorDir, "owner/repo") {
+	if gitMirrorCacheHit(mirrorDir, "owner/repo", false) {
 		t.Fatal("non-repository mirror reported a cache hit")
 	}
 	if out, err := exec.Command("git", "init", "--bare", repoPath).CombinedOutput(); err != nil {
 		t.Fatalf("git init --bare failed: %v\n%s", err, out)
 	}
-	if !gitMirrorCacheHit(mirrorDir, "owner/repo") {
+	if !gitMirrorCacheHit(mirrorDir, "owner/repo", false) {
 		t.Fatal("valid bare mirror did not report a cache hit")
 	}
-	if !gitMirrorCacheHit(mirrorDir, "Owner/RePo") {
+	if !gitMirrorCacheHit(mirrorDir, "Owner/RePo", false) {
 		t.Fatal("mixed-case GitHub repository did not reuse lowercase mirror")
 	}
 
@@ -339,8 +377,54 @@ func TestGitMirrorCacheHitRequiresBareRepository(t *testing.T) {
 	if err := os.Remove(filepath.Join(repoPath, "objects", blob[:2], blob[2:])); err != nil {
 		t.Fatalf("remove reachable mirror object: %v", err)
 	}
-	if gitMirrorCacheHit(mirrorDir, "owner/repo") {
+	if gitMirrorCacheHit(mirrorDir, "owner/repo", false) {
 		t.Fatal("mirror with a missing reachable object reported a cache hit")
+	}
+}
+
+func TestScopedGitMirrorCacheHitRejectsFullMirror(t *testing.T) {
+	requireGit(t)
+	mirrorDir := t.TempDir()
+	repoPath := filepath.Join(mirrorDir, "github.com", "owner", "repo.git")
+	if err := os.MkdirAll(filepath.Dir(repoPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("git", "init", "--bare", repoPath).CombinedOutput(); err != nil {
+		t.Fatalf("git init --bare failed: %v\n%s", err, out)
+	}
+	worktree := t.TempDir()
+	for _, args := range [][]string{
+		{"-C", worktree, "init"},
+		{"-C", worktree, "config", "user.name", "test"},
+		{"-C", worktree, "config", "user.email", "test@example.com"},
+		{"-C", worktree, "commit", "--allow-empty", "-m", "cached"},
+	} {
+		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+			t.Fatalf("git %s failed: %v\n%s", strings.Join(args, " "), err, out)
+		}
+	}
+	headOut, err := exec.Command("git", "-C", worktree, "rev-parse", "HEAD").CombinedOutput()
+	if err != nil {
+		t.Fatalf("resolve fixture HEAD failed: %v\n%s", err, headOut)
+	}
+	head := strings.TrimSpace(string(headOut))
+	if out, err := exec.Command("git", "--git-dir", repoPath, "fetch", worktree, "+"+head+":refs/heads/main").CombinedOutput(); err != nil {
+		t.Fatalf("populate full mirror failed: %v\n%s", err, out)
+	}
+	if gitMirrorCacheHit(mirrorDir, "owner/repo", true) {
+		t.Fatal("full mirror reported a scoped cache hit")
+	}
+	if out, err := exec.Command("git", "--git-dir", repoPath, "update-ref", "refs/heads/runs-on/current", head).CombinedOutput(); err != nil {
+		t.Fatalf("create scoped ref failed: %v\n%s", err, out)
+	}
+	if out, err := exec.Command("git", "--git-dir", repoPath, "update-ref", "-d", "refs/heads/main").CombinedOutput(); err != nil {
+		t.Fatalf("remove full ref failed: %v\n%s", err, out)
+	}
+	if out, err := exec.Command("git", "--git-dir", repoPath, "symbolic-ref", "HEAD", "refs/heads/runs-on/current").CombinedOutput(); err != nil {
+		t.Fatalf("set scoped HEAD failed: %v\n%s", err, out)
+	}
+	if !gitMirrorCacheHit(mirrorDir, "owner/repo", true) {
+		t.Fatal("compatible scoped mirror did not report a cache hit")
 	}
 }
 
@@ -368,6 +452,30 @@ func TestUpstreamTokenDigest(t *testing.T) {
 	}
 	if upstreamTokenDigest("") == upstreamTokenDigest("token-a") {
 		t.Fatal("empty token shares a digest with a real one")
+	}
+}
+
+func TestCurrentGitProxyPolicy(t *testing.T) {
+	t.Setenv("GITHUB_REPOSITORY", "Runs-On/Action")
+	t.Setenv("GITHUB_SHA", strings.Repeat("a", 40))
+
+	policy, err := currentGitProxyPolicy(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if policy.allRefs || policy.repository != "runs-on/action" || policy.ref != strings.Repeat("a", 40) {
+		t.Fatalf("scoped policy = %#v", policy)
+	}
+	full, err := currentGitProxyPolicy(true)
+	if err != nil || !full.allRefs || full.repository != "" || full.ref != "" {
+		t.Fatalf("full policy = %#v, %v", full, err)
+	}
+	if policy.digest() == full.digest() {
+		t.Fatal("scoped and full policies share a digest")
+	}
+	t.Setenv("GITHUB_SHA", strings.Repeat("a", 64))
+	if _, err := currentGitProxyPolicy(false); err == nil {
+		t.Fatal("scoped policy accepted an unsupported SHA-256 object ID")
 	}
 }
 

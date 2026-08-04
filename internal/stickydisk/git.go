@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -25,6 +26,11 @@ const (
 	gitProxyStartWait = 10 * time.Second
 	gitProxyStopWait  = 12 * time.Second
 	gitProxyKillWait  = 2 * time.Second
+
+	gitProxyPIDStateKey       = "runs_on_git_proxy_pid"
+	gitProxyPIDStateEnv       = "STATE_" + gitProxyPIDStateKey
+	gitProxyMirrorDirStateKey = "runs_on_git_proxy_mirror_dir"
+	gitProxyMirrorDirStateEnv = "STATE_" + gitProxyMirrorDirStateKey
 )
 
 func gitProxyStateFile() string {
@@ -48,6 +54,14 @@ func gitMirrorDir(mountRoot string) string {
 // anything the proxy cannot serve (LFS, receive-pack) is forwarded to
 // github.com, so nothing breaks when the mirror is cold or unavailable.
 func setupGit(action *githubactions.Action, mountRoot string) (hit bool, err error) {
+	return setupGitMode(action, mountRoot, false)
+}
+
+func setupGitFull(action *githubactions.Action, mountRoot string) (hit bool, err error) {
+	return setupGitMode(action, mountRoot, true)
+}
+
+func setupGitMode(action *githubactions.Action, mountRoot string, allRefs bool) (hit bool, err error) {
 	// A cancelled job can leave rewrites behind. Remove them before making any
 	// current-job decision, including a GHES skip.
 	if err := restoreGitProxyRewrites(); err != nil {
@@ -58,16 +72,20 @@ func setupGit(action *githubactions.Action, mountRoot string) (hit bool, err err
 		action.Infof("git cache mode only supports github.com (GITHUB_SERVER_URL=%s), skipping.", serverURL)
 		return false, nil
 	}
+	policy, err := currentGitProxyPolicy(allRefs)
+	if err != nil {
+		return false, err
+	}
 
 	mirrorDir := gitMirrorDir(mountRoot)
 	if err := ensureRealDirectoryPath(mountRoot, mirrorDir); err != nil {
 		return false, fmt.Errorf("validate Git mirror directory: %w", err)
 	}
 	if repo := os.Getenv("GITHUB_REPOSITORY"); repo != "" {
-		hit = gitMirrorCacheHit(mirrorDir, repo)
+		hit = gitMirrorCacheHit(mirrorDir, repo, !allRefs)
 	}
 
-	state, clientToken, err := ensureGitProxy(action, mirrorDir)
+	state, clientToken, err := ensureGitProxy(action, mirrorDir, policy)
 	if err != nil {
 		return hit, err
 	}
@@ -78,15 +96,59 @@ func setupGit(action *githubactions.Action, mountRoot string) (hit bool, err err
 		return hit, err
 	}
 
-	action.Infof("Git mirror proxy ready on 127.0.0.1:%d (mirrors: %s). github.com fetches are served from the sticky disk; run this action BEFORE actions/checkout to accelerate it.", state.Port, mirrorDir)
+	if allRefs {
+		action.Infof("Full Git mirror proxy ready on 127.0.0.1:%d (mirrors: %s). All github.com fetches are served from the sticky disk; run this action BEFORE actions/checkout to accelerate it.", state.Port, mirrorDir)
+	} else {
+		action.Infof("Git mirror proxy ready on 127.0.0.1:%d (mirrors: %s). The workflow repository history at %s is cached; other github.com fetches go upstream.", state.Port, mirrorDir, policy.ref)
+	}
 	return hit, nil
 }
 
-func gitMirrorCacheHit(mirrorDir, repo string) bool {
+type gitProxyPolicy struct {
+	allRefs    bool
+	repository string
+	ref        string
+}
+
+func currentGitProxyPolicy(allRefs bool) (gitProxyPolicy, error) {
+	if allRefs {
+		return gitProxyPolicy{allRefs: true}, nil
+	}
+	repository := strings.ToLower(strings.TrimSpace(os.Getenv("GITHUB_REPOSITORY")))
+	ref := strings.TrimSpace(os.Getenv("GITHUB_SHA"))
+	if repository == "" || ref == "" {
+		return gitProxyPolicy{}, fmt.Errorf("git cache mode requires GITHUB_REPOSITORY and GITHUB_SHA")
+	}
+	if len(ref) != 40 || !isHex(ref) {
+		return gitProxyPolicy{}, fmt.Errorf("GITHUB_SHA must be a 40-character SHA-1 object ID")
+	}
+	parts := strings.Split(repository, "/")
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return gitProxyPolicy{}, fmt.Errorf("GITHUB_REPOSITORY must use owner/name")
+	}
+	return gitProxyPolicy{repository: repository, ref: ref}, nil
+}
+
+func isHex(value string) bool {
+	_, err := hex.DecodeString(value)
+	return err == nil
+}
+
+func (p gitProxyPolicy) digest() string {
+	value := fmt.Sprintf("all=%t;repository=%s;ref=%s", p.allRefs, p.repository, p.ref)
+	sum := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(sum[:])
+}
+
+func gitMirrorCacheHit(mirrorDir, repo string, scoped bool) bool {
 	// GitHub repository identifiers are case-insensitive, and the proxy uses
 	// lowercase local mirror keys so alternate URL casing shares one cache.
 	repo = strings.ToLower(repo)
-	return gitproxy.IsUsableRepo(context.Background(), mirrorDir, filepath.Join(mirrorDir, "github.com", repo+".git"))
+	repoPath := filepath.Join(mirrorDir, "github.com", repo+".git")
+	if scoped {
+		return gitproxy.IsScopedUsableRepo(context.Background(), mirrorDir, repoPath)
+	}
+	return gitproxy.IsUsableRepo(context.Background(), mirrorDir, repoPath)
 }
 
 // ensureGitProxy starts the proxy (re-executing this binary with the hidden
@@ -94,7 +156,7 @@ func gitMirrorCacheHit(mirrorDir, repo string) bool {
 // healthy, and waits for it to publish its state file. It returns the opaque
 // per-job client token that git clients must present: the real GitHub
 // credential stays inside the proxy process and never enters git config.
-func ensureGitProxy(action *githubactions.Action, mirrorDir string) (gitproxy.State, string, error) {
+func ensureGitProxy(action *githubactions.Action, mirrorDir string, policy gitProxyPolicy) (gitproxy.State, string, error) {
 	owner := gitProxyOwner()
 	clientToken := os.Getenv(gitproxy.EnvClientToken)
 	if clientToken == "" {
@@ -120,8 +182,12 @@ func ensureGitProxy(action *githubactions.Action, mirrorDir string) (gitproxy.St
 	upstreamDigest := upstreamTokenDigest(upstreamToken)
 	sameUpstream := os.Getenv(gitProxyUpstreamDigestEnv) == upstreamDigest
 	action.SetEnv(gitProxyUpstreamDigestEnv, upstreamDigest)
+	policyDigest := policy.digest()
+	samePolicy := os.Getenv(gitProxyPolicyDigestEnv) == policyDigest
+	action.SetEnv(gitProxyPolicyDigestEnv, policyDigest)
 	if state, err := gitproxy.ReadStateFile(gitProxyStateFile()); err == nil {
-		if sameUpstream && gitProxyHealthy(state.Port, healthToken) && gitProxyStateMatches(state, mirrorDir, owner) {
+		if sameUpstream && samePolicy && gitProxyHealthy(state.Port, healthToken) && gitProxyStateMatches(state, mirrorDir, owner) {
+			saveGitProxyPostState(action, state)
 			action.Infof("Reusing running git proxy on port %d", state.Port)
 			return state, clientToken, nil
 		}
@@ -160,6 +226,14 @@ func ensureGitProxy(action *githubactions.Action, mirrorDir string) (gitproxy.St
 		gitproxy.EnvHealthToken+"="+healthToken,
 		gitproxy.EnvClientToken+"="+clientToken,
 	)
+	if policy.allRefs {
+		cmd.Env = append(cmd.Env, gitproxy.EnvAllRefs+"=true")
+	} else {
+		cmd.Env = append(cmd.Env,
+			gitproxy.EnvRepository+"="+policy.repository,
+			gitproxy.EnvRef+"="+policy.ref,
+		)
+	}
 	// The upstream credential travels over stdin, never the environment:
 	// /proc/<pid>/environ is readable by any same-uid process for the proxy's
 	// whole lifetime, while stdin is consumed once at startup.
@@ -173,6 +247,7 @@ func ensureGitProxy(action *githubactions.Action, mirrorDir string) (gitproxy.St
 	if err := cmd.Start(); err != nil {
 		return gitproxy.State{}, "", fmt.Errorf("failed to start git proxy: %w", err)
 	}
+	saveGitProxyPostState(action, gitproxy.State{PID: cmd.Process.Pid, MirrorDir: mirrorDir})
 	// The proxy must outlive this step: it serves fetches for the whole job
 	// and is stopped by the post step.
 	if err := cmd.Process.Release(); err != nil {
@@ -251,6 +326,7 @@ func gitProxyStateMatches(state gitproxy.State, mirrorDir, owner string) bool {
 // digest is preimage-resistant and GitHub tokens are high-entropy, so
 // exposing it to later steps reveals nothing about the token.
 const gitProxyUpstreamDigestEnv = "RUNS_ON_GIT_PROXY_UPSTREAM_DIGEST"
+const gitProxyPolicyDigestEnv = "RUNS_ON_GIT_PROXY_POLICY_DIGEST"
 
 func upstreamTokenDigest(token string) string {
 	sum := sha256.Sum256([]byte("runs-on git proxy upstream token:" + token))
@@ -477,18 +553,65 @@ func shouldRestoreGitProxyRewrites(state gitproxy.State, owner string, healthy b
 	return state.Owner != owner || !healthy
 }
 
+func saveGitProxyPostState(action *githubactions.Action, state gitproxy.State) {
+	action.SaveState(gitProxyPIDStateKey, strconv.Itoa(state.PID))
+	action.SaveState(gitProxyMirrorDirStateKey, state.MirrorDir)
+}
+
+func loadGitProxyPostState() (gitproxy.State, bool, error) {
+	pidValue := strings.TrimSpace(os.Getenv(gitProxyPIDStateEnv))
+	mirrorDir := strings.TrimSpace(os.Getenv(gitProxyMirrorDirStateEnv))
+	if pidValue == "" && mirrorDir == "" {
+		return gitproxy.State{}, false, nil
+	}
+	if pidValue == "" || mirrorDir == "" {
+		return gitproxy.State{}, false, fmt.Errorf("incomplete saved Git proxy state")
+	}
+	pid, err := strconv.Atoi(pidValue)
+	if err != nil || pid <= 0 {
+		return gitproxy.State{}, false, fmt.Errorf("invalid saved Git proxy PID %q", pidValue)
+	}
+	return gitproxy.State{PID: pid, MirrorDir: mirrorDir}, true, nil
+}
+
 // stopGit removes the URL rewrites then stops the proxy, in that order: git
 // config must never point at a dead proxy. Runs in the post step, before the
 // runner's job-completed hook unmounts and snapshots the sticky disk.
 func stopGit(action *githubactions.Action) error {
+	var stoppedState gitproxy.State
 	err := restoreRewritesThenStop(restoreGitProxyRewrites, func() error {
-		if state, err := gitproxy.ReadStateFile(gitProxyStateFile()); err == nil {
-			return terminateGitProxy(action, state.PID)
+		state, found, err := loadGitProxyPostState()
+		if err != nil {
+			return err
 		}
+		if !found {
+			return nil
+		}
+		if err := terminateGitProxy(action, state.PID); err != nil {
+			return err
+		}
+		stoppedState = state
 		return nil
 	})
 	if err != nil {
 		return fmt.Errorf("git cache mode cleanup: %w", err)
+	}
+	if stoppedState.MirrorDir != "" {
+		mountRoot := os.Getenv("RUNS_ON_STICKYDISK_DIR")
+		if err := validateStickyMount(mountRoot); err != nil {
+			return fmt.Errorf("git cache mode cleanup: validate sticky disk: %w", err)
+		}
+		mirrorDir := gitMirrorDir(mountRoot)
+		if filepath.Clean(stoppedState.MirrorDir) != filepath.Clean(mirrorDir) {
+			return fmt.Errorf("git cache mode cleanup: proxy mirror root %s does not match sticky disk mirror root %s", stoppedState.MirrorDir, mirrorDir)
+		}
+		removed, err := gitproxy.CleanupInterruptedRepacks(mirrorDir)
+		if err != nil {
+			return fmt.Errorf("git cache mode cleanup: remove interrupted repack files: %w", err)
+		}
+		if removed > 0 {
+			action.Infof("Removed %d temporary Git pack file(s) left by interrupted repacks.", removed)
+		}
 	}
 
 	if os.Getenv("RUNNER_DEBUG") == "1" {

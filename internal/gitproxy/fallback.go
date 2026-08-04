@@ -35,6 +35,14 @@ func lfsBatchIsDownload(body []byte) bool {
 	return json.Unmarshal(body, &batch) == nil && batch.Operation == "download"
 }
 
+// lfsLockRequestIsReadOnly identifies lock operations that inspect server
+// state without creating or deleting a lock. Verification uses POST but does
+// not mutate state, so method alone cannot distinguish LFS reads from writes.
+func lfsLockRequestIsReadOnly(t target, r *http.Request) bool {
+	return (r.Method == http.MethodGet && strings.HasSuffix(t.rest, "/info/lfs/locks")) ||
+		(r.Method == http.MethodPost && strings.HasSuffix(t.rest, "/info/lfs/locks/verify"))
+}
+
 // forwardUpstream transparently replays the request against the real host
 // (https://{host}{rest}), streaming the response back. Used for everything
 // the mirror cannot or should not serve: LFS endpoints, receive-pack,
@@ -52,13 +60,13 @@ func (s *Server) forwardUpstream(w http.ResponseWriter, r *http.Request, t targe
 	// for the real token (or drop it) exactly like the mirror sync path.
 	// Substitution is limited to read operations: legitimate pushes are pinned
 	// upstream by pushInsteadOf with the pusher's own credential, and LFS
-	// writes (uploads, locks) only occur in push flows, so granting the
+	// writes (uploads, lock creation, unlocks) only occur in push flows, so granting the
 	// proxy's token to any forwarded write would only serve a same-job client
 	// trying to write to repositories it cannot itself access.
 	substitute := !isReceivePack(t, r)
 	if substitute && strings.Contains(t.rest, "/info/lfs/") {
-		substitute = false
-		if strings.HasSuffix(t.rest, "/info/lfs/objects/batch") && r.Header.Get("Content-Encoding") == "" {
+		substitute = lfsLockRequestIsReadOnly(t, r)
+		if !substitute && strings.HasSuffix(t.rest, "/info/lfs/objects/batch") && r.Header.Get("Content-Encoding") == "" {
 			peek, err := io.ReadAll(io.LimitReader(body, 1<<20))
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusBadGateway)

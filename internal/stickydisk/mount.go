@@ -127,7 +127,7 @@ func ensureRealDirectoryPath(root, target string) error {
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return fmt.Errorf("path %s is outside sticky disk %s", target, root)
 	}
-	if err := requireRealDirectory(root); err != nil {
+	if err := requireStickyRootDirectory(root); err != nil {
 		return err
 	}
 	if rel == "." {
@@ -149,6 +149,29 @@ func ensureRealDirectoryPath(root, target string) error {
 		if !info.IsDir() || info.Mode()&(os.ModeSymlink|os.ModeIrregular) != 0 {
 			return fmt.Errorf("sticky cache path component %s is not a real directory", current)
 		}
+	}
+	return nil
+}
+
+// requireStickyRootDirectory accepts the verified Windows volume mount point
+// itself while preserving strict link rejection below it. Windows reports an
+// NTFS volume mount point as a reparse point, so Lstat does not classify it as
+// a real directory even though mountvol has verified the attached volume.
+func requireStickyRootDirectory(path string) error {
+	return requireStickyRootDirectoryWith(path, runtime.GOOS == "windows" && isMountpoint(path))
+}
+
+func requireStickyRootDirectoryWith(path string, activeWindowsMount bool) error {
+	realErr := requireRealDirectory(path)
+	if realErr == nil || !activeWindowsMount {
+		return realErr
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("inspect sticky mount %s: %w", path, err)
+	}
+	if !info.IsDir() {
+		return realErr
 	}
 	return nil
 }

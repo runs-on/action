@@ -60,6 +60,25 @@ func TestCacheMountRejectsJunctionInStickySourcePath(t *testing.T) {
 	}
 }
 
+func TestRequireStickyRootDirectoryAllowsVerifiedVolumeMountPoint(t *testing.T) {
+	root := t.TempDir()
+	volume := filepath.Join(root, "volume")
+	mountRoot := filepath.Join(root, "sticky")
+	if err := os.MkdirAll(volume, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if output, err := exec.Command("cmd", "/c", "mklink", "/J", mountRoot, volume).CombinedOutput(); err != nil {
+		t.Skipf("junctions unavailable: %v: %s", err, output)
+	}
+
+	if err := requireStickyRootDirectoryWith(mountRoot, true); err != nil {
+		t.Fatalf("verified Windows mount point was rejected: %v", err)
+	}
+	if err := requireStickyRootDirectoryWith(mountRoot, false); err == nil {
+		t.Fatal("unverified junction was accepted as the sticky root")
+	}
+}
+
 func TestWindowsPathsAreCaseInsensitiveAndExpandBackslashHome(t *testing.T) {
 	if canonicalPath(`C:\Cache`) != canonicalPath(`c:\cache`) {
 		t.Fatal("Windows path canonicalization is case-sensitive")

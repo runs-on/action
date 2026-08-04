@@ -148,10 +148,10 @@ func TestValidateCacheOrderingRejectsBothGitModes(t *testing.T) {
 }
 
 func TestGitModesShareCacheHitTracking(t *testing.T) {
-	if got, want := setupModeTrackingKey("git-full"), setupModeTrackingKey("git"); got != want {
+	if got, want := modeStateKey("git-full"), modeStateKey("git"); got != want {
 		t.Fatalf("git-full tracking key = %q, want %q", got, want)
 	}
-	if got := setupModeTrackingKey("buildkit"); got != "mode:buildkit" {
+	if got := modeStateKey("buildkit"); got != "buildkit" {
 		t.Fatalf("buildkit tracking key = %q", got)
 	}
 }
@@ -300,7 +300,7 @@ func TestWaitForReadyTimesOut(t *testing.T) {
 	}
 }
 
-func TestWaitForReadyWaitsForFallbackMarker(t *testing.T) {
+func TestWaitForReadyWaitsForReadyMarker(t *testing.T) {
 	root := t.TempDir()
 	readyFile := filepath.Join(root, "stickydisk.ready")
 	go func() {

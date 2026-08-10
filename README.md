@@ -393,7 +393,33 @@ Supported cache modes and the directories they persist:
 | `gradle` | | `~/.gradle/caches`, `~/.gradle/wrapper` |
 | `maven` | | `~/.m2/repository` |
 | `playwright` | | `~/.cache/ms-playwright` |
+| `tool-cache` | | `$RUNNER_TOOL_CACHE` (toolchains installed by `setup-*` actions) |
 | `custom` | | One or more paths supplied with `path=` |
+
+#### `tool-cache` mode
+
+The `tool-cache` mode persists toolchains installed through GitHub's tool
+cache. Run this action before actions such as `actions/setup-go`,
+`actions/setup-node`, or `actions/setup-python`:
+
+```yaml
+jobs:
+  build:
+    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/sticky=tools-ubuntu24:20gb
+    steps:
+      - uses: actions/checkout@v7
+      - uses: runs-on/action@v2
+        with:
+          sticky_cache: tool-cache
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.25.1'
+```
+
+This mode uses the runner-provided `RUNNER_TOOL_CACHE` path and supports Linux
+and Windows. It caches installed toolchains, not package dependencies or build
+outputs. Use a sticky-disk name tied to the runner image, as restored binaries
+may not be compatible with another operating system image.
 
 #### `buildkit` mode (Docker layer cache)
 

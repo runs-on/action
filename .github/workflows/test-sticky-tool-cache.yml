@@ -1,0 +1,159 @@
+name: Test / Sticky tool cache
+
+on:
+  push:
+    branches:
+      - main
+      - v*
+      - feature/*
+      - fix/*
+      - auto/*
+  workflow_dispatch:
+
+jobs:
+  cold:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: linux
+            image: ubuntu24-full-x64
+          - id: windows
+            image: windows25-full-x64
+    runs-on: runs-on=${{ github.run_id }}/env=bootstrap/cpu=2/family=m7/image=${{ matrix.image }}/sticky=tool-cache-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.id }}:20gb
+    steps:
+      - uses: actions/checkout@v7
+      - name: Seed image-only tool cache content on Linux
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TOOL_CACHE"
+          printf 'image\n' > "$RUNNER_TOOL_CACHE/image-only"
+      - name: Seed image-only tool cache content on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path $env:RUNNER_TOOL_CACHE | Out-Null
+          Set-Content -LiteralPath (Join-Path $env:RUNNER_TOOL_CACHE "image-only") -Value "image"
+      - name: Mount empty sticky tool cache
+        id: tool-cache
+        uses: ./
+        with:
+          sticky_cache: tool-cache
+      - name: Verify the image tool cache was not inherited on Linux
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          CACHE_HIT: ${{ steps.tool-cache.outputs.cache-hit }}
+        run: |
+          test "$CACHE_HIT" = false
+          test ! -e "$RUNNER_TOOL_CACHE/image-only"
+          test -z "$(find "$RUNNER_TOOL_CACHE" -mindepth 1 -print -quit)"
+      - name: Verify the image tool cache was not inherited on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          CACHE_HIT: ${{ steps.tool-cache.outputs.cache-hit }}
+        run: |
+          if ($env:CACHE_HIT -ne "false") { throw "cold cache unexpectedly reported a hit" }
+          if (Test-Path -LiteralPath (Join-Path $env:RUNNER_TOOL_CACHE "image-only")) { throw "image tool cache was inherited" }
+          if (Get-ChildItem -Force -LiteralPath $env:RUNNER_TOOL_CACHE | Select-Object -First 1) { throw "cold sticky tool cache is not empty" }
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.25.1'
+          cache: false
+      - name: Mark the downloaded toolchain on Linux
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          goroot="$(go env GOROOT)"
+          case "$goroot" in
+            "$RUNNER_TOOL_CACHE"/*) ;;
+            *) echo "Go root is outside the runner tool cache: $goroot" >&2; exit 1 ;;
+          esac
+          test -f "${goroot}.complete"
+          printf '%s\n' "$GITHUB_RUN_ID" > "$goroot/.runs-on-tool-cache-e2e"
+      - name: Mark the downloaded toolchain on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $goRoot = (& go env GOROOT).Trim()
+          $cachePrefix = [IO.Path]::GetFullPath($env:RUNNER_TOOL_CACHE).TrimEnd('\') + '\'
+          if (-not $goRoot.StartsWith($cachePrefix, [StringComparison]::OrdinalIgnoreCase)) { throw "Go root is outside the runner tool cache: $goRoot" }
+          if (-not (Test-Path -LiteralPath "${goRoot}.complete")) { throw "setup-go completion marker is missing" }
+          Set-Content -LiteralPath (Join-Path $goRoot ".runs-on-tool-cache-e2e") -Value $env:GITHUB_RUN_ID
+
+  wait-for-snapshot:
+    needs: cold
+    runs-on: ubuntu-slim
+    steps:
+      - name: Wait for the cold snapshot to become selectable
+        run: sleep 120
+
+  warm:
+    needs: wait-for-snapshot
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: linux
+            image: ubuntu24-full-x64
+          - id: windows
+            image: windows25-full-x64
+    runs-on: runs-on=${{ github.run_id }}/env=bootstrap/cpu=2/family=m7/image=${{ matrix.image }}/sticky=tool-cache-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.id }}:20gb
+    steps:
+      - uses: actions/checkout@v7
+      - name: Seed fresh image-only tool cache content on Linux
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TOOL_CACHE"
+          printf 'image\n' > "$RUNNER_TOOL_CACHE/image-only"
+      - name: Seed fresh image-only tool cache content on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path $env:RUNNER_TOOL_CACHE | Out-Null
+          Set-Content -LiteralPath (Join-Path $env:RUNNER_TOOL_CACHE "image-only") -Value "image"
+      - name: Restore sticky tool cache
+        id: tool-cache
+        uses: ./
+        with:
+          sticky_cache: tool-cache
+      - name: Verify restored cache excludes the image on Linux
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          CACHE_HIT: ${{ steps.tool-cache.outputs.cache-hit }}
+        run: |
+          test "$CACHE_HIT" = true
+          test ! -e "$RUNNER_TOOL_CACHE/image-only"
+          test -n "$(find "$RUNNER_TOOL_CACHE" -name .runs-on-tool-cache-e2e -print -quit)"
+      - name: Verify restored cache excludes the image on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          CACHE_HIT: ${{ steps.tool-cache.outputs.cache-hit }}
+        run: |
+          if ($env:CACHE_HIT -ne "true") { throw "restored cache did not report a hit" }
+          if (Test-Path -LiteralPath (Join-Path $env:RUNNER_TOOL_CACHE "image-only")) { throw "fresh image tool cache was inherited" }
+          if (-not (Get-ChildItem -Force -LiteralPath $env:RUNNER_TOOL_CACHE -Filter ".runs-on-tool-cache-e2e" -Recurse | Select-Object -First 1)) { throw "restored toolchain marker is missing" }
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.25.1'
+          cache: false
+      - name: Verify setup-go reused the restored toolchain on Linux
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          goroot="$(go env GOROOT)"
+          test -f "${goroot}.complete"
+          test "$(cat "$goroot/.runs-on-tool-cache-e2e")" = "$GITHUB_RUN_ID"
+      - name: Verify setup-go reused the restored toolchain on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $goRoot = (& go env GOROOT).Trim()
+          if (-not (Test-Path -LiteralPath "${goRoot}.complete")) { throw "setup-go completion marker is missing" }
+          $marker = (Get-Content -Raw -LiteralPath (Join-Path $goRoot ".runs-on-tool-cache-e2e")).Trim()
+          if ($marker -ne $env:GITHUB_RUN_ID) { throw "setup-go did not reuse the restored toolchain" }

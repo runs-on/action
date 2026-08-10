@@ -21,6 +21,9 @@ type CacheMode struct {
 	// PathEnv names an environment variable whose value is the single path to
 	// persist. It is used for runner-defined locations such as the tool cache.
 	PathEnv string
+	// IgnoreTargetContents prevents the current runner image or checkout from
+	// seeding the sticky source before it is mounted over the target.
+	IgnoreTargetContents bool
 	// WindowsPaths override Paths on Windows runners, where several package
 	// managers cache under ~/AppData instead of ~/.cache. Empty means Paths
 	// apply on Windows too.
@@ -61,7 +64,7 @@ var cacheModes = map[string]CacheMode{
 	"gradle":     {Name: "gradle", Paths: []string{"~/.gradle/caches", "~/.gradle/wrapper"}},
 	"maven":      {Name: "maven", Paths: []string{"~/.m2/repository"}},
 	"playwright": {Name: "playwright", Paths: []string{"~/.cache/ms-playwright"}, WindowsPaths: []string{"~/AppData/Local/ms-playwright"}},
-	"tool-cache": {Name: "tool-cache", PathEnv: "RUNNER_TOOL_CACHE"},
+	"tool-cache": {Name: "tool-cache", PathEnv: "RUNNER_TOOL_CACHE", IgnoreTargetContents: true},
 }
 
 var modeAliases = map[string]string{

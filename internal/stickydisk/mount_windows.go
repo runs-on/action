@@ -21,8 +21,9 @@ import (
 // previous snapshot).
 //
 // Unlike a bind mount, a junction cannot shadow an existing directory: a
-// pre-existing target is moved aside (content preserved) before linking.
-func cacheMount(action *githubactions.Action, mountRoot, target string, rootOwned bool) (hit bool, err error) {
+// pre-existing target is moved aside before linking. When inheritTarget is
+// false, its contents are discarded after the junction succeeds.
+func cacheMount(action *githubactions.Action, mountRoot, target string, rootOwned, inheritTarget bool) (hit bool, err error) {
 	_ = rootOwned // no root-owned cache modes on Windows
 
 	if err := validateCacheDirectory(target); err != nil {
@@ -61,10 +62,9 @@ func cacheMount(action *githubactions.Action, mountRoot, target string, rootOwne
 		return false, fmt.Errorf("cache path %s is already an unrelated junction; expected sticky source %s", target, src)
 	}
 
-	// Merge the current target before moving it aside, otherwise checkout or
-	// image-provided files—including files added after a warm snapshot—would
-	// disappear behind the new junction.
-	if dirNonEmpty(target) {
+	// When requested, merge the current target before moving it aside so
+	// checkout or image-provided files added after a warm snapshot survive.
+	if inheritTarget && dirNonEmpty(target) {
 		if err := mergeTargetIntoCache(action, target, src, false); err != nil {
 			// The merge is the only step that mutates a warm source; a partial
 			// copy must not be snapshotted and reported as a hit next job.

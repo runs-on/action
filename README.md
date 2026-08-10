@@ -416,8 +416,10 @@ jobs:
           go-version: '1.25.1'
 ```
 
-This mode uses the runner-provided `RUNNER_TOOL_CACHE` path and supports Linux
-and Windows. It caches installed toolchains, not package dependencies or build
+This mode mounts an empty or restored sticky directory directly over the
+runner-provided `RUNNER_TOOL_CACHE` path. It does not copy toolchains from the
+runner image into the sticky cache. It supports Linux and Windows and caches
+toolchains installed after the mount, not package dependencies or build
 outputs. Use a sticky-disk name tied to the runner image, as restored binaries
 may not be compatible with another operating system image.
 

@@ -475,6 +475,9 @@ func TestModePathsForWindows(t *testing.T) {
 
 func TestToolCacheModeUsesRunnerPath(t *testing.T) {
 	mode := cacheModes["tool-cache"]
+	if !mode.IgnoreTargetContents {
+		t.Fatal("tool cache inherits contents from the runner image")
+	}
 	t.Setenv("RUNNER_TOOL_CACHE", filepath.Join(t.TempDir(), "tool-cache"))
 	paths, err := mode.pathsFor(runtime.GOOS)
 	if err != nil {

@@ -1,9 +1,11 @@
 package stickydisk
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/sethvargo/go-githubactions"
 )
@@ -16,6 +18,9 @@ type CacheMode struct {
 	Name string
 	// Paths to persist on the sticky disk.
 	Paths []string
+	// PathEnv names an environment variable whose value is the single path to
+	// persist. It is used for runner-defined locations such as the tool cache.
+	PathEnv string
 	// WindowsPaths override Paths on Windows runners, where several package
 	// managers cache under ~/AppData instead of ~/.cache. Empty means Paths
 	// apply on Windows too.
@@ -56,6 +61,7 @@ var cacheModes = map[string]CacheMode{
 	"gradle":     {Name: "gradle", Paths: []string{"~/.gradle/caches", "~/.gradle/wrapper"}},
 	"maven":      {Name: "maven", Paths: []string{"~/.m2/repository"}},
 	"playwright": {Name: "playwright", Paths: []string{"~/.cache/ms-playwright"}, WindowsPaths: []string{"~/AppData/Local/ms-playwright"}},
+	"tool-cache": {Name: "tool-cache", PathEnv: "RUNNER_TOOL_CACHE"},
 }
 
 var modeAliases = map[string]string{
@@ -69,16 +75,26 @@ var modeAliases = map[string]string{
 }
 
 // pathsFor returns the cache paths for the given OS.
-func (m CacheMode) pathsFor(goos string) []string {
+func (m CacheMode) pathsFor(goos string) ([]string, error) {
+	if m.PathEnv != "" {
+		path := strings.TrimSpace(os.Getenv(m.PathEnv))
+		if path == "" {
+			return nil, fmt.Errorf("cache mode %q requires the runner to set %s", m.Name, m.PathEnv)
+		}
+		if !filepath.IsAbs(path) {
+			return nil, fmt.Errorf("cache mode %q requires %s to be an absolute path, got %q", m.Name, m.PathEnv, path)
+		}
+		return []string{filepath.Clean(path)}, nil
+	}
 	if goos == "windows" && len(m.WindowsPaths) > 0 {
-		return m.WindowsPaths
+		return m.WindowsPaths, nil
 	}
 	if m.Name == "pnpm" {
 		if dataHome := os.Getenv("XDG_DATA_HOME"); dataHome != "" {
-			return []string{filepath.Join(dataHome, "pnpm", "store")}
+			return []string{filepath.Join(dataHome, "pnpm", "store")}, nil
 		}
 	}
-	return m.Paths
+	return m.Paths, nil
 }
 
 // supportedOn reports whether the mode works on the given OS: root-owned

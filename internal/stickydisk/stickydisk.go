@@ -172,8 +172,12 @@ func Configure(action *githubactions.Action, opts Options) error {
 			results = append(results, mountResult{Target: mode.Name, Hit: hit && err == nil, Err: err})
 			continue
 		}
+		paths, err := mode.pathsFor(runtime.GOOS)
+		if err != nil {
+			return err
+		}
 		var modeTargets []string
-		for _, path := range mode.pathsFor(runtime.GOOS) {
+		for _, path := range paths {
 			resolved, err := addTarget(path, mode.Root)
 			if err != nil {
 				return err
@@ -325,6 +329,14 @@ func postSetupMountsSucceeded(targets []string, mountErrors map[string]error) bo
 }
 
 func validateCacheOrdering(requests []CacheRequest, goos, home, workspace string) error {
+	for _, request := range requests {
+		if request.Custom || request.Mode.Setup != nil {
+			continue
+		}
+		if _, err := request.Mode.pathsFor(goos); err != nil {
+			return err
+		}
+	}
 	if goos == "windows" {
 		return nil
 	}
@@ -356,7 +368,11 @@ func validateCacheOrdering(requests []CacheRequest, goos, home, workspace string
 		name := "custom"
 		if !request.Custom {
 			name = request.Mode.Name
-			paths = request.Mode.pathsFor(goos)
+			modePaths, err := request.Mode.pathsFor(goos)
+			if err != nil {
+				return err
+			}
+			paths = modePaths
 		}
 		for _, path := range paths {
 			if isWorkspaceCachePath(path, home, workspace) {

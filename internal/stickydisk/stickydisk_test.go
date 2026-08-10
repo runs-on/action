@@ -52,6 +52,13 @@ func TestParseCacheRequests(t *testing.T) {
 	if len(requests) != 1 || requests[0].Mode.Name != "git-full" {
 		t.Fatalf("unexpected full Git request: %#v", requests)
 	}
+	requests, err = ParseCacheRequests([]string{"tool-cache"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(requests) != 1 || requests[0].Mode.Name != "tool-cache" {
+		t.Fatalf("unexpected tool cache request: %#v", requests)
+	}
 }
 
 func TestParseCacheRequestsMergesDuplicateBuiltins(t *testing.T) {
@@ -423,31 +430,78 @@ func TestDiskStatsThresholds(t *testing.T) {
 func TestModePathsForWindows(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", "")
 	golang := cacheModes["go"]
-	linuxPaths := strings.Join(golang.pathsFor("linux"), ",")
+	linux, err := golang.pathsFor("linux")
+	if err != nil {
+		t.Fatal(err)
+	}
+	linuxPaths := strings.Join(linux, ",")
 	if !strings.Contains(linuxPaths, "~/.cache/go-build") {
 		t.Errorf("unexpected linux paths: %s", linuxPaths)
 	}
-	winPaths := strings.Join(golang.pathsFor("windows"), ",")
+	windows, err := golang.pathsFor("windows")
+	if err != nil {
+		t.Fatal(err)
+	}
+	winPaths := strings.Join(windows, ",")
 	if !strings.Contains(winPaths, "~/AppData/Local/go-build") || !strings.Contains(winPaths, "~/go/pkg/mod") {
 		t.Errorf("unexpected windows paths: %s", winPaths)
 	}
 	// Modes without WindowsPaths keep their default paths on Windows.
 	rust := cacheModes["rust"]
-	if strings.Join(rust.pathsFor("windows"), ",") != strings.Join(rust.Paths, ",") {
+	rustPaths, err := rust.pathsFor("windows")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(rustPaths, ",") != strings.Join(rust.Paths, ",") {
 		t.Errorf("rust paths should be identical on windows")
 	}
 	pnpm := cacheModes["pnpm"]
-	if got := strings.Join(pnpm.pathsFor("linux"), ","); !strings.Contains(got, "~/.local/share/pnpm/store") {
+	pnpmPaths, err := pnpm.pathsFor("linux")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(pnpmPaths, ","); !strings.Contains(got, "~/.local/share/pnpm/store") {
 		t.Errorf("unexpected pnpm Linux paths: %s", got)
 	}
 	t.Setenv("XDG_DATA_HOME", "/tmp/xdg")
-	if got, want := strings.Join(pnpm.pathsFor("linux"), ","), filepath.Join("/tmp/xdg", "pnpm", "store"); got != want {
+	pnpmPaths, err = pnpm.pathsFor("linux")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := strings.Join(pnpmPaths, ","), filepath.Join("/tmp/xdg", "pnpm", "store"); got != want {
 		t.Errorf("pnpm XDG path = %s, want %s", got, want)
 	}
 }
 
+func TestToolCacheModeUsesRunnerPath(t *testing.T) {
+	mode := cacheModes["tool-cache"]
+	t.Setenv("RUNNER_TOOL_CACHE", filepath.Join(t.TempDir(), "tool-cache"))
+	paths, err := mode.pathsFor(runtime.GOOS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := strings.Join(paths, ","), os.Getenv("RUNNER_TOOL_CACHE"); got != want {
+		t.Fatalf("tool cache paths = %q, want %q", got, want)
+	}
+}
+
+func TestToolCacheModeRequiresAbsoluteRunnerPath(t *testing.T) {
+	mode := cacheModes["tool-cache"]
+	for _, path := range []string{"", "relative/tool-cache"} {
+		t.Run(path, func(t *testing.T) {
+			t.Setenv("RUNNER_TOOL_CACHE", path)
+			if _, err := mode.pathsFor(runtime.GOOS); err == nil || !strings.Contains(err.Error(), "RUNNER_TOOL_CACHE") {
+				t.Fatalf("pathsFor() error = %v, want RUNNER_TOOL_CACHE validation error", err)
+			}
+		})
+	}
+}
+
 func TestRubyModeExcludesGlobalBundlerConfig(t *testing.T) {
-	paths := cacheModes["ruby"].pathsFor("linux")
+	paths, err := cacheModes["ruby"].pathsFor("linux")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if got := strings.Join(paths, ","); got != "~/.bundle/cache,vendor/bundle" {
 		t.Fatalf("ruby cache paths = %q", got)
 	}

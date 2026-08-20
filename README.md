@@ -295,7 +295,7 @@ The action will display live metrics with charts in the post-execution summary.
 
 ### `sccache`
 
-Only available for Linux runners.
+Available on RunsOn Linux and Windows runners.
 
 Configures [`sccache`](https://github.com/mozilla/sccache) so that you can cache the compilation of C/C++ code, Rust, as well as NVIDIA's CUDA.
 

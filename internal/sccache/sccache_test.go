@@ -1,6 +1,7 @@
 package sccache
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/sethvargo/go-githubactions"
@@ -54,6 +55,24 @@ func TestDefaultKeyPrefixStaysWellFormedWithoutRepositoryIdentity(t *testing.T) 
 
 	if got, want := DefaultKeyPrefix(), "cache/sccache/unknown/linux-arm64/v1"; got != want {
 		t.Fatalf("DefaultKeyPrefix() = %q, want %q", got, want)
+	}
+}
+
+// path.Join resolves "." and "..", so a component that survived sanitization
+// could walk the generated key out of the cache/sccache namespace.
+func TestDefaultKeyPrefixCannotEscapeTheNamespace(t *testing.T) {
+	t.Setenv("RUNNER_OS", "Linux")
+	t.Setenv("RUNNER_ARCH", "X64")
+
+	for _, repository := range []string{"..", ".", "../..", "owner/.."} {
+		t.Run(repository, func(t *testing.T) {
+			t.Setenv("GITHUB_REPOSITORY_ID", "")
+			t.Setenv("GITHUB_REPOSITORY", repository)
+
+			if got := DefaultKeyPrefix(); !strings.HasPrefix(got, KeyPrefixRoot+"/") {
+				t.Fatalf("DefaultKeyPrefix() = %q, want a key under %q", got, KeyPrefixRoot)
+			}
+		})
 	}
 }
 

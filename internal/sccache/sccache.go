@@ -131,7 +131,9 @@ func platformScope() string {
 func sanitizeScope(value string) string {
 	cleaned := unsafeScopeChars.ReplaceAllString(strings.ToLower(strings.TrimSpace(value)), "-")
 	cleaned = strings.Trim(cleaned, "-")
-	if cleaned == "" {
+	// "." and ".." are resolved by path.Join and would walk the key out of the
+	// cache/sccache namespace, so they never become a component of their own.
+	if cleaned == "" || cleaned == "." || cleaned == ".." {
 		return unknownScope
 	}
 	return cleaned

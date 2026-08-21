@@ -354,13 +354,11 @@ jobs:
       - uses: runs-on/action@v2
         with:
           sccache: s3
-          sccache_prefix: cache/shared-toolchain
+          sccache_prefix: /cache/sccache/shared-namespace/
       - uses: mozilla-actions/sccache-action@v0.0.9
 ```
 
-The value is used as-is: none of the default's components are kept and nothing is appended, so add platform or version components yourself if you want to be able to expire them separately.
-
-Leading and trailing slashes are stripped, and a value that carries no key components (empty, whitespace, or only slashes) falls back to the default rather than writing to the bucket root, which is shared with the other RunsOn caches.
+Leading and trailing slashes are trimmed, so that example resolves to `cache/sccache/shared-namespace`. None of the default's components are kept and nothing is appended, so add platform or version components yourself if you want to be able to expire them separately. A value that carries no key components (empty, whitespace, or only slashes) falls back to the default rather than writing to the bucket root, which is shared with the other RunsOn caches.
 
 Previously every repository on a stack shared the flat `cache/sccache` prefix. Moving to the scoped default therefore starts one cold cache per repository and platform; the previous behaviour is available with `sccache_prefix: cache/sccache`. Objects written under the old prefix are left to the stack's cache lifecycle rule, which expires everything under `cache/` after `S3CacheExpirationInDays` (10 by default).
 

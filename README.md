@@ -326,9 +326,44 @@ What this does under the hood is the equivalent of:
 echo "SCCACHE_GHA_ENABLED=false" >> $GITHUB_ENV
 echo "SCCACHE_BUCKET=${{ env.RUNS_ON_S3_BUCKET_CACHE}}" >> $GITHUB_ENV
 echo "SCCACHE_REGION=${{ env.RUNS_ON_AWS_REGION}}" >> $GITHUB_ENV
-echo "SCCACHE_S3_KEY_PREFIX=cache/sccache" >> $GITHUB_ENV
+echo "SCCACHE_S3_KEY_PREFIX=cache/sccache/${{ github.repository_id }}/linux-x64/v1" >> $GITHUB_ENV
 echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
 ```
+
+### `sccache_prefix`
+
+Sets the S3 key prefix used by the `sccache: s3` backend.
+
+By default the action scopes compiler cache objects per repository and per runner platform:
+
+```text
+cache/sccache/<repository id>/<runner os>-<runner arch>/v1
+```
+
+The repository id is used rather than the `owner/name` slug so that renaming or transferring a repository does not invalidate its cache; the action falls back to the slug when `GITHUB_REPOSITORY_ID` is not exposed. The trailing `v1` is a layout version, so a future change to the key layout can be rolled out without reusing existing objects.
+
+This is operational isolation, not a security boundary: repositories sharing a RunsOn stack still share the bucket and the runner IAM role. What it buys you is per-repository cache ownership, growth and cost attribution, targeted invalidation, and freedom to change one repository's cache layout without touching the others.
+
+Set the input explicitly to leave that scoping behind, for instance when several repositories compile the same sources and should reuse each other's cache. The value replaces the whole default prefix, so give every participating repository the same one:
+
+```yaml
+jobs:
+  build:
+    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/extras=s3-cache
+    steps:
+      - uses: runs-on/action@v2
+        with:
+          sccache: s3
+          # Identical in each repository that shares the cache
+          sccache_prefix: cache/sccache/shared/toolchain/${{ runner.os }}-${{ runner.arch }}/v1
+      - uses: mozilla-actions/sccache-action@v0.0.9
+```
+
+Nothing is appended to the value, so any layout works: `cache/sccache/shared` on its own is just as valid.
+
+Leading and trailing slashes are stripped, and a value that carries no key components (empty, whitespace, or only slashes) falls back to the default rather than writing to the bucket root, which is shared with the other RunsOn caches.
+
+Previously every repository on a stack shared the flat `cache/sccache` prefix. Moving to the scoped default therefore starts one cold cache per repository and platform; the previous behaviour is available with `sccache_prefix: cache/sccache`.
 
 ### `sticky_cache`
 

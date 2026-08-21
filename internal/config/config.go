@@ -19,6 +19,7 @@ type Config struct {
 	NetworkInterface    string
 	DiskDevice          string
 	Sccache             string
+	SccachePrefix       string
 	StickyCache         []string
 	StickyWaitTimeout   time.Duration
 	ZctionsResultsURL   string
@@ -66,6 +67,7 @@ func NewConfigFromInputs(action *githubactions.Action) (*Config, error) {
 	}
 
 	cfg.Sccache = action.GetInput("sccache")
+	cfg.SccachePrefix = action.GetInput("sccache_prefix")
 
 	stickyCacheInput := action.GetInput("sticky_cache")
 	if stickyCacheInput != "" {
@@ -101,6 +103,7 @@ func NewConfigFromInputs(action *githubactions.Action) (*Config, error) {
 	action.Infof("Input 'network_interface': %s", cfg.NetworkInterface)
 	action.Infof("Input 'disk_device': %s", cfg.DiskDevice)
 	action.Infof("Input 'sccache': %s", cfg.Sccache)
+	action.Infof("Input 'sccache_prefix': %s", cfg.SccachePrefix)
 	action.Infof("Input 'sticky_cache': %v", cfg.StickyCache)
 	action.Infof("Input 'sticky_wait_timeout': %s", cfg.StickyWaitTimeout)
 

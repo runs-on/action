@@ -23,6 +23,9 @@ const (
 	// keyPrefixSchema versions the generated layout so a future change to it can
 	// be rolled out without reusing objects written under the previous scheme.
 	keyPrefixSchema = "v1"
+	// maxKeyPrefixBytes leaves most of S3's 1024 byte key limit to the cache key
+	// sccache appends to the prefix.
+	maxKeyPrefixBytes = 512
 	// unknownScope keeps generated prefixes well formed when the environment
 	// does not expose the identity a scope is derived from.
 	unknownScope = "unknown"
@@ -87,6 +90,9 @@ func ResolveKeyPrefix(action *githubactions.Action, input string) string {
 	// Slashes and spaces are trimmed together: trimming them in two passes lets a
 	// value like " / / " survive as a single space and become the key prefix.
 	trimmed := strings.Trim(input, " \t\n\r/")
+	if trimmed != "" && !usableKeyPrefix(action, trimmed) {
+		return DefaultKeyPrefix()
+	}
 	if trimmed != "" {
 		// The runner instance profile is only granted S3 access on cache/*, so a
 		// prefix outside that namespace fails with access denied at compile time
@@ -101,6 +107,35 @@ func ResolveKeyPrefix(action *githubactions.Action, input string) string {
 		action.Warningf("Ignoring 'sccache_prefix' input %q because it contains no key components. Using the default prefix instead.", input)
 	}
 	return DefaultKeyPrefix()
+}
+
+// usableKeyPrefix reports whether an explicit prefix is safe to export and to
+// use as an S3 key prefix, warning about the reason when it is not.
+func usableKeyPrefix(action *githubactions.Action, prefix string) bool {
+	// The prefix is exported through GITHUB_ENV, whose multiline records use a
+	// fixed delimiter that the value is interpolated into unescaped, so a value
+	// carrying newlines could close its own record and define unrelated
+	// variables for later steps. Control characters have no place in an S3 key
+	// either.
+	if strings.ContainsFunc(prefix, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
+		action.Warningf("Ignoring 'sccache_prefix': the value contains control characters, which cannot be exported safely. Using the default prefix instead.")
+		return false
+	}
+	// path.Join is not used on an explicit value, so "." and ".." would survive
+	// into the key itself rather than being resolved.
+	for _, component := range strings.Split(prefix, "/") {
+		if component == "." || component == ".." {
+			action.Warningf("Ignoring 'sccache_prefix' %q: %q is not usable as a key component. Using the default prefix instead.", prefix, component)
+			return false
+		}
+	}
+	// S3 caps a key at 1024 bytes and sccache appends its own hash to the
+	// prefix, so leave the object key room to exist.
+	if len(prefix) > maxKeyPrefixBytes {
+		action.Warningf("Ignoring 'sccache_prefix': the value is %d bytes, leaving too little of S3's 1024 byte key limit for the cache key itself. Using the default prefix instead.", len(prefix))
+		return false
+	}
+	return true
 }
 
 // DefaultKeyPrefix builds the repository-scoped default prefix, for example

@@ -116,6 +116,29 @@ func TestResolveKeyPrefixPrefersExplicitInput(t *testing.T) {
 
 // A prefix outside cache/ is accepted but flagged, because the runner instance
 // profile has no S3 access to it and sccache would fail with access denied.
+// An explicit prefix is exported through GITHUB_ENV and used as an S3 key, so
+// values that cannot survive either are refused rather than passed through.
+func TestResolveKeyPrefixRefusesUnusableValues(t *testing.T) {
+	t.Setenv("GITHUB_REPOSITORY_ID", "42")
+	t.Setenv("RUNNER_OS", "Linux")
+	t.Setenv("RUNNER_ARCH", "X64")
+	want := "cache/sccache/42/linux-x64/v1"
+
+	for name, input := range map[string]string{
+		"env file delimiter": "cache/x\n_GitHubActionsFileCommandDelimeter_\nAWS_REGION<<_GitHubActionsFileCommandDelimeter_\nattacker",
+		"carriage return":    "cache/x\rcache/y",
+		"parent component":   "cache/../other",
+		"dot component":      "cache/./other",
+		"oversized":          "cache/" + strings.Repeat("x", maxKeyPrefixBytes),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := ResolveKeyPrefix(githubactions.New(), input); got != want {
+				t.Fatalf("ResolveKeyPrefix(%q) = %q, want the default %q", input, got, want)
+			}
+		})
+	}
+}
+
 func TestResolveKeyPrefixWarnsOutsideTheCacheNamespace(t *testing.T) {
 	for _, tc := range []struct {
 		input    string

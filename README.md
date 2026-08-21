@@ -354,7 +354,7 @@ jobs:
       - uses: runs-on/action@v2
         with:
           sccache: s3
-          sccache_prefix: builds/shared-toolchain
+          sccache_prefix: cache/shared-toolchain
       - uses: mozilla-actions/sccache-action@v0.0.9
 ```
 

@@ -1,6 +1,7 @@
 package sccache
 
 import (
+	"bytes"
 	"runtime"
 	"strings"
 	"testing"
@@ -108,6 +109,32 @@ func TestResolveKeyPrefixPrefersExplicitInput(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := ResolveKeyPrefix(action, tc.input); got != tc.want {
 				t.Fatalf("ResolveKeyPrefix(%q) = %q, want %q", tc.input, got, tc.want)
+			}
+		})
+	}
+}
+
+// A prefix outside cache/ is accepted but flagged, because the runner instance
+// profile has no S3 access to it and sccache would fail with access denied.
+func TestResolveKeyPrefixWarnsOutsideTheCacheNamespace(t *testing.T) {
+	for _, tc := range []struct {
+		input    string
+		wantWarn bool
+	}{
+		{input: "builds/shared-toolchain", wantWarn: true},
+		{input: "cacheable/sccache", wantWarn: true},
+		{input: "cache", wantWarn: false},
+		{input: "cache/shared-toolchain", wantWarn: false},
+	} {
+		t.Run(tc.input, func(t *testing.T) {
+			var out bytes.Buffer
+			action := githubactions.New(githubactions.WithWriter(&out))
+
+			if got := ResolveKeyPrefix(action, tc.input); got != tc.input {
+				t.Fatalf("ResolveKeyPrefix(%q) = %q, want it unchanged", tc.input, got)
+			}
+			if warned := strings.Contains(out.String(), "::warning::"); warned != tc.wantWarn {
+				t.Fatalf("warning emitted = %t, want %t (output %q)", warned, tc.wantWarn, out.String())
 			}
 		})
 	}

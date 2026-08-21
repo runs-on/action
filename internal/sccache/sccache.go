@@ -11,11 +11,15 @@ import (
 )
 
 const (
+	// cacheNamespace is the only part of the RunsOn cache bucket the runner
+	// instance profile is granted S3 access to, so every prefix has to live
+	// under it (see cloudformation/template.yaml in runs-on/runs-on).
+	cacheNamespace = "cache"
 	// KeyPrefixRoot is the namespace RunsOn owns for compiler caches inside the
 	// shared S3 cache bucket. Generated prefixes are scoped below it so that
 	// repositories keep independent cache ownership, cost attribution, and
 	// invalidation, even though they may share the bucket and the runner IAM role.
-	KeyPrefixRoot = "cache/sccache"
+	KeyPrefixRoot = cacheNamespace + "/sccache"
 	// keyPrefixSchema versions the generated layout so a future change to it can
 	// be rolled out without reusing objects written under the previous scheme.
 	keyPrefixSchema = "v1"
@@ -84,6 +88,13 @@ func ResolveKeyPrefix(action *githubactions.Action, input string) string {
 	// value like " / / " survive as a single space and become the key prefix.
 	trimmed := strings.Trim(input, " \t\n\r/")
 	if trimmed != "" {
+		// The runner instance profile is only granted S3 access on cache/*, so a
+		// prefix outside that namespace fails with access denied at compile time
+		// rather than here. Warn instead of rejecting: a customized stack may
+		// grant more than the default one does.
+		if trimmed != cacheNamespace && !strings.HasPrefix(trimmed, cacheNamespace+"/") {
+			action.Warningf("'sccache_prefix' %q is outside the cache/ namespace. RunsOn only grants the runner instance profile S3 access to cache/*, so sccache will likely fail with access denied.", trimmed)
+		}
 		return trimmed
 	}
 	if strings.TrimSpace(input) != "" {

@@ -80,7 +80,9 @@ func ConfigureSccache(action *githubactions.Action, backend string, keyPrefix st
 // components is reported and ignored rather than silently writing to the bucket
 // root, which is shared with the other RunsOn caches.
 func ResolveKeyPrefix(action *githubactions.Action, input string) string {
-	trimmed := strings.Trim(strings.TrimSpace(input), "/")
+	// Slashes and spaces are trimmed together: trimming them in two passes lets a
+	// value like " / / " survive as a single space and become the key prefix.
+	trimmed := strings.Trim(input, " \t\n\r/")
 	if trimmed != "" {
 		return trimmed
 	}
@@ -115,17 +117,33 @@ func repositoryScope() string {
 }
 
 // platformScope derives the runner platform from the Actions environment, and
-// from the running binary when the action is exercised outside a runner.
+// from the running binary when the action is exercised outside a runner. The
+// fallback is translated into RUNNER_OS/RUNNER_ARCH spelling so that the same
+// machine does not end up with two prefixes depending on which values are set.
 func platformScope() string {
 	osName := os.Getenv("RUNNER_OS")
 	if strings.TrimSpace(osName) == "" {
-		osName = runtime.GOOS
+		osName = runnerSpelling(runtime.GOOS)
 	}
 	arch := os.Getenv("RUNNER_ARCH")
 	if strings.TrimSpace(arch) == "" {
-		arch = runtime.GOARCH
+		arch = runnerSpelling(runtime.GOARCH)
 	}
 	return sanitizeScope(osName) + "-" + sanitizeScope(arch)
+}
+
+// runnerSpelling maps Go's platform names onto the ones the runner exports.
+func runnerSpelling(value string) string {
+	switch value {
+	case "darwin":
+		return "macos"
+	case "amd64":
+		return "x64"
+	case "386":
+		return "x86"
+	default:
+		return value
+	}
 }
 
 func sanitizeScope(value string) string {

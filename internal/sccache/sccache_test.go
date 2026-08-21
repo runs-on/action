@@ -1,6 +1,7 @@
 package sccache
 
 import (
+	"runtime"
 	"strings"
 	"testing"
 
@@ -76,6 +77,22 @@ func TestDefaultKeyPrefixCannotEscapeTheNamespace(t *testing.T) {
 	}
 }
 
+// The Actions environment and the Go runtime spell the same platform
+// differently, so an environment missing RUNNER_ARCH must not land on a second
+// prefix for the machine that has it.
+func TestDefaultKeyPrefixSpellsThePlatformConsistently(t *testing.T) {
+	t.Setenv("GITHUB_REPOSITORY_ID", "42")
+	t.Setenv("RUNNER_OS", "Linux")
+	t.Setenv("RUNNER_ARCH", "X64")
+	withEnv := DefaultKeyPrefix()
+
+	t.Setenv("RUNNER_OS", "")
+	t.Setenv("RUNNER_ARCH", "")
+	if got := DefaultKeyPrefix(); got != withEnv && runtime.GOOS == "linux" && runtime.GOARCH == "amd64" {
+		t.Fatalf("DefaultKeyPrefix() = %q without platform env, want %q", got, withEnv)
+	}
+}
+
 func TestResolveKeyPrefixPrefersExplicitInput(t *testing.T) {
 	action := githubactions.New()
 
@@ -102,7 +119,7 @@ func TestResolveKeyPrefixNeverTargetsTheBucketRoot(t *testing.T) {
 	t.Setenv("RUNNER_ARCH", "X64")
 	action := githubactions.New()
 
-	for _, input := range []string{"", "   ", "/", "///"} {
+	for _, input := range []string{"", "   ", "/", "///", " / / ", "// //", "\t/\t"} {
 		if got, want := ResolveKeyPrefix(action, input), "cache/sccache/123456789/linux-x64/v1"; got != want {
 			t.Fatalf("ResolveKeyPrefix(%q) = %q, want %q", input, got, want)
 		}

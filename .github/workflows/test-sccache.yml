@@ -233,3 +233,17 @@ jobs:
           if ($env:SCCACHE_S3_KEY_PREFIX -ne $expected) {
             throw "Expected the default key prefix to be $expected"
           }
+
+      # Runs last: it overwrites the prefix exported by the invocation above.
+      - uses: ./
+        with:
+          sccache: s3
+          sccache_prefix: /cache/sccache/shared-namespace/
+
+      - name: Verify the explicit prefix wins
+        shell: pwsh
+        run: |
+          Write-Host "SCCACHE_S3_KEY_PREFIX: $env:SCCACHE_S3_KEY_PREFIX"
+          if ($env:SCCACHE_S3_KEY_PREFIX -ne "cache/sccache/shared-namespace") {
+            throw "Expected the explicit sccache_prefix input to be used verbatim"
+          }

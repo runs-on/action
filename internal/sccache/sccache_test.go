@@ -23,8 +23,26 @@ func TestDefaultKeyPrefixFallsBackToRepositorySlug(t *testing.T) {
 	t.Setenv("RUNNER_OS", "Windows")
 	t.Setenv("RUNNER_ARCH", "X64")
 
-	if got, want := DefaultKeyPrefix(), "cache/sccache/runs-on-action/windows-x64/v1"; got != want {
+	if got, want := DefaultKeyPrefix(), "cache/sccache/runs-on/action/windows-x64/v1"; got != want {
 		t.Fatalf("DefaultKeyPrefix() = %q, want %q", got, want)
+	}
+}
+
+// The owner and the name of a repository may both contain the separator, so a
+// flattened slug would hand foo-bar/baz and foo/bar-baz the same cache.
+func TestDefaultKeyPrefixKeepsRepositoriesApartInTheSlugFallback(t *testing.T) {
+	t.Setenv("GITHUB_REPOSITORY_ID", "")
+	t.Setenv("RUNNER_OS", "Linux")
+	t.Setenv("RUNNER_ARCH", "X64")
+
+	t.Setenv("GITHUB_REPOSITORY", "foo-bar/baz")
+	first := DefaultKeyPrefix()
+
+	t.Setenv("GITHUB_REPOSITORY", "foo/bar-baz")
+	second := DefaultKeyPrefix()
+
+	if first == second {
+		t.Fatalf("foo-bar/baz and foo/bar-baz share the prefix %q", first)
 	}
 }
 

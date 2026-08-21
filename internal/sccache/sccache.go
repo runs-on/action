@@ -100,11 +100,18 @@ func DefaultKeyPrefix() string {
 
 // repositoryScope prefers the numeric repository id because it survives renames
 // and transfers, and falls back to the owner/name slug when it is unavailable.
+// The slug keeps owner and name as separate key components: flattening them into
+// one would map distinct repositories onto the same prefix, since both halves may
+// contain the separator (foo-bar/baz and foo/bar-baz would collide).
 func repositoryScope() string {
 	if id := sanitizeScope(os.Getenv("GITHUB_REPOSITORY_ID")); id != unknownScope {
 		return id
 	}
-	return sanitizeScope(strings.ReplaceAll(os.Getenv("GITHUB_REPOSITORY"), "/", "-"))
+	owner, name, ok := strings.Cut(os.Getenv("GITHUB_REPOSITORY"), "/")
+	if !ok {
+		return sanitizeScope(owner)
+	}
+	return path.Join(sanitizeScope(owner), sanitizeScope(name))
 }
 
 // platformScope derives the runner platform from the Actions environment, and

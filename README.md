@@ -340,7 +340,7 @@ By default the action scopes compiler cache objects per repository and per runne
 cache/sccache/<repository id>/<runner os>-<runner arch>/v1
 ```
 
-The repository id is used rather than the `owner/name` slug so that renaming or transferring a repository does not invalidate its cache; the action falls back to the slug when `GITHUB_REPOSITORY_ID` is not exposed. The trailing `v1` is a layout version, so a future change to the key layout can be rolled out without reusing existing objects.
+The repository id is used rather than the `owner/name` slug so that renaming or transferring a repository does not invalidate its cache; the action falls back to the slug (as two key components, `<owner>/<name>`) when `GITHUB_REPOSITORY_ID` is not exposed. The trailing `v1` is a layout version, so a future change to the key layout can be rolled out without reusing existing objects.
 
 This is operational isolation, not a security boundary: repositories sharing a RunsOn stack still share the bucket and the runner IAM role. What it buys you is per-repository cache ownership, growth and cost attribution, targeted invalidation, and freedom to change one repository's cache layout without touching the others.
 

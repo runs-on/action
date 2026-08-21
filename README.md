@@ -354,12 +354,11 @@ jobs:
       - uses: runs-on/action@v2
         with:
           sccache: s3
-          # Identical in each repository that shares the cache
-          sccache_prefix: cache/sccache/shared/toolchain/${{ runner.os }}-${{ runner.arch }}/v1
+          sccache_prefix: builds/shared-toolchain
       - uses: mozilla-actions/sccache-action@v0.0.9
 ```
 
-Nothing is appended to the value, so any layout works: `cache/sccache/shared` on its own is just as valid.
+The value is used as-is: none of the default's components are kept and nothing is appended, so add platform or version components yourself if you want to be able to expire them separately.
 
 Leading and trailing slashes are stripped, and a value that carries no key components (empty, whitespace, or only slashes) falls back to the default rather than writing to the bucket root, which is shared with the other RunsOn caches.
 

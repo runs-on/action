@@ -77,7 +77,7 @@ func handleMainExecution(action *githubactions.Action, ctx context.Context) {
 
 	// Configure sccache if requested
 	if cfg.HasSccache() {
-		if err := sccache.ConfigureSccache(action, cfg.Sccache); err != nil {
+		if err := sccache.ConfigureSccache(action, cfg.Sccache, cfg.SccachePrefix); err != nil {
 			action.Errorf("Failed to configure sccache: %v", err)
 		}
 	}

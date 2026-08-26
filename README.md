@@ -364,9 +364,11 @@ with:
     custom,path=vendor/custom-cache,path=~/.cache/my-tool
 ```
 
-On RunsOn runners, the action fails if the sticky disk is absent or does not
-become ready before `sticky_wait_timeout`. On any other runner (for example a
-workflow falling back to GitHub-hosted runners), the action skips all
+On RunsOn runners, the action fails if the sticky disk contract is absent or
+the disk does not become ready before `sticky_wait_timeout`. If the runner
+reports that the requested disk is unavailable, the action warns and skips all
+sticky cache operations so the job can continue cold. On any other runner (for
+example a workflow falling back to GitHub-hosted runners), the action skips all
 operations and exits successfully, so the same workflow keeps working without
 sticky caches. The `custom` mode requires one or more `path=` options;
 repeat the record or option to persist several paths. Relative paths resolve

@@ -1,6 +1,7 @@
 package stickydisk
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -315,7 +316,7 @@ func TestWaitForReadyWaitsForReadyMarker(t *testing.T) {
 	}
 }
 
-func TestWaitForReadyFailsImmediatelyWhenDiskIsUnavailable(t *testing.T) {
+func TestWaitForReadyReportsUnavailableImmediately(t *testing.T) {
 	root := t.TempDir()
 	unavailableFile := filepath.Join(root, "stickydisk.unavailable")
 	if err := os.WriteFile(unavailableFile, []byte("sticky disk unavailable\n"), 0o644); err != nil {
@@ -325,11 +326,24 @@ func TestWaitForReadyFailsImmediatelyWhenDiskIsUnavailable(t *testing.T) {
 	action := githubactions.New()
 	started := time.Now()
 	err := waitForReady(action, filepath.Join(root, "stickydisk.ready"), unavailableFile, time.Minute)
-	if err == nil || !strings.Contains(err.Error(), "sticky disk is unavailable") {
+	if !errors.Is(err, errStickyDiskUnavailable) {
 		t.Fatalf("unexpected unavailable error: %v", err)
 	}
 	if elapsed := time.Since(started); elapsed > time.Second {
 		t.Fatalf("unavailable marker was not handled immediately: %s", elapsed)
+	}
+}
+
+func TestPostJobSkipsInvalidCacheConfigWhenDiskIsUnavailable(t *testing.T) {
+	root := t.TempDir()
+	unavailableFile := filepath.Join(root, "stickydisk.unavailable")
+	if err := os.WriteFile(unavailableFile, []byte("sticky disk unavailable\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(stickyDiskUnavailableFileEnv, unavailableFile)
+
+	if err := PostJob(githubactions.New(), []string{"not-a-cache-mode"}); err != nil {
+		t.Fatalf("post-job should skip unavailable sticky disk: %v", err)
 	}
 }
 

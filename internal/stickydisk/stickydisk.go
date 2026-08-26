@@ -38,8 +38,9 @@ type mountResult struct {
 
 // Configure bind-mounts the requested cache directories onto the job's sticky
 // disk. It requires a `sticky=[<name>:]<size>` label on the job. Mount failures
-// are reported as warnings. A missing or unready sticky disk returns an error
-// because sticky_cache explicitly requires persistent storage.
+// are reported as warnings. A missing or unready sticky disk returns an error.
+// When the agent explicitly reports that the disk is unavailable, setup skips
+// the caches so the job can continue cold.
 func Configure(action *githubactions.Action, opts Options) error {
 	// Publish a deterministic value even when parsing, ordering, setup, or
 	// overlap validation fails and the caller uses continue-on-error.
@@ -82,6 +83,10 @@ func Configure(action *githubactions.Action, opts Options) error {
 		timeout = defaultWaitTimeout
 	}
 	if err := waitForReady(action, contract.ReadyFile, contract.UnavailableFile, timeout); err != nil {
+		if errors.Is(err, errStickyDiskUnavailable) {
+			action.Warningf("%v. Continuing without sticky disk caches.", err)
+			return nil
+		}
 		return missing(action, err.Error())
 	}
 	// The ready marker is an existence-only signal: the mount root always
@@ -394,6 +399,8 @@ func missing(action *githubactions.Action, msg string) error {
 	return errors.New(msg)
 }
 
+var errStickyDiskUnavailable = errors.New("sticky disk is unavailable")
+
 // waitForReady polls until the agent publishes either the mounted-ready marker
 // or the terminal-unavailable marker, bounded by timeout. Both markers are
 // existence-only signals; their content is deliberately ignored.
@@ -402,7 +409,7 @@ func waitForReady(action *githubactions.Action, readyFile string, unavailableFil
 	logged := false
 	for {
 		if _, err := os.Stat(unavailableFile); err == nil {
-			return fmt.Errorf("sticky disk is unavailable (marker: %s)", unavailableFile)
+			return fmt.Errorf("%w (marker: %s)", errStickyDiskUnavailable, unavailableFile)
 		}
 		if _, err := os.Stat(readyFile); err == nil {
 			return nil
@@ -421,6 +428,12 @@ func waitForReady(action *githubactions.Action, readyFile string, unavailableFil
 // PostJob runs the post-step hooks of the requested cache modes before the
 // sticky disk is unmounted and snapshotted by the runner's job-completed hook.
 func PostJob(action *githubactions.Action, cacheEntries []string) error {
+	if unavailableFile := strings.TrimSpace(os.Getenv(stickyDiskUnavailableFileEnv)); unavailableFile != "" {
+		if _, err := os.Stat(unavailableFile); err == nil {
+			action.Infof("Sticky disk was unavailable; skipping cache post-job hooks.")
+			return nil
+		}
+	}
 	if !supportedOS() {
 		return nil
 	}

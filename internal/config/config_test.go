@@ -7,6 +7,20 @@ import (
 	"github.com/sethvargo/go-githubactions"
 )
 
+func TestHasSccacheOnRunsOn(t *testing.T) {
+	t.Setenv("RUNS_ON_RUNNER_NAME", "windows-runner")
+	cfg := Config{Sccache: "s3"}
+
+	if !cfg.HasSccache() {
+		t.Fatal("sccache was disabled on a RunsOn runner")
+	}
+
+	t.Setenv("RUNS_ON_RUNNER_NAME", "")
+	if cfg.HasSccache() {
+		t.Fatal("sccache was enabled outside RunsOn")
+	}
+}
+
 func TestStickyCacheInputs(t *testing.T) {
 	t.Setenv("INPUT_STICKY_CACHE", " go \n\n buildkit \n custom,path=vendor/cache ")
 	t.Setenv("INPUT_STICKY_WAIT_TIMEOUT", "90s")

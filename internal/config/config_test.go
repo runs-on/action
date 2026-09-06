@@ -21,6 +21,28 @@ func TestHasSccacheOnRunsOn(t *testing.T) {
 	}
 }
 
+func TestSccachePrefixInput(t *testing.T) {
+	t.Setenv("INPUT_SCCACHE", "s3")
+	t.Setenv("INPUT_SCCACHE_PREFIX", "cache/sccache")
+
+	cfg, err := NewConfigFromInputs(githubactions.New())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := cfg.SccachePrefix, "cache/sccache"; got != want {
+		t.Fatalf("SccachePrefix = %q, want %q", got, want)
+	}
+
+	t.Setenv("INPUT_SCCACHE_PREFIX", "")
+	cfg, err = NewConfigFromInputs(githubactions.New())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SccachePrefix != "" {
+		t.Fatalf("SccachePrefix = %q, want the default prefix to be resolved later", cfg.SccachePrefix)
+	}
+}
+
 func TestStickyCacheInputs(t *testing.T) {
 	t.Setenv("INPUT_STICKY_CACHE", " go \n\n buildkit \n custom,path=vendor/cache ")
 	t.Setenv("INPUT_STICKY_WAIT_TIMEOUT", "90s")

@@ -1,6 +1,8 @@
 package stickydisk
 
 import (
+	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -315,7 +317,7 @@ func TestWaitForReadyWaitsForReadyMarker(t *testing.T) {
 	}
 }
 
-func TestWaitForReadyFailsImmediatelyWhenDiskIsUnavailable(t *testing.T) {
+func TestWaitForReadyReportsUnavailableImmediately(t *testing.T) {
 	root := t.TempDir()
 	unavailableFile := filepath.Join(root, "stickydisk.unavailable")
 	if err := os.WriteFile(unavailableFile, []byte("sticky disk unavailable\n"), 0o644); err != nil {
@@ -325,11 +327,77 @@ func TestWaitForReadyFailsImmediatelyWhenDiskIsUnavailable(t *testing.T) {
 	action := githubactions.New()
 	started := time.Now()
 	err := waitForReady(action, filepath.Join(root, "stickydisk.ready"), unavailableFile, time.Minute)
-	if err == nil || !strings.Contains(err.Error(), "sticky disk is unavailable") {
+	if !errors.Is(err, errStickyDiskUnavailable) {
 		t.Fatalf("unexpected unavailable error: %v", err)
 	}
 	if elapsed := time.Since(started); elapsed > time.Second {
 		t.Fatalf("unavailable marker was not handled immediately: %s", elapsed)
+	}
+}
+
+func TestConfigureContinuesWhenDiskIsUnavailable(t *testing.T) {
+	root := t.TempDir()
+	outputFile := filepath.Join(root, "github-output")
+	unavailableFile := filepath.Join(root, "stickydisk.unavailable")
+	if err := os.WriteFile(unavailableFile, []byte("sticky disk unavailable\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GITHUB_OUTPUT", outputFile)
+	t.Setenv("GITHUB_WORKSPACE", filepath.Join(root, "workspace"))
+	t.Setenv(stickyDiskDirEnv, filepath.Join(root, "missing-mount"))
+	t.Setenv(stickyDiskReadyFileEnv, filepath.Join(root, "stickydisk.ready"))
+	t.Setenv(stickyDiskUnavailableFileEnv, unavailableFile)
+
+	var logs bytes.Buffer
+	action := githubactions.New(githubactions.WithWriter(&logs))
+	if err := configure(action, Options{StickyCache: []string{"go"}, StickyWaitTimeout: time.Second}, "linux"); err != nil {
+		t.Fatalf("configure unavailable sticky disk: %v", err)
+	}
+	if !strings.Contains(logs.String(), "Continuing without sticky disk caches") {
+		t.Fatalf("missing unavailable warning:\n%s", logs.String())
+	}
+	output, err := os.ReadFile(outputFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(output), "cache-hit") || !strings.Contains(string(output), "false") {
+		t.Fatalf("cache-hit output was not false:\n%s", output)
+	}
+}
+
+func TestConfigureKeepsMissingAndUnreadyDisksFatal(t *testing.T) {
+	t.Run("missing contract", func(t *testing.T) {
+		t.Setenv("GITHUB_OUTPUT", filepath.Join(t.TempDir(), "github-output"))
+		t.Setenv(stickyDiskDirEnv, "")
+		t.Setenv(stickyDiskReadyFileEnv, "")
+		t.Setenv(stickyDiskUnavailableFileEnv, "")
+		if err := configure(githubactions.New(), Options{StickyCache: []string{"go"}}, "linux"); err == nil || !strings.Contains(err.Error(), "agent contract is incomplete") {
+			t.Fatalf("unexpected missing contract error: %v", err)
+		}
+	})
+
+	t.Run("readiness timeout", func(t *testing.T) {
+		root := t.TempDir()
+		t.Setenv("GITHUB_OUTPUT", filepath.Join(root, "github-output"))
+		t.Setenv(stickyDiskDirEnv, filepath.Join(root, "missing-mount"))
+		t.Setenv(stickyDiskReadyFileEnv, filepath.Join(root, "stickydisk.ready"))
+		t.Setenv(stickyDiskUnavailableFileEnv, filepath.Join(root, "stickydisk.unavailable"))
+		if err := configure(githubactions.New(), Options{StickyCache: []string{"go"}, StickyWaitTimeout: time.Millisecond}, "linux"); err == nil || !strings.Contains(err.Error(), "sticky disk was not ready") {
+			t.Fatalf("unexpected timeout error: %v", err)
+		}
+	})
+}
+
+func TestPostJobSkipsInvalidCacheConfigWhenDiskIsUnavailable(t *testing.T) {
+	root := t.TempDir()
+	unavailableFile := filepath.Join(root, "stickydisk.unavailable")
+	if err := os.WriteFile(unavailableFile, []byte("sticky disk unavailable\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(stickyDiskUnavailableFileEnv, unavailableFile)
+
+	if err := PostJob(githubactions.New(), []string{"not-a-cache-mode"}); err != nil {
+		t.Fatalf("post-job should skip unavailable sticky disk: %v", err)
 	}
 }
 

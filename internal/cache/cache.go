@@ -3,6 +3,7 @@ package cache
 import (
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 
 	"github.com/sethvargo/go-githubactions"
@@ -13,6 +14,15 @@ import (
 func UpdateZctionsConfig(action *githubactions.Action, actionsResultsURL string, zctionsResultsURL string, zctionsCacheURL string, actionsRuntimeToken string) {
 	if zctionsResultsURL == "" {
 		return
+	}
+
+	// Older agents advertised cache API v2 as "on". BuildKit parses this
+	// flag as a Go boolean and otherwise falls back to the retired v1 API.
+	// Only normalize an existing affirmative flag for a RunsOn cache session;
+	// absent and explicitly disabled flags must keep their original meaning.
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("ACTIONS_CACHE_SERVICE_V2")), "on") {
+		action.SetEnv("ACTIONS_CACHE_SERVICE_V2", "true")
+		action.Infof("Normalized the legacy cache API v2 flag for subsequent actions.")
 	}
 
 	configURL := actionsResultsURL + "config"

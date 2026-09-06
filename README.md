@@ -13,6 +13,20 @@ jobs:
       - other steps
 ```
 
+### BuildKit cache API compatibility
+
+Run this action before Docker setup and build actions when using Magic Cache. Older agents may expose `ACTIONS_CACHE_SERVICE_V2=on`; BuildKit does not parse `on` as a boolean and can select cache API v1 instead. When the RunsOn cache session is present, this action exports the equivalent `true` for subsequent steps. Missing, disabled, and already canonical values are preserved.
+
+For workflows that cannot update this action yet, select API v2 explicitly on both the import and export:
+
+```yaml
+with:
+  cache-from: type=gha,version=2
+  cache-to: type=gha,version=2,mode=max
+```
+
+Keep any existing `scope` and other cache options. This workaround requires a BuildKit version that supports cache API v2; see [Docker's GitHub Actions cache documentation](https://docs.docker.com/build/cache/backends/gha/). It addresses the legacy flag reported in [runs-on/runs-on#541](https://github.com/runs-on/runs-on/issues/541), observed on v2.12.1-rc.4, and does not imply that current agents still emit that value.
+
 ## Options
 
 ### `show_env`

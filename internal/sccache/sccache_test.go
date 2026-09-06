@@ -2,12 +2,61 @@ package sccache
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/sethvargo/go-githubactions"
 )
+
+func TestConfigureSccacheExportsResolvedPrefix(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{name: "default", want: "cache/sccache/42/linux-x64/v1"},
+		{name: "explicit", input: "/cache/sccache/shared/", want: "cache/sccache/shared"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("GITHUB_REPOSITORY_ID", "42")
+			t.Setenv("RUNNER_OS", "Linux")
+			t.Setenv("RUNNER_ARCH", "X64")
+			t.Setenv("RUNS_ON_S3_BUCKET_CACHE", "test-cache-bucket")
+			t.Setenv("RUNS_ON_AWS_REGION", "us-east-1")
+			t.Setenv("SCCACHE_S3_KEY_PREFIX", "cache/previous-invocation")
+			envFile := filepath.Join(t.TempDir(), "env")
+			t.Setenv("GITHUB_ENV", envFile)
+			var log bytes.Buffer
+			if err := ConfigureSccache(githubactions.New(githubactions.WithWriter(&log)), "s3", tt.input); err != nil {
+				t.Fatal(err)
+			}
+			data, err := os.ReadFile(envFile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			exports := make(map[string]string)
+			lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+			for i := 0; i < len(lines); i += 3 {
+				key, delimiter, ok := strings.Cut(lines[i], "<<")
+				if !ok || i+2 >= len(lines) || lines[i+2] != delimiter {
+					t.Fatalf("invalid environment export: %q", data)
+				}
+				exports[key] = lines[i+1]
+			}
+			for key, want := range map[string]string{
+				"SCCACHE_GHA_ENABLED": "false", "SCCACHE_BUCKET": "test-cache-bucket",
+				"SCCACHE_REGION": "us-east-1", "SCCACHE_S3_KEY_PREFIX": tt.want, "RUSTC_WRAPPER": "sccache",
+			} {
+				if got := exports[key]; got != want {
+					t.Errorf("exported %s = %q, want %q", key, got, want)
+				}
+			}
+		})
+	}
+}
 
 func TestDefaultKeyPrefixScopesRepositoryAndPlatform(t *testing.T) {
 	t.Setenv("GITHUB_REPOSITORY_ID", "123456789")

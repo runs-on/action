@@ -307,13 +307,18 @@ Example:
 jobs:
   build:
     runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/extras=s3-cache
+    env:
+      CARGO_INCREMENTAL: "0"
     steps:
       - uses: runs-on/action@v2
         with:
           sccache: s3
-      - uses: mozilla-actions/sccache-action@v0.0.9
-      - run: # your slow rust compilation
+      - uses: mozilla-actions/sccache-action@v0.0.11
+      - uses: actions/checkout@v7
+      - run: cargo build --release --locked
 ```
+
+For Rust, disable incremental compilation as shown above. Configure the backend and prefix before the installer or any command that starts the sccache server: a running server keeps its startup configuration. This action exports settings; the separate installer supplies the executable.
 
 Possible values:
 
@@ -355,12 +360,14 @@ jobs:
         with:
           sccache: s3
           sccache_prefix: /cache/sccache/shared-namespace/
-      - uses: mozilla-actions/sccache-action@v0.0.9
+      - uses: mozilla-actions/sccache-action@v0.0.11
 ```
 
 Leading and trailing slashes are trimmed, so that example resolves to `cache/sccache/shared-namespace`. None of the default's components are kept and nothing is appended, so add platform or version components yourself if you want to be able to expire them separately. A value that carries no key components (empty, whitespace, or only slashes) falls back to the default rather than writing to the bucket root, which is shared with the other RunsOn caches. So do values that cannot be used as a key: control characters, `.` or `..` components, and anything long enough to crowd out the cache key inside S3's 1024 byte limit.
 
 Previously every repository on a stack shared the flat `cache/sccache` prefix. Moving to the scoped default therefore starts one cold cache per repository and platform; the previous behaviour is available with `sccache_prefix: cache/sccache`. Objects written under the old prefix are left to the stack's cache lifecycle rule, which expires everything under `cache/` after `S3CacheExpirationInDays` (10 by default).
+
+If a workflow currently overrides `SCCACHE_S3_KEY_PREFIX` in a shell step after this action, move that exact value to `sccache_prefix` when adopting this input to preserve its cache namespace. An environment value set before the action is overwritten; an explicit input avoids depending on step ordering for that override.
 
 Keep custom prefixes under `cache/` as well: the runner instance profile is only granted S3 access to that namespace, so a prefix outside it fails with access denied.
 

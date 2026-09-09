@@ -173,6 +173,11 @@ func ComputeAndDisplayCosts(action *githubactions.Action, cfg *config.Config) er
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusNoContent {
+		action.Infof("Skipping cost report: pricing data is unavailable for instance %s in region %s.", instanceType, region)
+		return nil
+	}
+
 	if resp.StatusCode != http.StatusOK {
 		// Read body for more details if possible
 		bodyBytes, readErr := io.ReadAll(resp.Body)

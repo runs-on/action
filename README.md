@@ -36,6 +36,10 @@ Possible values:
 
 ### `show_costs`
 
+When the cost API has no matching pricing data, cost reporting logs an informational
+message and skips the cost table and job summary. This includes unsupported regions
+and unavailable instance or zone prices. Other API and network failures still warn.
+
 Displays how much it cost to run that workflow job. Uses https://ec2-pricing.runs-on.com to get accurate data, for both on-demand and spot pricing across all regions and availability zones.
 
 Beta: also compares with similar machine on GitHub.

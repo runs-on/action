@@ -311,13 +311,18 @@ Example:
 jobs:
   build:
     runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/extras=s3-cache
+    env:
+      CARGO_INCREMENTAL: "0"
     steps:
       - uses: runs-on/action@v2
         with:
           sccache: s3
-      - uses: mozilla-actions/sccache-action@v0.0.9
-      - run: # your slow rust compilation
+      - uses: mozilla-actions/sccache-action@v0.0.11
+      - uses: actions/checkout@v7
+      - run: cargo build --release --locked
 ```
+
+For Rust, disable incremental compilation as shown above. Run this action before the installer or any command that starts the sccache server: a running server keeps its startup configuration. This action exports settings; the separate installer supplies the executable.
 
 Possible values:
 
@@ -330,9 +335,21 @@ What this does under the hood is the equivalent of:
 echo "SCCACHE_GHA_ENABLED=false" >> $GITHUB_ENV
 echo "SCCACHE_BUCKET=${{ env.RUNS_ON_S3_BUCKET_CACHE}}" >> $GITHUB_ENV
 echo "SCCACHE_REGION=${{ env.RUNS_ON_AWS_REGION}}" >> $GITHUB_ENV
-echo "SCCACHE_S3_KEY_PREFIX=cache/sccache" >> $GITHUB_ENV
+echo "SCCACHE_S3_KEY_PREFIX=cache/sccache/${{ github.repository_id }}/linux-x64/v1" >> $GITHUB_ENV
 echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
 ```
+
+The action scopes compiler cache objects per repository and per runner platform:
+
+```text
+cache/sccache/<repository id>/<runner os>-<runner arch>/v1
+```
+
+The repository id is used rather than the `owner/name` slug so that renaming or transferring a repository does not invalidate its cache; the action falls back to the slug (as two key components, `<owner>/<name>`) when `GITHUB_REPOSITORY_ID` is not exposed. The trailing `v1` is a layout version, so a future change to the key layout can be rolled out without reusing existing objects.
+
+This is operational isolation, not a security boundary: repositories sharing a RunsOn stack still share the bucket and the runner IAM role. It provides per-repository cache ownership, growth and cost attribution, targeted invalidation, and freedom to change one repository's cache layout without touching the others.
+
+Previously every repository on a stack shared the flat `cache/sccache` prefix. Moving to the scoped layout starts one cold cache per repository and platform. Objects written under the old prefix are left to the stack's cache lifecycle rule, which expires everything under `cache/` after `S3CacheExpirationInDays` (10 by default).
 
 ### `sticky_cache`
 

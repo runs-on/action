@@ -105,6 +105,12 @@ jobs:
           echo "SCCACHE_S3_KEY_PREFIX: $SCCACHE_S3_KEY_PREFIX"
           echo "RUSTC_WRAPPER: $RUSTC_WRAPPER"
 
+          expected="cache/sccache/${{ github.repository_id }}/linux-x64/v1"
+          if [ "$SCCACHE_S3_KEY_PREFIX" != "$expected" ]; then
+            echo "::error::Expected the default key prefix to be $expected"
+            exit 1
+          fi
+
   test-sccache-windows:
     runs-on: runs-on=${{ github.run_id }}/env=bootstrap/cpu=2/family=m7/image=windows25-full-x64/extras=s3-cache
 
@@ -208,3 +214,8 @@ jobs:
           Write-Host "SCCACHE_REGION: $env:SCCACHE_REGION"
           Write-Host "SCCACHE_S3_KEY_PREFIX: $env:SCCACHE_S3_KEY_PREFIX"
           Write-Host "RUSTC_WRAPPER: $env:RUSTC_WRAPPER"
+
+          $expected = "cache/sccache/${{ github.repository_id }}/windows-x64/v1"
+          if ($env:SCCACHE_S3_KEY_PREFIX -ne $expected) {
+            throw "Expected the default key prefix to be $expected"
+          }

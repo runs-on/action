@@ -83,7 +83,7 @@ Supported metrics:
 | `cpu` | `usage_user`, `usage_system` |
 | `network` | `bytes_recv`, `bytes_sent` |
 | `memory` | `used_percent` |
-| `disk` | `used_percent`, `inodes_used` |
+| `disk` | `used_percent`, `inodes_used`, `free`, `total` |
 | `io` | `io_time`, `reads`, `writes` |
 
 ```yaml
@@ -101,7 +101,7 @@ Possible values:
 * `cpu` - CPU usage metrics (`usage_user`, `usage_system`)
 * `network` - Network metrics (`bytes_recv`, `bytes_sent`)
 * `memory` - Memory metrics (`used_percent`)
-* `disk` - Disk metrics (`used_percent`, `inodes_used`)
+* `disk` - Disk metrics (`used_percent`, `inodes_used`, `free`, `total`)
 * `io` - I/O metrics (`io_time`, `reads`, `writes`)
 * Comma-separated combinations (e.g., `cpu,network,memory,disk,io`)
 * Empty string - No additional metrics (default)

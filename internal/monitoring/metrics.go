@@ -119,6 +119,20 @@ func GetMeasurements(metric string) []Measurement {
 				Unit:        "Inodes",
 				Aggregation: "Sum",
 			},
+			{
+				Name:        "free",
+				RealName:    "disk_free",
+				Rename:      "Disk Free",
+				Unit:        "Bytes",
+				Aggregation: "Minimum",
+			},
+			{
+				Name:        "total",
+				RealName:    "disk_total",
+				Rename:      "Disk Total",
+				Unit:        "Bytes",
+				Aggregation: "Maximum",
+			},
 		}
 	case "io":
 		return []Measurement{

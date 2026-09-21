@@ -15,7 +15,7 @@ inputs:
     required: false
     default: 'inline'
   metrics:
-    description: 'Comma separated list of additional metrics to send to CloudWatch (cpu, network, memory, disk, io)'
+    description: 'Comma separated list of additional metrics to send to CloudWatch (cpu, network, memory, disk, io). disk publishes used_percent, inodes_used, free and total.'
     required: false
     default: ''
   network_interface:

@@ -416,7 +416,41 @@ Supported cache modes and the directories they persist:
 | `gradle` | | `~/.gradle/caches`, `~/.gradle/wrapper` |
 | `maven` | | `~/.m2/repository` |
 | `playwright` | | `~/.cache/ms-playwright` |
+| `tool-cache` | | `$RUNNER_TOOL_CACHE` (toolchains installed by `setup-*` actions) |
 | `custom` | | One or more paths supplied with `path=` |
+
+#### `tool-cache` mode
+
+The `tool-cache` mode persists toolchains installed through GitHub's tool
+cache. Run this action before actions such as `actions/setup-go`,
+`actions/setup-node`, or `actions/setup-python`:
+
+```yaml
+jobs:
+  build:
+    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/sticky=tools-ubuntu24:20gb
+    steps:
+      - uses: actions/checkout@v7
+      - uses: runs-on/action@v2
+        with:
+          sticky_cache: tool-cache
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.25.1'
+```
+
+This mode mounts an empty or restored sticky directory directly over the
+runner-provided `RUNNER_TOOL_CACHE` path, and persists only the toolchains
+installed after the mount. It does not copy toolchains from the runner image
+into the sticky cache, so the image's preinstalled toolchains are hidden for
+the rest of the job: `setup-*` actions download any version they need, the
+`GOROOT_*` variables (and, on Linux, the default `go` linked into `/usr/bin`)
+point to missing directories, and `github/codeql-action` downloads its CodeQL
+bundle. Use it for jobs that install a large toolchain the image does not ship.
+
+It supports Linux and Windows and does not cache package dependencies or build
+outputs. Use a sticky-disk name tied to the runner image, as restored binaries
+may not be compatible with another operating system image.
 
 #### `buildkit` mode (Docker layer cache)
 

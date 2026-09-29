@@ -81,9 +81,12 @@ func GenerateCloudWatchConfig(action *githubactions.Action, metrics []string, ne
 		case "disk":
 			diskConfig := map[string]interface{}{
 				"drop_original_metrics": true,
-				"drop_device":           true,
-				"measurement":           []string{},
-				"resources":             []string{"/", "/tmp", "/var/lib/docker", "/home/runner"},
+				// The agent maps each metric's device to the EBS volume behind it,
+				// so it must keep the device tag to publish a per-mount VolumeId.
+				"drop_device":       false,
+				"append_dimensions": map[string]string{"VolumeId": "${aws:VolumeId}"},
+				"measurement":       []string{},
+				"resources":         diskResources,
 				"ignore_file_system_types": []string{
 					"sysfs", "devtmpfs",
 				},

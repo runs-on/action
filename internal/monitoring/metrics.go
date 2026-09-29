@@ -228,15 +228,7 @@ func GenerateMetricsSummary(action *githubactions.Action, metrics []string, form
 					})
 				}
 				if metricType == "disk" {
-					variants = []string{"/", "/tmp", "/var/lib/docker", "/home/runner"}
-					dimensions = append(dimensions, types.Dimension{
-						Name:  aws.String("fstype"),
-						Value: aws.String("ext4"),
-					})
-					dimensions = append(dimensions, types.Dimension{
-						Name:  aws.String("path"),
-						Value: aws.String("/"),
-					})
+					variants = diskResources
 				}
 				if metricType == "io" {
 					dimensions = append(dimensions, types.Dimension{
@@ -245,14 +237,23 @@ func GenerateMetricsSummary(action *githubactions.Action, metrics []string, form
 					})
 				}
 				for _, variant := range variants {
+					queryDimensions, mounted := dimensions, true
 					if metricType == "disk" {
-						dimensions[len(dimensions)-1].Value = aws.String(variant)
+						// CloudWatch only returns the exact dimension set the agent published.
+						queryDimensions, mounted = diskMetricDimensions(procMountInfo, sysBlock, sysDevBlock, variant)
 					}
-					summary := collector.GetMetricSummary(measurement.RealName, NAMESPACE, measurement.Aggregation, dimensions, launchTime)
+					var summary *MetricSummary
+					if mounted {
+						summary = collector.GetMetricSummary(measurement.RealName, NAMESPACE, measurement.Aggregation, queryDimensions, launchTime)
+					}
 					if metricType == "disk" && variant != "/" && summary == nil {
 						continue
 					}
-					displayMetric(action, measurement.Rename, summary, measurement.Unit, formatter, variant)
+					name := measurement.Rename
+					if metricType == "disk" {
+						name += " " + variant
+					}
+					displayMetric(action, name, summary, measurement.Unit, formatter, variant)
 				}
 			}
 		}

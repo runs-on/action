@@ -13,6 +13,12 @@ jobs:
       - other steps
 ```
 
+When RunsOn fails a job because AWS is reclaiming its EC2 Spot instance, the
+post step skips all of its work (cost report, metrics summary, and sticky cache
+shutdown). The runner then has time to report the interruption before the
+instance shuts down, and RunsOn discards the sticky disk changes of an
+interrupted job anyway.
+
 ## Options
 
 ### `show_env`

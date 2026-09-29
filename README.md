@@ -106,6 +106,8 @@ Possible values:
 * Comma-separated combinations (e.g., `cpu,network,memory,disk,io`)
 * Empty string - No additional metrics (default)
 
+Disk metrics are published for each of `/`, `/tmp`, `/var/lib/docker` and `/home/runner` that is a mount point, with the `InstanceId`, `path`, `fstype`, `device` and `VolumeId` dimensions. `VolumeId` is the EBS volume behind that mount, so a sticky disk or snapshot volume mounted at `/var/lib/docker` reports its own volume. Mounts that aren't on an EBS volume have no `VolumeId`, for example `tmpfs`, `overlay`, or the `md0` array RunsOn builds from local instance storage. Earlier versions published disk metrics without the `device` and `VolumeId` dimensions, so update dashboards or alarms that match on the previous set.
+
 The action will display live metrics with charts in the post-execution summary.
 
 ```

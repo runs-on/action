@@ -1,11 +1,13 @@
 package gitproxy
 
 import (
+	"bytes"
 	"context"
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/cgi"
@@ -310,6 +312,20 @@ func (s *Server) handleInfoRefs(w http.ResponseWriter, r *http.Request, t target
 func (s *Server) serveCGI(w http.ResponseWriter, r *http.Request, canonicalPath string) {
 	req := r.Clone(r.Context())
 	req.URL.Path = canonicalPath
+	// net/http/cgi answers chunked bodies with 400, and git sends chunked
+	// requests above http.postBuffer (1 MiB by default), e.g. a blob:none
+	// checkout lazily fetching every blob in one request. Buffer the body so
+	// http-backend receives a CONTENT_LENGTH instead.
+	if len(req.TransferEncoding) > 0 {
+		body, err := io.ReadAll(req.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		req.Body = io.NopCloser(bytes.NewReader(body))
+		req.ContentLength = int64(len(body))
+		req.TransferEncoding = nil
+	}
 	s.cgi.ServeHTTP(w, req)
 }
 

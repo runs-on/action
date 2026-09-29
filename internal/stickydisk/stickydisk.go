@@ -108,8 +108,9 @@ func configure(action *githubactions.Action, opts Options, goos string) error {
 
 	// Resolve all targets, deduplicating by absolute path.
 	type mountSpec struct {
-		target string
-		root   bool
+		target        string
+		root          bool
+		inheritTarget bool
 	}
 	type postSetup struct {
 		name    string
@@ -119,13 +120,13 @@ func configure(action *githubactions.Action, opts Options, goos string) error {
 	var specs []mountSpec
 	var posts []postSetup
 	var results []mountResult
-	seen := map[string]bool{}
+	seen := map[string]int{}
 	seenPosts := map[string]bool{}
 	state, err := readJobCacheState()
 	if err != nil {
 		return fmt.Errorf("read cache state from earlier action invocations: %w", err)
 	}
-	addTarget := func(path string, root bool) (string, error) {
+	addTarget := func(path string, root, inheritTarget bool) (string, error) {
 		resolved := resolveTarget(path, home, workspace)
 		// Every workspace-relative target gets ancestry validation, whether it
 		// came from a custom record or a built-in mode (e.g. ruby's
@@ -135,17 +136,20 @@ func configure(action *githubactions.Action, opts Options, goos string) error {
 			return "", err
 		}
 		canonical := canonicalPath(resolved)
-		if seen[canonical] {
+		if index, exists := seen[canonical]; exists {
+			// Excluding the current target is the stricter policy and must win
+			// when two requested modes resolve to the same directory.
+			specs[index].inheritTarget = specs[index].inheritTarget && inheritTarget
 			return resolved, nil
 		}
-		seen[canonical] = true
-		specs = append(specs, mountSpec{target: resolved, root: root})
+		seen[canonical] = len(specs)
+		specs = append(specs, mountSpec{target: resolved, root: root, inheritTarget: inheritTarget})
 		return resolved, nil
 	}
 	for _, request := range requests {
 		if request.Custom {
 			for _, path := range request.Paths {
-				if _, err := addTarget(path, false); err != nil {
+				if _, err := addTarget(path, false, true); err != nil {
 					return err
 				}
 			}
@@ -181,9 +185,13 @@ func configure(action *githubactions.Action, opts Options, goos string) error {
 			results = append(results, mountResult{Target: mode.Name, Hit: hit && err == nil, Err: err})
 			continue
 		}
+		paths, err := mode.pathsFor(goos)
+		if err != nil {
+			return err
+		}
 		var modeTargets []string
-		for _, path := range mode.pathsFor(goos) {
-			resolved, err := addTarget(path, mode.Root)
+		for _, path := range paths {
+			resolved, err := addTarget(path, mode.Root, !mode.IgnoreTargetContents)
 			if err != nil {
 				return err
 			}
@@ -217,7 +225,7 @@ func configure(action *githubactions.Action, opts Options, goos string) error {
 
 	mountErrors := make(map[string]error, len(specs))
 	for _, spec := range specs {
-		hit, err := cacheMount(action, mountRoot, spec.target, spec.root)
+		hit, err := cacheMount(action, mountRoot, spec.target, spec.root, spec.inheritTarget)
 		key := canonicalPath(spec.target)
 		if originalHit, found := state.Mounts[key]; found {
 			// A repeated invocation in the same job must preserve the original
@@ -334,6 +342,14 @@ func postSetupMountsSucceeded(targets []string, mountErrors map[string]error) bo
 }
 
 func validateCacheOrdering(requests []CacheRequest, goos, home, workspace string) error {
+	for _, request := range requests {
+		if request.Custom || request.Mode.Setup != nil {
+			continue
+		}
+		if _, err := request.Mode.pathsFor(goos); err != nil {
+			return err
+		}
+	}
 	if goos == "windows" {
 		return nil
 	}
@@ -365,7 +381,11 @@ func validateCacheOrdering(requests []CacheRequest, goos, home, workspace string
 		name := "custom"
 		if !request.Custom {
 			name = request.Mode.Name
-			paths = request.Mode.pathsFor(goos)
+			modePaths, err := request.Mode.pathsFor(goos)
+			if err != nil {
+				return err
+			}
+			paths = modePaths
 		}
 		for _, path := range paths {
 			if isWorkspaceCachePath(path, home, workspace) {

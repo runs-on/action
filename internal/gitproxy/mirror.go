@@ -771,6 +771,30 @@ func (m *Mirror) HasObject(ctx context.Context, repoPath, oid string) bool {
 	return exec.CommandContext(ctx, "git", "--git-dir", repoPath, "cat-file", "-e", oid).Run() == nil
 }
 
+// MissingObjects returns the oids absent from the mirror repo. One cat-file
+// process checks them all: a partial-clone checkout lazily fetches every blob
+// in one request, and a process per want costs ~1ms each (tens of thousands).
+// A failed check reports every oid missing so the request goes upstream.
+func (m *Mirror) MissingObjects(ctx context.Context, repoPath string, oids []string) []string {
+	if len(oids) == 0 {
+		return nil
+	}
+	cmd := exec.CommandContext(ctx, "git", "-c", "core.hooksPath=/dev/null", "--git-dir", repoPath, "cat-file", "--batch-check=%(objectname)")
+	cmd.Env = gitEnv("")
+	cmd.Stdin = strings.NewReader(strings.Join(oids, "\n") + "\n")
+	out, err := cmd.Output()
+	if err != nil {
+		return oids
+	}
+	var missing []string
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if oid, ok := strings.CutSuffix(line, " missing"); ok {
+			missing = append(missing, oid)
+		}
+	}
+	return missing
+}
+
 // IsUsable reports whether repoPath is a valid bare repository. A failed
 // info/refs mirror clone is followed by a want-less protocol-v2 ls-refs POST,
 // so upload-pack must check the repository itself rather than relying only on

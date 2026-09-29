@@ -36,6 +36,10 @@ Possible values:
 
 ### `show_costs`
 
+When the cost API has no matching pricing data, cost reporting logs an informational
+message and skips the cost table and job summary. This includes unsupported regions
+and unavailable instance or zone prices. Other API and network failures still warn.
+
 Displays how much it cost to run that workflow job. Uses https://ec2-pricing.runs-on.com to get accurate data, for both on-demand and spot pricing across all regions and availability zones.
 
 Beta: also compares with similar machine on GitHub.
@@ -307,13 +311,18 @@ Example:
 jobs:
   build:
     runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/extras=s3-cache
+    env:
+      CARGO_INCREMENTAL: "0"
     steps:
       - uses: runs-on/action@v2
         with:
           sccache: s3
-      - uses: mozilla-actions/sccache-action@v0.0.9
-      - run: # your slow rust compilation
+      - uses: mozilla-actions/sccache-action@v0.0.11
+      - uses: actions/checkout@v7
+      - run: cargo build --release --locked
 ```
+
+For Rust, disable incremental compilation as shown above. Run this action before the installer or any command that starts the sccache server: a running server keeps its startup configuration. This action exports settings; the separate installer supplies the executable.
 
 Possible values:
 
@@ -326,9 +335,21 @@ What this does under the hood is the equivalent of:
 echo "SCCACHE_GHA_ENABLED=false" >> $GITHUB_ENV
 echo "SCCACHE_BUCKET=${{ env.RUNS_ON_S3_BUCKET_CACHE}}" >> $GITHUB_ENV
 echo "SCCACHE_REGION=${{ env.RUNS_ON_AWS_REGION}}" >> $GITHUB_ENV
-echo "SCCACHE_S3_KEY_PREFIX=cache/sccache" >> $GITHUB_ENV
+echo "SCCACHE_S3_KEY_PREFIX=cache/sccache/${{ github.repository_id }}/linux-x64/v1" >> $GITHUB_ENV
 echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
 ```
+
+The action scopes compiler cache objects per repository and per runner platform:
+
+```text
+cache/sccache/<repository id>/<runner os>-<runner arch>/v1
+```
+
+The repository id is used rather than the `owner/name` slug so that renaming or transferring a repository does not invalidate its cache; the action falls back to the slug (as two key components, `<owner>/<name>`) when `GITHUB_REPOSITORY_ID` is not exposed. The trailing `v1` is a layout version, so a future change to the key layout can be rolled out without reusing existing objects.
+
+This is operational isolation, not a security boundary: repositories sharing a RunsOn stack still share the bucket and the runner IAM role. It provides per-repository cache ownership, growth and cost attribution, targeted invalidation, and freedom to change one repository's cache layout without touching the others.
+
+Previously every repository on a stack shared the flat `cache/sccache` prefix. Moving to the scoped layout starts one cold cache per repository and platform. Objects written under the old prefix are left to the stack's cache lifecycle rule, which expires everything under `cache/` after `S3CacheExpirationInDays` (10 by default).
 
 ### `sticky_cache`
 
@@ -395,7 +416,41 @@ Supported cache modes and the directories they persist:
 | `gradle` | | `~/.gradle/caches`, `~/.gradle/wrapper` |
 | `maven` | | `~/.m2/repository` |
 | `playwright` | | `~/.cache/ms-playwright` |
+| `tool-cache` | | `$RUNNER_TOOL_CACHE` (toolchains installed by `setup-*` actions) |
 | `custom` | | One or more paths supplied with `path=` |
+
+#### `tool-cache` mode
+
+The `tool-cache` mode persists toolchains installed through GitHub's tool
+cache. Run this action before actions such as `actions/setup-go`,
+`actions/setup-node`, or `actions/setup-python`:
+
+```yaml
+jobs:
+  build:
+    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/sticky=tools-ubuntu24:20gb
+    steps:
+      - uses: actions/checkout@v7
+      - uses: runs-on/action@v2
+        with:
+          sticky_cache: tool-cache
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.25.1'
+```
+
+This mode mounts an empty or restored sticky directory directly over the
+runner-provided `RUNNER_TOOL_CACHE` path, and persists only the toolchains
+installed after the mount. It does not copy toolchains from the runner image
+into the sticky cache, so the image's preinstalled toolchains are hidden for
+the rest of the job: `setup-*` actions download any version they need, the
+`GOROOT_*` variables (and, on Linux, the default `go` linked into `/usr/bin`)
+point to missing directories, and `github/codeql-action` downloads its CodeQL
+bundle. Use it for jobs that install a large toolchain the image does not ship.
+
+It supports Linux and Windows and does not cache package dependencies or build
+outputs. Use a sticky-disk name tied to the runner image, as restored binaries
+may not be compatible with another operating system image.
 
 #### `buildkit` mode (Docker layer cache)
 
@@ -488,7 +543,7 @@ make dist
 
 ## Release
 
-Releases are created by the manual **Release** GitHub Actions workflow. Run it from the `v2` branch with a new tag, for example `v2.3.0`. The workflow builds the distributed artifacts in CI, commits them to the release branch, tags that artifact commit, creates a draft release with assets, signs `SHA256SUMS`, creates GitHub artifact attestations, and publishes the draft.
+Releases are created by the manual **Release** GitHub Actions workflow. Run it from the `v2` branch with a new tag, for example `v2.4.0`. The workflow builds the distributed artifacts in CI, commits them to the release branch, tags that artifact commit, creates a draft release with assets, signs `SHA256SUMS`, creates GitHub artifact attestations, and publishes the draft.
 
 Do not create or push release tags locally. The tag must be created by the workflow after the CI-built artifacts have been committed.
 
@@ -503,7 +558,7 @@ The repository must have these secrets configured:
 To verify a release:
 
 ```bash
-gh release download v2.3.0 -R runs-on/action
+gh release download v2.4.0 -R runs-on/action
 gpg --verify SHA256SUMS.asc SHA256SUMS
 shasum -a 256 -c SHA256SUMS
 gh attestation verify main-linux-amd64 -R runs-on/action

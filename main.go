@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 
@@ -72,6 +73,18 @@ func shouldTrackCostsInPost() bool {
 	return err == nil && track
 }
 
+// spotInterrupted reports whether the RunsOn agent (v3.3.0+) has failed this
+// job for an EC2 Spot interruption. The agent writes this marker right before
+// it stops the active step; the instance shuts down about 20 seconds later.
+func spotInterrupted() bool {
+	marker := "/runs-on/spot-interrupted"
+	if runtime.GOOS == "windows" {
+		marker = `C:\runs-on\spot-interrupted`
+	}
+	_, err := os.Stat(marker)
+	return err == nil
+}
+
 // handleMainExecution contains the original main logic.
 func handleMainExecution(action *githubactions.Action, ctx context.Context) {
 	if healthToken := os.Getenv(gitproxy.EnvHealthToken); healthToken != "" {
@@ -132,6 +145,13 @@ func handleMainExecution(action *githubactions.Action, ctx context.Context) {
 // handlePostExecution contains the logic for the post-execution phase.
 func handlePostExecution(action *githubactions.Action, ctx context.Context) {
 	action.Infof("Running post-execution phase...")
+	// The agent gives the runner seconds to report the interruption before it
+	// terminates the job, and RunsOn discards the sticky disk's changes. Post
+	// work such as stopping BuildKit would only delay that report.
+	if spotInterrupted() {
+		action.Infof("EC2 Spot interruption: skipping post-execution work so the runner can report the interruption before the instance shuts down.")
+		return
+	}
 	cfg, err := config.NewConfigFromInputs(action)
 	if err != nil {
 		action.Errorf("Failed to load configuration in post-execution: %v", err)

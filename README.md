@@ -47,21 +47,24 @@ Example output in the "Complete runner" step:
 
 ```
 💰 Estimated cost: $0.0034 (GitHub-hosted: $0.0120)
-| Metric                   | Value                            |
-| ------------------------ | -------------------------------- |
-| Instance type            | c7a.large                        |
-| Instance lifecycle       | spot                             |
-| Region                   | us-east-1                        |
-| Availability zone        | us-east-1b                       |
-| Platform                 | linux/x64, 2 vCPUs               |
-| Billed duration          | 2m45s (includes 5s for shutdown) |
-| EC2                      | $0.0014                          |
-| EBS root volume          | $0.0008                          |
-| EBS sticky disk          | $0.0012                          |
-| Total                    | $0.0034                          |
-| GitHub-hosted equivalent | $0.0120 (2 min)                  |
-| Savings                  | $0.0086 (71.7%)                  |
+| Metric                   | Value                                      |
+| ------------------------ | ------------------------------------------ |
+| Instance type            | c7a.large                                  |
+| Instance lifecycle       | spot                                       |
+| Region                   | us-east-1                                  |
+| Availability zone        | us-east-1b                                 |
+| Platform                 | linux/x64, 2 vCPUs                         |
+| Billed duration          | 2m45s (boot, job, and 5s for shutdown)     |
+| Job duration             | 1m44s                                      |
+| EC2                      | $0.0014                                    |
+| EBS root volume          | $0.0008                                    |
+| EBS sticky disk          | $0.0012                                    |
+| Total                    | $0.0034                                    |
+| GitHub-hosted equivalent | $0.0120 (job duration rounded up to 2 min) |
+| Savings                  | $0.0086 (71.7%)                            |
 ```
+
+The GitHub-hosted equivalent uses GitHub's published per-minute price for the smallest runner with at least as many vCPUs. It bills only the job duration, rounded up to the next whole minute as GitHub does, since GitHub doesn't bill runner boot.
 
 **Earlier RunsOn versions.** The action's post step computes the cost from https://ec2-pricing.runs-on.com, for both on-demand and spot pricing across all regions and availability zones. It covers EC2 only, up to the post step. When the cost API has no matching pricing data, cost reporting logs an informational message and skips the cost table and job summary. This includes unsupported regions and unavailable instance or zone prices. Other API and network failures still warn.
 

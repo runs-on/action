@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/runs-on/action/internal/costs"
 	"github.com/sethvargo/go-githubactions"
 )
 
@@ -95,6 +96,57 @@ func TestShouldTrackCostsInPost(t *testing.T) {
 			t.Setenv(costTrackingStateEnv, tt.state)
 			if got := shouldTrackCostsInPost(); got != tt.want {
 				t.Fatalf("shouldTrackCostsInPost() = %t, want %t", got, tt.want)
+			}
+		})
+	}
+}
+
+// A RunsOn agent that reports costs reads the mode from a file in RUNNER_TEMP.
+func TestRequestAgentCostMode(t *testing.T) {
+	for _, tt := range []struct {
+		name           string
+		showCosts      string
+		claimed        bool // this invocation owns cost reporting
+		alreadyClaimed bool // an earlier invocation owns it
+		previous       string
+		want           string // "" means no file
+	}{
+		{name: "first enabled invocation sets inline", showCosts: "inline", claimed: true, want: "inline"},
+		{name: "first enabled invocation sets summary", showCosts: "summary", claimed: true, want: "summary"},
+		{name: "disabled invocation turns the report off", showCosts: "false", want: "off"},
+		{name: "later enabled invocation overrides an earlier off", showCosts: "summary", claimed: true, previous: "off", want: "summary"},
+		{name: "disabled invocation keeps an earlier enabled mode", showCosts: "false", alreadyClaimed: true, previous: "summary", want: "summary"},
+		{name: "later enabled invocation keeps the first mode", showCosts: "inline", alreadyClaimed: true, previous: "summary", want: "summary"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("RUNNER_TEMP", t.TempDir())
+			t.Setenv(costs.AgentModeFileNameEnv, "runs-on-show-costs")
+			if tt.alreadyClaimed {
+				t.Setenv(costTrackingClaimEnv, "true")
+			} else {
+				t.Setenv(costTrackingClaimEnv, "")
+			}
+			path := costs.AgentModeFile()
+			if path == "" {
+				t.Fatal("AgentModeFile() is empty although the agent advertised the file")
+			}
+			if tt.previous != "" {
+				if err := os.WriteFile(path, []byte(tt.previous+"\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			requestAgentCostMode(githubactions.New(githubactions.WithWriter(io.Discard)), path, tt.showCosts, tt.claimed)
+
+			got, err := os.ReadFile(path)
+			if tt.want == "" {
+				if err == nil {
+					t.Fatalf("mode file = %q, want none", got)
+				}
+				return
+			}
+			if err != nil || strings.TrimSpace(string(got)) != tt.want {
+				t.Fatalf("mode file = %q (%v), want %q", got, err, tt.want)
 			}
 		})
 	}

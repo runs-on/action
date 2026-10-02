@@ -11,7 +11,7 @@ inputs:
     required: false
     default: 'false'
   show_costs:
-    description: 'Control how execution costs are displayed: "inline" for log output, "summary" for GitHub job summary, any other value disables the feature. When the action is used more than once in a job, only the first enabled invocation reports costs.'
+    description: 'Control how execution costs are displayed: "inline" for log output, "summary" for GitHub job summary, any other value disables the feature. With RunsOn v3.4.0+, the RunsOn agent reports the cost at the end of the job and this input only sets how it is displayed. When the action is used more than once in a job, only the first enabled invocation reports costs.'
     required: false
     default: 'inline'
   metrics:

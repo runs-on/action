@@ -29,17 +29,41 @@ func costTrackingRequested(showCosts string) bool {
 	return showCosts == "inline" || showCosts == "summary"
 }
 
+func costTrackingClaimed() bool {
+	return strings.EqualFold(strings.TrimSpace(os.Getenv(costTrackingClaimEnv)), "true")
+}
+
 // claimCostTracking assigns cost reporting to the first enabled invocation in
 // a job. GITHUB_ENV tells later action steps that the job already has an owner,
 // while GITHUB_STATE carries the decision to this invocation's own post step.
 func claimCostTracking(action *githubactions.Action, showCosts string) bool {
-	track := costTrackingRequested(showCosts) &&
-		!strings.EqualFold(strings.TrimSpace(os.Getenv(costTrackingClaimEnv)), "true")
+	track := costTrackingRequested(showCosts) && !costTrackingClaimed()
 	action.SaveState(costTrackingStateKey, strconv.FormatBool(track))
 	if track {
 		action.SetEnv(costTrackingClaimEnv, "true")
 	}
 	return track
+}
+
+// requestAgentCostMode passes show_costs to a RunsOn agent that reports the
+// job cost itself. The first enabled invocation sets the mode. A disabled
+// invocation turns the report off only while no enabled one has claimed it, so
+// a later enabled invocation still wins, as with the cost API.
+func requestAgentCostMode(action *githubactions.Action, path string, showCosts string, claimed bool) {
+	mode := showCosts
+	if !claimed {
+		if costTrackingRequested(showCosts) || costTrackingClaimed() {
+			return
+		}
+		mode = costs.AgentModeOff
+	}
+	if err := costs.RequestAgentMode(path, mode); err != nil {
+		action.Warningf("Failed to pass show_costs=%s to the RunsOn agent: %v", showCosts, err)
+		return
+	}
+	if claimed {
+		action.Infof("show_costs is enabled. The RunsOn agent reports this job's cost at the end of the job, in the \"Complete runner\" step.")
+	}
 }
 
 func shouldTrackCostsInPost() bool {
@@ -69,7 +93,10 @@ func handleMainExecution(action *githubactions.Action, ctx context.Context) {
 
 	cache.UpdateZctionsConfig(action, cfg.ActionsResultsURL, cfg.ZctionsResultsURL, cfg.ZctionsCacheURL, cfg.ActionsRuntimeToken)
 
-	if claimCostTracking(action, cfg.ShowCosts) {
+	claimed := claimCostTracking(action, cfg.ShowCosts)
+	if modeFile := costs.AgentModeFile(); modeFile != "" {
+		requestAgentCostMode(action, modeFile, cfg.ShowCosts, claimed)
+	} else if claimed {
 		action.Infof("show_costs is enabled. You will find cost details in the post-execution step of this action.")
 	} else if costTrackingRequested(cfg.ShowCosts) {
 		action.Infof("Cost tracking is already registered by an earlier runs-on/action invocation; this invocation will skip duplicate cost reporting.")
@@ -115,7 +142,11 @@ func handlePostExecution(action *githubactions.Action, ctx context.Context) {
 		env.DisplayEnvVars()
 	}
 
-	if shouldTrackCostsInPost() {
+	if costs.AgentModeFile() != "" {
+		if shouldTrackCostsInPost() {
+			action.Infof("The RunsOn agent reports this job's cost at the end of the job, in the \"Complete runner\" step.")
+		}
+	} else if shouldTrackCostsInPost() {
 		err = costs.ComputeAndDisplayCosts(action, cfg)
 		if err != nil {
 			action.Warningf("Failed to compute or display costs: %v", err)

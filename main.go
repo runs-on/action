@@ -13,6 +13,7 @@ import (
 	"github.com/runs-on/action/internal/costs"
 	"github.com/runs-on/action/internal/env"
 	"github.com/runs-on/action/internal/gitproxy"
+	"github.com/runs-on/action/internal/mbx"
 	"github.com/runs-on/action/internal/monitoring"
 	"github.com/runs-on/action/internal/sccache"
 	"github.com/runs-on/action/internal/stickydisk"
@@ -106,6 +107,13 @@ func handleMainExecution(action *githubactions.Action, ctx context.Context) {
 	if cfg.HasSccache() {
 		if err := sccache.ConfigureSccache(action, cfg.Sccache); err != nil {
 			action.Errorf("Failed to configure sccache: %v", err)
+		}
+	}
+
+	// Configure mbx if requested
+	if cfg.HasMbx() {
+		if err := mbx.ConfigureMbx(action, cfg.Mbx); err != nil {
+			action.Errorf("Failed to configure mbx: %v", err)
 		}
 	}
 

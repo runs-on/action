@@ -21,6 +21,20 @@ func TestHasSccacheOnRunsOn(t *testing.T) {
 	}
 }
 
+func TestHasMbxOnRunsOn(t *testing.T) {
+	t.Setenv("RUNS_ON_RUNNER_NAME", "linux-runner")
+	cfg := Config{Mbx: "s3"}
+
+	if !cfg.HasMbx() {
+		t.Fatal("mbx was disabled on a RunsOn runner")
+	}
+
+	t.Setenv("RUNS_ON_RUNNER_NAME", "")
+	if cfg.HasMbx() {
+		t.Fatal("mbx was enabled outside RunsOn")
+	}
+}
+
 func TestStickyCacheInputs(t *testing.T) {
 	t.Setenv("INPUT_STICKY_CACHE", " go \n\n buildkit \n custom,path=vendor/cache ")
 	t.Setenv("INPUT_STICKY_WAIT_TIMEOUT", "90s")

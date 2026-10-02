@@ -363,6 +363,54 @@ This is operational isolation, not a security boundary: repositories sharing a R
 
 Previously every repository on a stack shared the flat `cache/sccache` prefix. Moving to the scoped layout starts one cold cache per repository and platform. Objects written under the old prefix are left to the stack's cache lifecycle rule, which expires everything under `cache/` after `S3CacheExpirationInDays` (10 by default).
 
+### `mbx`
+
+Available on RunsOn runners.
+
+Configures [mbx (Mr. Boxington)](https://github.com/jdx/mr-boxington), a Rust build cache, to use the RunsOn S3 cache bucket as its [remote cache](https://github.com/jdx/mr-boxington/blob/main/docs/remote-cache.md). It needs mbx 1.21.0 or later.
+
+This action configures mbx but does not install it. Install it after this action with [`jdx/mr-boxington-action`](https://github.com/jdx/mr-boxington-action) and `backend: remote`, which keeps the remote configured here and fails the step if mbx cannot use it. If the repository declares `mr-boxington` in its `mise.toml`, [`jdx/mise-action`](https://github.com/jdx/mise-action) works in either order.
+
+Example:
+
+```yaml
+jobs:
+  build:
+    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/extras=s3-cache
+    steps:
+      - uses: actions/checkout@v6
+      - uses: runs-on/action@v2
+        with:
+          mbx: s3
+      - uses: jdx/mr-boxington-action@v1
+        with:
+          backend: remote
+      - run: mbx build --workspace
+```
+
+Possible values:
+
+* `s3` - Use RunsOn S3 cache bucket as mbx's remote cache
+* Empty string - Disable mbx configuration (default)
+
+What this does under the hood is the equivalent of:
+
+```bash
+echo "MBX_REMOTE_URL=s3://${{ env.RUNS_ON_S3_BUCKET_CACHE }}/cache/mbx" >> $GITHUB_ENV
+echo "MBX_REMOTE_NAMESPACE=${{ github.repository_id }}" >> $GITHUB_ENV
+echo "MBX_REMOTE_S3_REGION=${{ env.RUNS_ON_AWS_REGION }}" >> $GITHUB_ENV
+```
+
+No AWS credentials are exported. mbx signs with the runner's instance role and renews its credentials before they expire, so long jobs keep the cache and later steps' AWS tools keep using the instance profile. If the job sets AWS credentials or a profile of its own, mbx does not use the instance role, and the action warns when one is already set. `mbx doctor` shows which credentials mbx uses.
+
+Objects are stored under `cache/mbx/<repository ID>/v1/` and expire with the rest of the cache bucket (`S3CacheExpirationInDays`, 10 days by default).
+
+Keep in mind:
+
+* **Who writes.** mbx only publishes from pushes to protected branches; everything else reads. That is mbx's own policy, not an access boundary: the runner role can write anywhere under `cache/`.
+* **Release builds.** Leave `mbx` unset in jobs that build published artifacts, as [mbx recommends](https://github.com/jdx/mr-boxington/blob/main/docs/github-action.md#production-releases).
+* **Containers.** Containers you start yourself, for example with `docker run`, need the `MBX_REMOTE_*` variables passed in. mbx inside them can still use the instance role.
+
 ### `sticky_cache`
 
 Available for Linux and Windows runners on jobs with a sticky-disk label. Use `sticky=<size>` for the default snapshot lineage or `sticky=<name>:<size>` for a named lineage; the optional name must come first. Volume settings follow the size, for example `sticky=go-cache:20gb:gp3:750mbs:6000iops`. The `apt`, `buildkit`, and `git` cache modes are Linux only.

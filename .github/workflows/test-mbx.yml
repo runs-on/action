@@ -1,0 +1,89 @@
+name: Test / mbx
+
+on:
+  push:
+    branches:
+      - main
+      - feature/*
+      - v*
+      - fix/*
+  workflow_dispatch:
+
+jobs:
+  test-mbx-linux:
+    runs-on: runs-on=${{ github.run_id }}/env=bootstrap/runner=2cpu-linux-x64/extras=s3-cache
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: ./
+        with:
+          mbx: s3
+
+      # Installs mbx and keeps the remote this action exported. It fails when
+      # mbx finds no usable remote, and the next step checks that nothing was
+      # overwritten. Pinned to the oldest mbx that signs with the instance
+      # role.
+      - uses: jdx/mr-boxington-action@v1
+        with:
+          backend: remote
+          version: 1.21.0
+
+      - name: Verify environment variables
+        env:
+          REPOSITORY_ID: ${{ github.repository_id }}
+        run: |
+          test "$MBX_REMOTE_URL" = "s3://$RUNS_ON_S3_BUCKET_CACHE/cache/mbx"
+          test "$MBX_REMOTE_NAMESPACE" = "$REPOSITORY_ID"
+          test "$MBX_REMOTE_S3_REGION" = "$RUNS_ON_AWS_REGION"
+          test -z "${MBX_REMOTE_MODE:-}"
+          test -z "${AWS_ACCESS_KEY_ID+x}"
+          test -z "${AWS_SECRET_ACCESS_KEY+x}"
+          test -z "${AWS_SESSION_TOKEN+x}"
+
+      - name: mbx signs with the instance role
+        run: |
+          mbx doctor | tee "$RUNNER_TEMP/doctor.txt"
+          grep -E '^\s+ok\s+credentials\s+EC2 instance role' "$RUNNER_TEMP/doctor.txt"
+
+      - name: Create simple Rust project
+        run: |
+          cargo new --bin test-project
+          cd test-project
+          cat >> Cargo.toml << 'EOF'
+          serde = { version = "1.0", features = ["derive"] }
+          serde_json = "1.0"
+          EOF
+          cat > src/main.rs << 'EOF'
+          #[derive(serde::Serialize)]
+          struct Config {
+              name: &'static str,
+          }
+
+          fn main() {
+              println!("{}", serde_json::to_string(&Config { name: "mbx" }).unwrap());
+          }
+          EOF
+          cargo generate-lockfile
+
+      # mbx only publishes from protected-branch pushes. The first build claims
+      # to be one, so this test proves the bucket round trip on any branch.
+      - name: First build publishes to the bucket
+        run: |
+          cd test-project
+          GITHUB_EVENT_NAME=push GITHUB_REF_TYPE=branch GITHUB_REF_PROTECTED=true \
+          MBX_CACHE_DIR="$RUNNER_TEMP/mbx-publisher" MBX_TARGET_ROOT="$RUNNER_TEMP/mbx-publisher-targets" \
+            mbx build
+
+      - name: Second build restores from the bucket
+        run: |
+          cd test-project
+          cargo clean
+          MBX_CACHE_DIR="$RUNNER_TEMP/mbx-reader" MBX_TARGET_ROOT="$RUNNER_TEMP/mbx-reader-targets" \
+          MBX_STATS_REPORT="$RUNNER_TEMP/mbx-stats.json" \
+            mbx build
+          hits=$(jq '.hits' "$RUNNER_TEMP/mbx-stats.json")
+          echo "mbx remote hits: $hits"
+          test "$hits" -gt 0

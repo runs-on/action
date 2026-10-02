@@ -1,5 +1,5 @@
 PREVIOUS_TAG ?= $(shell git tag -l | tail -n 1)
-TAG=v2.4.0
+TAG=v2.5.0
 
 .PHONY: help
 help:

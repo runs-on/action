@@ -52,11 +52,14 @@ jobs:
       # A tarball keeps the binaries' executable bit, which artifacts drop.
       - name: Package
         run: tar -cf dist.tar main-linux-amd64 main-linux-arm64 main-windows-amd64.exe index.js post.js
+      # Artifacts belong to this run, so every run has its own "dist". A
+      # re-run of all jobs replaces it instead of failing on the name.
       - uses: actions/upload-artifact@v4
         with:
           name: dist
           path: dist.tar
           if-no-files-found: error
+          overwrite: true
 
   container:
     needs: build

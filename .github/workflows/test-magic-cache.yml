@@ -1,13 +1,7 @@
 name: Test / Magic cache
 
 on:
-  push:
-    branches:
-      - main
-      - v*
-      - feature/*
-      - fix/*
-  workflow_dispatch:
+  workflow_call:
 
 jobs:
   magic-cache:
@@ -17,11 +11,12 @@ jobs:
         image: [ubuntu24-full-x64, ubuntu24-full-arm64, windows22-base-x64]
     runs-on: runs-on=${{ github.run_id }}/env=bootstrap/cpu=2/family=m7/image=${{ matrix.image }}/extras=s3-cache
     env:
-      ARTEFACT_NAME: ${{ github.run_id }}-${{ strategy.job-index }}-my-artifact
+      ARTEFACT_NAME: ${{ github.run_id }}-magic-cache-${{ strategy.job-index }}-my-artifact
       FILENAME: random-file
       BLOCKS: 128 # 128MB
     steps:
       - uses: actions/checkout@v6
+      - uses: ./.github/actions/use-dist
       - uses: ./
 
       - name: Generate file
@@ -86,38 +81,38 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: ${{ env.FILENAME }}
-          key: github-${{github.run_id}}-actions-cache-${{strategy.job-index}}-${{ env.BLOCKS }}MiB-${{ env.FILENAME }}
+          key: github-${{github.run_id}}-magic-cache-actions-cache-${{strategy.job-index}}-${{ env.BLOCKS }}MiB-${{ env.FILENAME }}
       - name: Restore from cache (actions/cache)
         uses: actions/cache/restore@v4
         with:
           path: ${{ env.FILENAME }}
           fail-on-cache-miss: true
-          key: github-${{github.run_id}}-actions-cache-${{strategy.job-index}}-${{ env.BLOCKS }}MiB-${{ env.FILENAME }}
+          key: github-${{github.run_id}}-magic-cache-actions-cache-${{strategy.job-index}}-${{ env.BLOCKS }}MiB-${{ env.FILENAME }}
       - name: Restore from cache (actions/cache, restoreKeys)
         uses: actions/cache/restore@v4
         with:
           path: ${{ env.FILENAME }}
           fail-on-cache-miss: true
-          key: github-${{github.run_id}}-actions-cache-${{strategy.job-index}}-unknown
+          key: github-${{github.run_id}}-magic-cache-actions-cache-${{strategy.job-index}}-unknown
           restore-keys: |
-            github-${{github.run_id}}-actions-cache-${{strategy.job-index}}-${{ env.BLOCKS }}MiB-
+            github-${{github.run_id}}-magic-cache-actions-cache-${{strategy.job-index}}-${{ env.BLOCKS }}MiB-
       - name: Save to cache (runs-on/cache)
         uses: runs-on/cache/save@v5
         with:
           path: ${{ env.FILENAME }}
-          key: github-${{github.run_id}}-runs-on-cache-${{strategy.job-index}}-${{ env.BLOCKS }}MiB-${{ env.FILENAME }}
+          key: github-${{github.run_id}}-magic-cache-runs-on-cache-${{strategy.job-index}}-${{ env.BLOCKS }}MiB-${{ env.FILENAME }}
       - name: Restore from cache (runs-on/cache)
         uses: runs-on/cache/restore@v5
         with:
           fail-on-cache-miss: true
           path: ${{ env.FILENAME }}
-          key: github-${{github.run_id}}-runs-on-cache-${{strategy.job-index}}-${{ env.BLOCKS }}MiB-${{ env.FILENAME }}
+          key: github-${{github.run_id}}-magic-cache-runs-on-cache-${{strategy.job-index}}-${{ env.BLOCKS }}MiB-${{ env.FILENAME }}
       - name: Restore from cache (runs-on/cache, restoreKeys)
         uses: runs-on/cache/restore@v5
         with:
           fail-on-cache-miss: true
           path: ${{ env.FILENAME }}
-          key: github-${{github.run_id}}-runs-on-cache-${{strategy.job-index}}-unknown
+          key: github-${{github.run_id}}-magic-cache-runs-on-cache-${{strategy.job-index}}-unknown
           restore-keys: |
-            github-${{github.run_id}}-runs-on-cache-${{strategy.job-index}}-${{ env.BLOCKS }}MiB-
+            github-${{github.run_id}}-magic-cache-runs-on-cache-${{strategy.job-index}}-${{ env.BLOCKS }}MiB-
       # END RUNS-ON CACHE

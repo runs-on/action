@@ -547,7 +547,11 @@ The action sets a `cache-hit` output: `true` when every requested path was resto
 
 ## Development
 
-Make your source code changes in a commit, then rebuild and commit the generated binaries and JS files:
+CI builds the binaries and JS files once per push (`.github/workflows/ci.yml`), and every test suite runs that build, so tests always exercise the pushed source.
+
+CI also publishes each built branch as `dist/<branch>`. To test a branch from another repository, use `runs-on/action@dist/<branch>`. The mirror is deleted with its branch.
+
+Until the generated files are removed from `main`, also rebuild and commit them in your branch so that `main` stays usable:
 
 ```
 make dist

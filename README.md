@@ -551,7 +551,7 @@ Commit source changes only. The binaries and `index.js`/`post.js` are build outp
 
 CI builds them once per push (`.github/workflows/ci.yml`), and every test suite runs that build, so tests always exercise the pushed source.
 
-CI also publishes each built branch as `dist/<branch>`. To test a branch or `main` from another repository, use `runs-on/action@dist/<branch>`, for example `runs-on/action@dist/main`. The mirror is deleted with its branch.
+CI also publishes each built branch as `dist/<branch>`. To test a branch or `main` from another repository, use `runs-on/action@dist/<branch>`, for example `runs-on/action@dist/main`. When its branch is deleted, the mirror is deleted only after a reviewer approves the `dist-cleanup` environment, because other repositories may still be testing against it.
 
 ## Release
 

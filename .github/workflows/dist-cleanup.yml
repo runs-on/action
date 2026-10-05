@@ -1,17 +1,44 @@
 name: Dist cleanup
 
-# Deletes the dist/<branch> mirror that ci.yml publishes when its branch is
-# deleted. Branch deletions made with GITHUB_TOKEN do not trigger this.
+# Offers to delete the dist/<branch> mirror that ci.yml publishes when its
+# branch is deleted. Other repositories may still be testing against a mirror,
+# so deletion waits for a reviewer to approve the dist-cleanup environment. A
+# rejected or expired approval keeps the mirror. Branch deletions made with
+# GITHUB_TOKEN do not trigger this workflow.
 on:
   delete:
 
-permissions:
-  contents: write
+permissions: {}
 
 jobs:
-  cleanup:
+  # A job that names a missing environment creates it without protection, so
+  # check the gate before the deleting job can run.
+  approval-gate:
     if: github.event.ref_type == 'branch' && !startsWith(github.event.ref, 'dist/')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
+    permissions:
+      actions: read
+    steps:
+      - name: Require reviewers on the dist-cleanup environment
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          rules=$(gh api "repos/${GITHUB_REPOSITORY}/environments/dist-cleanup" \
+            --jq '[.protection_rules[]? | select(.type == "required_reviewers")] | length' 2>/dev/null || echo 0)
+          if [[ "${rules}" == "0" ]]; then
+            echo "::error::The dist-cleanup environment must exist and require reviewers; refusing to delete mirrors without approval."
+            exit 1
+          fi
+
+  cleanup:
+    name: Delete dist/${{ github.event.ref }}
+    needs: approval-gate
+    runs-on: ubuntu-slim
+    environment: dist-cleanup
+    permissions:
+      contents: write
     concurrency:
       group: dist-mirror-${{ github.event.ref }}
       cancel-in-progress: false
@@ -23,11 +50,25 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${BRANCH}" >/dev/null 2>&1; then
+          # Succeeds if the ref exists, fails if it is missing (404), and
+          # aborts the job on any other error, so a failed lookup never counts
+          # as a deleted branch.
+          ref_exists() {
+            local out
+            if out=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/$1" 2>&1); then
+              return 0
+            fi
+            if grep -q "HTTP 404" <<<"$out"; then
+              return 1
+            fi
+            echo "::error::Could not look up $1: ${out}"
+            exit 1
+          }
+          if ref_exists "heads/${BRANCH}"; then
             echo "${BRANCH} exists again; keeping its mirror."
             exit 0
           fi
-          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/dist/${BRANCH}" >/dev/null 2>&1; then
+          if ref_exists "heads/dist/${BRANCH}"; then
             gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/heads/dist/${BRANCH}"
             echo "Deleted dist/${BRANCH}."
           fi

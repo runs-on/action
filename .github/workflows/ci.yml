@@ -94,7 +94,7 @@ jobs:
   mirror:
     needs: build
     if: github.event_name == 'push'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     permissions:
       contents: write
     # Shared with dist-cleanup.yml, so publication and deletion of one mirror

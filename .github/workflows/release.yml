@@ -7,19 +7,26 @@ on:
         description: Release tag to create, for example v2.1.2
         required: true
         type: string
+      source_sha:
+        description: "Commit on main to release (default: the tip of main). CI must have passed on it."
+        required: false
+        default: ''
+        type: string
       target_branch:
-        description: Branch to build and release from
+        description: Release branch to publish to
         required: false
         default: v2
         type: string
 
 permissions:
+  actions: read
   contents: write
   id-token: write
   attestations: write
 
+# Releases to one branch must not race: each one commits on top of the last.
 concurrency:
-  group: release-${{ inputs.tag }}
+  group: release-${{ inputs.target_branch || 'v2' }}
   cancel-in-progress: false
 
 jobs:
@@ -28,13 +35,26 @@ jobs:
     runs-on: ubuntu-latest
     env:
       TAG: ${{ inputs.tag }}
+      SOURCE_SHA: ${{ inputs.source_sha }}
       TARGET_BRANCH: ${{ inputs.target_branch || 'v2' }}
-      UPX_VERSION: 5.0.2
+      GENERATED: main-linux-amd64 main-linux-arm64 main-windows-amd64.exe index.js post.js
     steps:
       - name: Validate inputs
         shell: bash
         run: |
           set -euo pipefail
+
+          # A run uses the workflow file from the branch it was dispatched
+          # from. Release branches carry old copies of this file.
+          if [[ "${GITHUB_REF}" != "refs/heads/main" ]]; then
+            echo "::error::Run the Release workflow from main."
+            exit 1
+          fi
+
+          if [[ -n "$SOURCE_SHA" && ! "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::source_sha must be a full commit SHA."
+            exit 1
+          fi
 
           if [[ ! "$TAG" =~ ^v[0-9]+(\.[0-9]+){1,2}([.-][0-9A-Za-z.-]+)?$ ]]; then
             echo "::error::Release tag must look like vX.Y, vX.Y.Z, or a prerelease variant."
@@ -69,6 +89,35 @@ jobs:
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
           permission-contents: write
 
+      - name: Find the tested build
+        id: source
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          sha="${SOURCE_SHA:-$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)}"
+          status=$(gh api "repos/${GITHUB_REPOSITORY}/compare/${sha}...main" --jq .status)
+          if [[ "$status" != "ahead" && "$status" != "identical" ]]; then
+            echo "::error::${sha} is not on main."
+            exit 1
+          fi
+
+          # The CI run for the push of this commit to main tested this exact
+          # build; the release publishes its bytes.
+          run_id=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${sha}&event=push&branch=main&status=success" \
+            --jq '.workflow_runs | sort_by(.run_started_at) | last | .id // empty')
+          if [[ -z "$run_id" ]]; then
+            echo "::error::No successful CI run for the push of ${sha} to main. Wait for CI, or re-run it."
+            exit 1
+          fi
+
+          gh run download "$run_id" --repo "${GITHUB_REPOSITORY}" --name dist --dir "${RUNNER_TEMP}/dist"
+          echo "sha=${sha}" >> "$GITHUB_OUTPUT"
+          echo "run_id=${run_id}" >> "$GITHUB_OUTPUT"
+          echo "Releasing ${sha}, built and tested by ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
+
       - name: Checkout target branch
         uses: actions/checkout@v6.0.2
         with:
@@ -83,56 +132,32 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      - name: Set up Go
-        uses: actions/setup-go@v6.4.0
-        with:
-          go-version-file: go.mod
-          cache: true
-
-      - name: Install UPX
+      # The release branch holds distribution output only: each release is
+      # one commit on top of the previous one, with main's tree at the
+      # released commit plus the tested build.
+      - name: Commit the release
         shell: bash
-        run: |
-          set -euo pipefail
-          upx_archive="upx-${UPX_VERSION}-amd64_linux.tar.xz"
-          curl -fsSL \
-            -o "${RUNNER_TEMP}/${upx_archive}" \
-            "https://github.com/upx/upx/releases/download/v${UPX_VERSION}/${upx_archive}"
-          tar -xJf "${RUNNER_TEMP}/${upx_archive}" -C "${RUNNER_TEMP}"
-          echo "${RUNNER_TEMP}/upx-${UPX_VERSION}-amd64_linux" >> "${GITHUB_PATH}"
-          "${RUNNER_TEMP}/upx-${UPX_VERSION}-amd64_linux/upx" --version
-
-      - name: Test
-        run: go test ./...
-
-      - name: Build distributed artifacts
-        run: make build
-
-      - name: Commit distributed artifacts
-        shell: bash
+        env:
+          SHA: ${{ steps.source.outputs.sha }}
+          RUN_ID: ${{ steps.source.outputs.run_id }}
         run: |
           set -euo pipefail
 
-          git add main-linux-amd64 main-linux-arm64 main-windows-amd64.exe index.js post.js
-
-          if git diff --cached --quiet; then
-            echo "Distributed artifacts are already up to date; tagging current HEAD."
-          else
-            git commit -m "dist: rebuild binaries for ${TAG}"
-            git push origin "HEAD:${TARGET_BRANCH}"
-          fi
-
-      - name: Create and push release tag
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
-            echo "::error::Tag ${TAG} already exists."
-            exit 1
-          fi
-
+          git fetch --no-tags origin "$SHA"
+          git read-tree --reset -u "$SHA"
+          tar -xf "${RUNNER_TEMP}/dist/dist.tar"
+          # shellcheck disable=SC2086
+          git add -f $GENERATED
+          # The released main commit is the second parent, so the release
+          # history contains main's commits and generated release notes list
+          # the merged pull requests. The tree is built above, so no merge
+          # conflict can occur.
+          commit=$(git commit-tree "$(git write-tree)" -p HEAD -p "$SHA" \
+            -m "Release ${TAG}" \
+            -m "Source: ${SHA}" \
+            -m "Build: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}")
+          git reset -q "$commit"
           git tag -a "${TAG}" -m "Release ${TAG}"
-          git push origin "refs/tags/${TAG}"
 
       - name: Generate checksums
         shell: bash
@@ -175,6 +200,15 @@ jobs:
             "${gpg_args[@]}" \
             --armor --detach-sign \
             --output SHA256SUMS.asc SHA256SUMS
+
+      # One atomic push after signing, so a failed release leaves neither the
+      # branch nor the tag behind. Not a force push: a concurrent change to the
+      # release branch fails the release.
+      - name: Push release branch and tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          git push --atomic origin "HEAD:refs/heads/${TARGET_BRANCH}" "refs/tags/${TAG}"
 
       - name: Create draft GitHub release
         shell: bash

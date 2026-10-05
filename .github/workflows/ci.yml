@@ -20,17 +20,8 @@ jobs:
       UPX_VERSION: 5.0.2
     steps:
       - uses: actions/checkout@v6
-      # Only release branches carry the generated files; see release.yml.
-      - name: Reject committed build output
-        if: ${{ !startsWith(github.ref_name, 'v') }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          tracked=$(git ls-files main-linux-amd64 main-linux-arm64 main-windows-amd64.exe index.js post.js)
-          if [[ -n "${tracked}" ]]; then
-            echo "::error::Remove the committed build output; CI builds it: ${tracked//$'\n'/ }"
-            exit 1
-          fi
+      - if: ${{ !startsWith(github.ref_name, 'v') }}
+        uses: ./.github/actions/reject-build-output
       - uses: actions/setup-go@v6.4.0
         with:
           go-version-file: go.mod

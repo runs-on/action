@@ -153,6 +153,13 @@ func (c *Config) HasStickyDiskCache() bool {
 	return len(c.StickyCache) > 0
 }
 
+// ConfiguresStickyDisk reports whether this invocation sets up the sticky
+// disk: it mounts caches, or makes the job restore-only. sticky_save: false
+// alone still applies to caches an earlier invocation mounted.
+func (c *Config) ConfiguresStickyDisk() bool {
+	return c.HasStickyDiskCache() || !c.StickySave
+}
+
 func (c *Config) IsUsingRunsOn() bool {
 	return os.Getenv("RUNS_ON_RUNNER_NAME") != ""
 }

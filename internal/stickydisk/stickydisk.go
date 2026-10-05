@@ -113,6 +113,10 @@ func configure(action *githubactions.Action, opts Options, goos string) error {
 		if err := markRestoreOnly(action); err != nil {
 			return err
 		}
+		if len(requests) == 0 {
+			// sticky_save: false alone, for caches an earlier invocation mounted.
+			return nil
+		}
 	}
 
 	// Resolve all targets, deduplicating by absolute path.

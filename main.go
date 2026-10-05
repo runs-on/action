@@ -109,8 +109,8 @@ func handleMainExecution(action *githubactions.Action, ctx context.Context) {
 		}
 	}
 
-	// Configure sticky disk cache mounts if requested
-	if cfg.HasStickyDiskCache() {
+	// Configure sticky disk cache mounts (or restore-only mode) if requested
+	if cfg.ConfiguresStickyDisk() {
 		if err := stickydisk.Configure(action, stickydisk.Options{
 			StickyCache:       cfg.StickyCache,
 			StickyWaitTimeout: cfg.StickyWaitTimeout,

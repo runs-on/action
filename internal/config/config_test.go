@@ -76,6 +76,15 @@ func TestStickyCacheRequestIsHandledOutsideRunsOn(t *testing.T) {
 	}
 }
 
+func TestRestoreOnlyAloneConfiguresStickyDisk(t *testing.T) {
+	// A later invocation may set only sticky_save: false for caches an
+	// earlier invocation mounted.
+	cfg := Config{StickySave: false}
+	if !cfg.ConfiguresStickyDisk() {
+		t.Fatal("sticky_save: false without sticky_cache was ignored")
+	}
+}
+
 func TestUndeclaredLegacyInputsRemainIgnored(t *testing.T) {
 	t.Setenv("INPUT_CACHE", "go,buildkit")
 	t.Setenv("INPUT_PATH", "vendor/cache")

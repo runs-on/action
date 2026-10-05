@@ -114,6 +114,7 @@ func handleMainExecution(action *githubactions.Action, ctx context.Context) {
 		if err := stickydisk.Configure(action, stickydisk.Options{
 			StickyCache:       cfg.StickyCache,
 			StickyWaitTimeout: cfg.StickyWaitTimeout,
+			SkipSave:          !cfg.StickySave,
 		}); err != nil {
 			action.Fatalf("Failed to configure sticky disk cache: %v", err)
 		}

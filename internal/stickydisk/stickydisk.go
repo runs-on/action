@@ -28,6 +28,9 @@ type Options struct {
 	StickyCache []string
 	// StickyWaitTimeout bounds how long to wait for the sticky disk to be ready.
 	StickyWaitTimeout time.Duration
+	// SkipSave makes the job restore-only: the agent releases the sticky disk
+	// at job end without snapshotting it.
+	SkipSave bool
 }
 
 type mountResult struct {
@@ -105,6 +108,12 @@ func configure(action *githubactions.Action, opts Options, goos string) error {
 	// Self-heal a critically full volume before cache-hit detection: wiped
 	// caches report a miss and the next snapshot starts clean.
 	checkCritical(action, mountRoot)
+
+	if opts.SkipSave {
+		if err := markRestoreOnly(action); err != nil {
+			return err
+		}
+	}
 
 	// Resolve all targets, deduplicating by absolute path.
 	type mountSpec struct {
@@ -424,6 +433,24 @@ func missing(action *githubactions.Action, msg string) error {
 }
 
 var errStickyDiskUnavailable = errors.New("sticky disk is unavailable")
+
+// markRestoreOnly creates the agent's skip-save marker. The job-completed hook
+// then records no clean unmount, so the volume is released without advancing
+// the snapshot lineage. The marker is never removed: one restore-only
+// invocation makes the whole job restore-only, since all caches share one
+// volume. An agent without the marker contract would still snapshot the disk,
+// so restore-only fails there instead of silently saving.
+func markRestoreOnly(action *githubactions.Action) error {
+	path := strings.TrimSpace(os.Getenv(stickyDiskSkipSaveFileEnv))
+	if path == "" {
+		return fmt.Errorf("sticky_save: false needs a RunsOn agent that supports restore-only sticky disks (%s not set); upgrade RunsOn to v3.4.1 or later", stickyDiskSkipSaveFileEnv)
+	}
+	if err := os.WriteFile(path, nil, 0o644); err != nil {
+		return fmt.Errorf("mark sticky disk restore-only: %w", err)
+	}
+	action.Infof("Sticky disk is restore-only (sticky_save: false): this job's cache changes will not be saved.")
+	return nil
+}
 
 // waitForReady polls until the agent publishes either the mounted-ready marker
 // or the terminal-unavailable marker, bounded by timeout. Both markers are

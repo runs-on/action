@@ -24,6 +24,7 @@ func TestHasSccacheOnRunsOn(t *testing.T) {
 func TestStickyCacheInputs(t *testing.T) {
 	t.Setenv("INPUT_STICKY_CACHE", " go \n\n buildkit \n custom,path=vendor/cache ")
 	t.Setenv("INPUT_STICKY_WAIT_TIMEOUT", "90s")
+	t.Setenv("INPUT_STICKY_SAVE", "false")
 
 	cfg, err := NewConfigFromInputs(githubactions.New())
 	if err != nil {
@@ -38,6 +39,9 @@ func TestStickyCacheInputs(t *testing.T) {
 	if got, want := cfg.StickyWaitTimeout, 90*time.Second; got != want {
 		t.Fatalf("StickyWaitTimeout = %s, want %s", got, want)
 	}
+	if cfg.StickySave {
+		t.Fatal("StickySave = true, want false")
+	}
 }
 
 func TestStickyWaitTimeoutDefaultsToAgentWaitWindow(t *testing.T) {
@@ -47,6 +51,9 @@ func TestStickyWaitTimeoutDefaultsToAgentWaitWindow(t *testing.T) {
 	}
 	if got, want := cfg.StickyWaitTimeout, 15*time.Minute; got != want {
 		t.Fatalf("StickyWaitTimeout = %s, want %s", got, want)
+	}
+	if !cfg.StickySave {
+		t.Fatal("StickySave defaults to false, want true")
 	}
 }
 

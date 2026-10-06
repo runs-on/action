@@ -1,13 +1,7 @@
 name: Test / Sccache
 
 on:
-  push:
-    branches:
-      - main
-      - feature/*
-      - v*
-      - fix/*
-  workflow_dispatch:
+  workflow_call:
 
 jobs:
   test-sccache-linux:
@@ -18,6 +12,7 @@ jobs:
       
       - uses: dtolnay/rust-toolchain@stable
         
+      - uses: ./.github/actions/use-dist
       - uses: ./
         with:
           sccache: s3
@@ -119,6 +114,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      - uses: ./.github/actions/use-dist
       - uses: ./
         with:
           sccache: s3

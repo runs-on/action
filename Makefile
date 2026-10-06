@@ -9,7 +9,6 @@ help:
 	@echo '   make main-linux-arm64      Build static binary for linux/arm64'
 	@echo '   make main-windows-amd64    Build static binary for windows/amd64'
 	@echo '   make build                 Build all static binaries + `index.js` and `post.js`'
-	@echo '   make dist                  Build generated artifacts and commit them locally'
 	@echo '   make tag                   Print tag instructions'
 	@echo '   make release               Print release instructions'
 	@echo ''
@@ -44,12 +43,6 @@ main-windows-amd64: _require-upx
 .PHONY: build
 build: main-linux-amd64 main-linux-arm64 main-windows-amd64 js
 
-# Rebuild generated action artifacts and create a local dist commit.
-.PHONY: dist
-dist: build
-	git add main-linux-amd64 main-linux-arm64 main-windows-amd64.exe index.js post.js
-	git commit -m "dist: rebuild binaries"
-
 .PHONY: _require-upx
 _require-upx:
 ifndef UPX_BIN
@@ -63,10 +56,10 @@ bump:
 	gsed -i "s/$(PREVIOUS_TAG)/$(TAG)/g" action.yml
 
 tag:
-	@echo 'Release tags are created by the manual GitHub Actions "Release" workflow after CI commits generated artifacts.'
+	@echo 'Release tags are created by the manual GitHub Actions "Release" workflow.'
 	@echo 'Do not create release tags locally.'
 	@exit 1
 
 release:
 	@echo 'Releases are created by the manual GitHub Actions "Release" workflow.'
-	@echo 'Run it with the desired tag, for example TAG=$(TAG), so CI builds, commits, tags, signs, and attests the exact release artifacts.'
+	@echo 'Run it from main with the desired tag, for example TAG=$(TAG). It publishes the build that CI tested for a main commit.'

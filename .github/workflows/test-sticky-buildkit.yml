@@ -1,14 +1,7 @@
 name: Test / Sticky BuildKit
 
 on:
-  push:
-    branches:
-      - main
-      - v*
-      - feature/*
-      - fix/*
-      - auto/*
-  workflow_dispatch:
+  workflow_call:
 
 jobs:
   cold:
@@ -24,6 +17,7 @@ jobs:
     runs-on: runs-on=${{ github.run_id }}/env=bootstrap/cpu=2/family=m7/image=ubuntu24-full-x64/sticky=buildkit-${{ github.run_id }}-${{ matrix.id }}:20gb
     steps:
       - uses: actions/checkout@v6
+      - uses: ./.github/actions/use-dist
       - id: runs-on
         uses: ./
         with:
@@ -79,6 +73,7 @@ jobs:
     runs-on: runs-on=${{ github.run_id }}/env=bootstrap/cpu=2/family=m7/image=ubuntu24-full-x64/sticky=buildkit-${{ github.run_id }}-${{ matrix.id }}:20gb
     steps:
       - uses: actions/checkout@v6
+      - uses: ./.github/actions/use-dist
       - id: runs-on
         uses: ./
         with:
@@ -122,6 +117,7 @@ jobs:
     runs-on: runs-on=${{ github.run_id }}/env=bootstrap/cpu=2/family=m7/image=ubuntu24-full-x64
     steps:
       - uses: actions/checkout@v6
+      - uses: ./.github/actions/use-dist
       - id: sticky_cache
         continue-on-error: true
         uses: ./

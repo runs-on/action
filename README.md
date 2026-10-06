@@ -547,17 +547,19 @@ The action sets a `cache-hit` output: `true` when every requested path was resto
 
 ## Development
 
-Make your source code changes in a commit, then rebuild and commit the generated binaries and JS files:
+Commit source changes only. The binaries and `index.js`/`post.js` are build output: `main` and feature branches don't track them, and CI rejects a branch that commits them. Run `make build` to build them locally.
 
-```
-make dist
-```
+CI builds them once per push (`.github/workflows/ci.yml`), and every test suite runs that build, so tests always exercise the pushed source.
+
+CI also publishes each built branch as `dist/<branch>`. To test a branch or `main` from another repository, use `runs-on/action@dist/<branch>`, for example `runs-on/action@dist/main`. When its branch is deleted, the mirror is deleted only after a reviewer approves the `dist-cleanup` environment, because other repositories may still be testing against it.
 
 ## Release
 
-Releases are created by the manual **Release** GitHub Actions workflow. Run it from the `v2` branch with a new tag, for example `v2.5.0`. The workflow builds the distributed artifacts in CI, commits them to the release branch, tags that artifact commit, creates a draft release with assets, signs `SHA256SUMS`, creates GitHub artifact attestations, and publishes the draft.
+Releases are created by the manual **Release** GitHub Actions workflow. Run it from `main` with a new tag, for example `v2.5.0`, and optionally the `source_sha` of a main commit (default: the tip of main). CI must have passed for that commit's push to main.
 
-Do not create or push release tags locally. The tag must be created by the workflow after the CI-built artifacts have been committed.
+The workflow publishes the exact build that CI tested. It commits main's tree at that commit plus the build on top of the release branch (`v2`), with the released main commit as a second parent so release notes list the merged pull requests. It then tags the commit, signs `SHA256SUMS`, pushes the branch and tag together, creates the release with assets and GitHub artifact attestations, and publishes it. The commit's tree is built directly, so a release never has merge conflicts.
+
+Do not create or push release tags locally, and do not push to the release branch by hand.
 
 The repository must have these secrets configured:
 

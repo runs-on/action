@@ -1,0 +1,123 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - v*
+      - feature/*
+      - fix/*
+      - auto/*
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      UPX_VERSION: 5.0.2
+    steps:
+      - uses: actions/checkout@v6
+      - if: ${{ !startsWith(github.ref_name, 'v') }}
+        uses: ./.github/actions/reject-build-output
+      - uses: actions/setup-go@v6.4.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install UPX
+        shell: bash
+        run: |
+          set -euo pipefail
+          upx_archive="upx-${UPX_VERSION}-amd64_linux.tar.xz"
+          curl -fsSL \
+            -o "${RUNNER_TEMP}/${upx_archive}" \
+            "https://github.com/upx/upx/releases/download/v${UPX_VERSION}/${upx_archive}"
+          tar -xJf "${RUNNER_TEMP}/${upx_archive}" -C "${RUNNER_TEMP}"
+          echo "${RUNNER_TEMP}/upx-${UPX_VERSION}-amd64_linux" >> "${GITHUB_PATH}"
+      - name: Test
+        run: go test ./...
+      - name: Build
+        run: make build
+      # A tarball keeps the binaries' executable bit, which artifacts drop.
+      - name: Package
+        run: tar -cf dist.tar main-linux-amd64 main-linux-arm64 main-windows-amd64.exe index.js post.js
+      # Artifacts belong to this run, so every run has its own "dist". A
+      # re-run of all jobs replaces it instead of failing on the name.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist.tar
+          if-no-files-found: error
+          overwrite: true
+
+  container:
+    needs: build
+    uses: ./.github/workflows/test-container.yml
+  default:
+    needs: build
+    uses: ./.github/workflows/test-default.yml
+  magic-cache:
+    needs: build
+    uses: ./.github/workflows/test-magic-cache.yml
+  metrics:
+    needs: build
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/test-metrics.yml
+  sccache:
+    needs: build
+    uses: ./.github/workflows/test-sccache.yml
+  sticky-buildkit:
+    needs: build
+    uses: ./.github/workflows/test-sticky-buildkit.yml
+  sticky-git:
+    needs: build
+    uses: ./.github/workflows/test-sticky-git.yml
+  sticky-tool-cache:
+    needs: build
+    uses: ./.github/workflows/test-sticky-tool-cache.yml
+
+  # Publish the built action as dist/<branch> so other repositories can test a
+  # branch with `uses: runs-on/action@dist/<branch>`.
+  mirror:
+    needs: build
+    if: github.event_name == 'push'
+    runs-on: ubuntu-slim
+    permissions:
+      contents: write
+    # Shared with dist-cleanup.yml, so publication and deletion of one mirror
+    # never interleave.
+    concurrency:
+      group: dist-mirror-${{ github.ref_name }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/use-dist
+      - name: Publish dist/${{ github.ref_name }}
+        shell: bash
+        env:
+          BRANCH: ${{ github.ref_name }}
+          GIT_AUTHOR_NAME: github-actions[bot]
+          GIT_AUTHOR_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+          GIT_COMMITTER_NAME: github-actions[bot]
+          GIT_COMMITTER_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+        run: |
+          set -euo pipefail
+          # Only the run for the branch's current tip publishes, so a slower run
+          # for an older commit never overwrites a newer mirror, and a deleted
+          # branch does not get its mirror back. If the branch moves during
+          # this step, the mirror briefly holds this build until the next
+          # run's mirror job (serialized by the concurrency group) replaces it.
+          tip=$(git ls-remote origin "refs/heads/${BRANCH}" | cut -f1)
+          if [[ "${tip}" != "${GITHUB_SHA}" ]]; then
+            echo "${BRANCH} is now at '${tip:-deleted}', not ${GITHUB_SHA}; skipping."
+            exit 0
+          fi
+          git add -f main-linux-amd64 main-linux-arm64 main-windows-amd64.exe index.js post.js
+          commit=$(git commit-tree "$(git write-tree)" -m "dist: ${BRANCH} at ${GITHUB_SHA}")
+          current=$(git ls-remote origin "refs/heads/dist/${BRANCH}" | cut -f1)
+          git push --force-with-lease="refs/heads/dist/${BRANCH}:${current}" origin "${commit}:refs/heads/dist/${BRANCH}"
+          echo "Published runs-on/action@dist/${BRANCH} (${commit}) from ${GITHUB_SHA}."

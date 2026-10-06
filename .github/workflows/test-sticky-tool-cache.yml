@@ -1,14 +1,7 @@
 name: Test / Sticky tool cache
 
 on:
-  push:
-    branches:
-      - main
-      - v*
-      - feature/*
-      - fix/*
-      - auto/*
-  workflow_dispatch:
+  workflow_call:
 
 jobs:
   cold:
@@ -35,6 +28,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path $env:RUNNER_TOOL_CACHE | Out-Null
           Set-Content -LiteralPath (Join-Path $env:RUNNER_TOOL_CACHE "image-only") -Value "image"
+      - uses: ./.github/actions/use-dist
       - name: Mount empty sticky tool cache
         id: tool-cache
         uses: ./
@@ -115,6 +109,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path $env:RUNNER_TOOL_CACHE | Out-Null
           Set-Content -LiteralPath (Join-Path $env:RUNNER_TOOL_CACHE "image-only") -Value "image"
+      - uses: ./.github/actions/use-dist
       - name: Restore sticky tool cache
         id: tool-cache
         uses: ./

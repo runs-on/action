@@ -386,6 +386,10 @@ jobs:
         with:
           go-version: stable
           cache: false # the build cache is in Magic Cache; this would save a second copy
+      - uses: actions/cache@v5
+        with:
+          path: ~/go/pkg/mod
+          key: gomod-${{ runner.os }}-${{ hashFiles('**/go.sum') }}
       - run: go build ./... && go test ./...
 ```
 

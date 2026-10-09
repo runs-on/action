@@ -542,7 +542,7 @@ Use `custom,path=...` records to persist additional directories. Relative paths 
 Other related inputs:
 
 * `sticky_wait_timeout` - how long to wait for the sticky disk to be ready, as a positive Go duration (default `15m`, matching the runner agent's attachment window)
-* `sticky_save` - set to `false` to make the job restore-only (default `true`). The job still restores and uses its caches, but its sticky disk is released at job end without a snapshot, so the next job restores the same snapshot. Requires RunsOn v3.4.1 or later; older stacks fail the action instead of saving. All caches in a job share one volume, so one `sticky_save: false` invocation makes the whole job restore-only, even one without `sticky_cache` placed after the invocations that mount caches.
+* `sticky_save` - set to `false` to make the job restore-only (default `true`). The job still restores and uses its caches, but its sticky disk is released at job end without a snapshot, so the next job restores the same snapshot. Requires RunsOn v3.5.0 or later; older stacks fail the action instead of saving. All caches in a job share one volume, so one `sticky_save: false` invocation makes the whole job restore-only, even one without `sticky_cache` placed after the invocations that mount caches.
 
 Restore-only jobs let one job keep a cache current while others only read it, for example a matrix that restores what the default branch saved, or pull request jobs that should not save a cache:
 

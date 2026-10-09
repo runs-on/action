@@ -447,7 +447,7 @@ var errStickyDiskUnavailable = errors.New("sticky disk is unavailable")
 func markRestoreOnly(action *githubactions.Action) error {
 	path := strings.TrimSpace(os.Getenv(stickyDiskSkipSaveFileEnv))
 	if path == "" {
-		return fmt.Errorf("sticky_save: false needs a RunsOn agent that supports restore-only sticky disks (%s not set); upgrade RunsOn to v3.4.1 or later", stickyDiskSkipSaveFileEnv)
+		return fmt.Errorf("sticky_save: false needs a RunsOn agent that supports restore-only sticky disks (%s not set); upgrade RunsOn to v3.5.0 or later", stickyDiskSkipSaveFileEnv)
 	}
 	if err := os.WriteFile(path, nil, 0o644); err != nil {
 		return fmt.Errorf("mark sticky disk restore-only: %w", err)

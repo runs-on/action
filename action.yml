@@ -30,6 +30,10 @@ inputs:
     description: 'Enable sccache. Can take either "s3" (RunsOn S3 cache bucket) or be empty (disabled). You still need to setup sccache in your workflow, for instance with mozilla-actions/sccache-action.'
     required: false
     default: ''
+  gocacheprog:
+    description: 'Set to "true" to share the go command''s build cache (Go 1.24+) through Magic Cache: later steps get GOCACHEPROG, and each go command prefetches what its previous run used. Requires Magic Cache and a RunsOn agent that supports it; otherwise the action warns and Go keeps its local build cache.'
+    required: false
+    default: 'false'
   sticky_cache:
     description: 'Newline-separated sticky-disk cache records. Each line is a mode followed by comma-separated key=value options, for example buildkit or custom,path=vendor/cache. Custom paths must be directories. Supported modes: go, node, yarn, pnpm, ruby, rust, python, uv, poetry, apt, buildkit, git, git-full, gradle, maven, playwright, tool-cache, custom. Requires a sticky=<size> or sticky=<name>:<size> label; an incomplete agent contract or readiness timeout fails the action, while an explicit unavailable marker warns and continues cold. Linux and Windows (apt, buildkit, git and git-full modes are Linux only). Run after actions/checkout for workspace-relative caches; git and git-full must run before checkout and cannot share an invocation with workspace-relative caches; buildkit must run before docker/setup-buildx-action; tool-cache must run before setup-* actions.'
     required: false

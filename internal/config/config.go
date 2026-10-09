@@ -19,6 +19,7 @@ type Config struct {
 	NetworkInterface    string
 	DiskDevice          string
 	Sccache             string
+	GoCacheProg         bool
 	StickyCache         []string
 	StickyWaitTimeout   time.Duration
 	StickySave          bool
@@ -67,6 +68,7 @@ func NewConfigFromInputs(action *githubactions.Action) (*Config, error) {
 	}
 
 	cfg.Sccache = action.GetInput("sccache")
+	cfg.GoCacheProg = action.GetInput("gocacheprog") == "true"
 
 	stickyCacheInput := action.GetInput("sticky_cache")
 	if stickyCacheInput != "" {
@@ -111,6 +113,7 @@ func NewConfigFromInputs(action *githubactions.Action) (*Config, error) {
 	action.Infof("Input 'network_interface': %s", cfg.NetworkInterface)
 	action.Infof("Input 'disk_device': %s", cfg.DiskDevice)
 	action.Infof("Input 'sccache': %s", cfg.Sccache)
+	action.Infof("Input 'gocacheprog': %t", cfg.GoCacheProg)
 	action.Infof("Input 'sticky_cache': %v", cfg.StickyCache)
 	action.Infof("Input 'sticky_wait_timeout': %s", cfg.StickyWaitTimeout)
 	action.Infof("Input 'sticky_save': %t", cfg.StickySave)
@@ -140,6 +143,10 @@ func (c *Config) HasShowEnv() bool {
 
 func (c *Config) HasMetrics() bool {
 	return c.IsUsingRunsOn() && c.IsUsingLinux() && len(c.Metrics) > 0
+}
+
+func (c *Config) HasGoCacheProg() bool {
+	return c.IsUsingRunsOn() && c.GoCacheProg
 }
 
 func (c *Config) HasSccache() bool {

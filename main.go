@@ -14,6 +14,7 @@ import (
 	"github.com/runs-on/action/internal/costs"
 	"github.com/runs-on/action/internal/env"
 	"github.com/runs-on/action/internal/gitproxy"
+	"github.com/runs-on/action/internal/gocacheprog"
 	"github.com/runs-on/action/internal/monitoring"
 	"github.com/runs-on/action/internal/sccache"
 	"github.com/runs-on/action/internal/stickydisk"
@@ -120,6 +121,10 @@ func handleMainExecution(action *githubactions.Action, ctx context.Context) {
 		if err := sccache.ConfigureSccache(action, cfg.Sccache); err != nil {
 			action.Errorf("Failed to configure sccache: %v", err)
 		}
+	}
+
+	if cfg.HasGoCacheProg() {
+		gocacheprog.Configure(action, cfg.ActionsRuntimeToken)
 	}
 
 	// Configure sticky disk cache mounts (or restore-only mode) if requested

@@ -369,6 +369,28 @@ This is operational isolation, not a security boundary: repositories sharing a R
 
 Previously every repository on a stack shared the flat `cache/sccache` prefix. Moving to the scoped layout starts one cold cache per repository and platform. Objects written under the old prefix are left to the stack's cache lifecycle rule, which expires everything under `cache/` after `S3CacheExpirationInDays` (10 by default).
 
+### `gocacheprog`
+
+Shares the go command's build cache (Go 1.24 or later) between jobs through Magic Cache. Later steps get [`GOCACHEPROG`](https://pkg.go.dev/cmd/go#hdr-Build_and_test_caching) pointing at the RunsOn agent, which keeps the cache on local disk and in the stack's S3 cache bucket, with GitHub's branch scoping: a pull request reads its base branch's entries and writes only its own. Each go command (same directory and command line) prefetches the entries its previous run used, so a warm build reads them in parallel instead of one at a time.
+
+```yaml
+jobs:
+  build:
+    runs-on: runs-on=${{ github.run_id }}/runner=4cpu-linux-x64/extras=s3-cache
+    steps:
+      - uses: runs-on/action@v2
+        with:
+          gocacheprog: true
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: stable
+          cache: false # the build cache is in Magic Cache; this would save a second copy
+      - run: go build ./... && go test ./...
+```
+
+Requires Magic Cache and RunsOn v3.5.0 or later. Without them, the action warns and the go command keeps its local build cache. Go also caches test results in this cache: tests whose inputs did not change are reported as `(cached)` instead of running again. Run `go test -count=1` for tests that depend on anything outside their inputs, such as a database or the network.
+
 ### `sticky_cache`
 
 Available for Linux and Windows runners on jobs with a sticky-disk label. Use `sticky=<size>` for the default snapshot lineage or `sticky=<name>:<size>` for a named lineage; the optional name must come first. Volume settings follow the size, for example `sticky=go-cache:20gb:gp3:750mbs:6000iops`. The `apt`, `buildkit`, and `git` cache modes are Linux only.

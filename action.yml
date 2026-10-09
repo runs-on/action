@@ -42,6 +42,10 @@ inputs:
     description: 'How long to wait for the sticky disk to be ready (positive Go duration, e.g. "15m")'
     required: false
     default: '15m'
+  sticky_save:
+    description: 'Set to false to restore the sticky_cache caches without saving this job''s changes: the sticky disk is released at job end without a snapshot. Applies to the whole job once any invocation sets it. Requires RunsOn v3.5.0 or later.'
+    required: false
+    default: 'true'
 
 outputs:
   cache-hit:

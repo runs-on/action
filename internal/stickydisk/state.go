@@ -16,6 +16,7 @@ const (
 	stickyDiskUnavailableFileEnv = "RUNS_ON_STICKYDISK_UNAVAILABLE_FILE"
 	stickyDiskTimingsFileEnv     = "RUNS_ON_STICKYDISK_TIMINGS_FILE"
 	stickyDiskNameEnv            = "RUNS_ON_STICKYDISK_NAME"
+	stickyDiskSkipSaveFileEnv    = "RUNS_ON_STICKYDISK_SKIP_SAVE_FILE"
 	jobCacheStateEnv             = "RUNS_ON_STICKY_CACHE_STATE"
 )
 

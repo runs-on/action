@@ -15,9 +15,10 @@ func TestConfigureExportsGOCACHEPROGWhereTheAgentServesIt(t *testing.T) {
 		name, advertised, token string
 		want                    []string
 	}{
-		{name: "agent serves it", advertised: "/runs-on/agent --gocacheprog", token: "job-token", want: []string{"GOCACHEPROG", "/runs-on/agent --gocacheprog", "ACTIONS_RUNTIME_TOKEN", "job-token"}},
+		{name: "agent serves it", advertised: "/runs-on/agent", token: "job-token", want: []string{"GOCACHEPROG", "/runs-on/agent --gocacheprog", "ACTIONS_RUNTIME_TOKEN", "job-token"}},
+		{name: "agent path with a space", advertised: `C:\Program Files\runs-on\agent.exe`, token: "job-token", want: []string{`"C:\Program Files\runs-on\agent.exe" --gocacheprog`}},
 		{name: "no Magic Cache or older agent", token: "job-token"},
-		{name: "no runtime token", advertised: "/runs-on/agent --gocacheprog"},
+		{name: "no runtime token", advertised: "/runs-on/agent"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("RUNS_ON_GOCACHEPROG", tc.advertised)

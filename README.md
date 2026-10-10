@@ -490,7 +490,7 @@ jobs:
           version: v0.34.1
           driver: docker-container
           driver-opts: |
-            image=moby/buildkit:v0.31.1
+            image=${{ steps.runs-on.outputs.buildkit-image }}
           cleanup: false
       - uses: docker/build-push-action@v7
         with:
@@ -501,6 +501,10 @@ jobs:
 
 Sticky BuildKit caching supports one `docker-container` node named by the `buildkit-builder` output. The RunsOn post step verifies that setup-buildx mounted the expected sticky volume, then stops and removes the builder before the disk is snapshotted. A missing setup step, reversed action order, different builder name, appended node, or setup-buildx cleanup causes a clear failure instead of silently using ephemeral cache storage.
 
+The `buildkit-image` output is RunsOn's patched BuildKit (faster cache exports; source in [runs-on/buildkit](https://github.com/runs-on/buildkit)). It resolves to the version pinned by digest in the RunsOn runner image (`RUNS_ON_BUILDKIT_IMAGE`), or to `public.ecr.aws/c5h5o9k1/runs-on/buildkit:buildx-stable-1`, the latest patched release, on runner images without a pin. Referencing the output means workflows never need a version bump. Any other BuildKit image also works in `driver-opts`.
+
+The post step records the BuildKit version that last wrote the sticky state next to it. If a later job's `buildkit-image`, or the BuildKit it actually ran, is older than that version, the action warns: BuildKit doesn't document that an older version can read state written by a newer one.
+
 The action always emits `buildkit-builder`, even without a sticky disk. On
 Linux, when the RunsOn `ecr-pull-through` extra has a Docker Hub prefix
 configured, the runner agent writes Buildx's standard
@@ -510,6 +514,18 @@ so sticky and regular `docker-container` builders use the prefixed ECR Docker
 Hub cache without an action-specific mirror URL or inline configuration.
 
 Use `docker buildx build` (or `docker/build-push-action`) with the emitted builder; add `--load` when you need the built image in the local Docker daemon. `docker pull` and plain `docker build` do not use this cache.
+
+The `buildkit-image` output doesn't require a sticky disk. Without one, pass it to a regular `docker-container` builder:
+
+```yaml
+      - id: runs-on
+        uses: runs-on/action@v2
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+        with:
+          driver: docker-container
+          driver-opts: |
+            image=${{ steps.runs-on.outputs.buildkit-image }}
+```
 
 #### `git` mode (fast checkouts)
 
@@ -559,7 +575,7 @@ Restore-only jobs let one job keep a cache current while others only read it, fo
           sticky_save: ${{ github.ref == 'refs/heads/main' }}
 ```
 
-The action sets a `cache-hit` output: `true` when every requested path was restored from a previous snapshot. It also sets `buildkit-builder` to the stable builder name.
+The action sets a `cache-hit` output: `true` when every requested path was restored from a previous snapshot. It also sets `buildkit-builder` to the stable builder name, and `buildkit-image` to the RunsOn BuildKit image.
 
 ## Development
 

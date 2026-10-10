@@ -52,3 +52,5 @@ outputs:
     description: 'Set to "true" when every requested cache path was restored from a previous snapshot, "false" otherwise'
   buildkit-builder:
     description: 'Stable Buildx builder name to pass to docker/setup-buildx-action and docker/build-push-action'
+  buildkit-image:
+    description: 'BuildKit image to pass to docker/setup-buildx-action as driver-opts image=: the version pinned by the RunsOn runner image, or public.ecr.aws/c5h5o9k1/runs-on/buildkit:buildx-stable-1 on runner images without a pin'

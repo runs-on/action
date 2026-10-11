@@ -130,8 +130,9 @@ func (c *ghaClient) download(ctx context.Context, version, key string, restoreKe
 	return data, true, nil
 }
 
-// upload creates the entry with a single blob PUT.
-func (c *ghaClient) upload(ctx context.Context, version, key string, data []byte) error {
+// upload creates the entry with a single blob PUT of size bytes read from
+// body.
+func (c *ghaClient) upload(ctx context.Context, version, key string, body io.Reader, size int64) error {
 	var created struct {
 		Ok           bool   `json:"ok"`
 		URL          string `json:"signedUploadUrl"`
@@ -148,11 +149,11 @@ func (c *ghaClient) upload(ctx context.Context, version, key string, data []byte
 	if !created.Ok || url == "" {
 		return errEntryExists
 	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPut, url, bytes.NewReader(data))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPut, url, body)
 	if err != nil {
 		return err
 	}
-	httpReq.ContentLength = int64(len(data))
+	httpReq.ContentLength = size
 	httpReq.Header.Set("x-ms-blob-type", "BlockBlob")
 	httpReq.Header.Set("Content-Type", "application/octet-stream")
 	httpResp, err := c.http.Do(httpReq)
@@ -167,7 +168,7 @@ func (c *ghaClient) upload(ctx context.Context, version, key string, data []byte
 	var finalized struct {
 		Ok bool `json:"ok"`
 	}
-	req := map[string]any{"key": key, "version": version, "size_bytes": strconv.Itoa(len(data))}
+	req := map[string]any{"key": key, "version": version, "size_bytes": strconv.FormatInt(size, 10)}
 	if err := c.call(ctx, "FinalizeCacheEntryUpload", req, &finalized); err != nil {
 		return err
 	}

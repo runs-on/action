@@ -73,8 +73,11 @@ type Cache struct {
 	fetches singleflight.Group
 
 	usedMu sync.Mutex
-	used   map[[actionIDSize]byte]struct{}
-	order  [][]byte
+	// prefetched holds the entries of the manifest this go command started
+	// from.
+	prefetched map[[actionIDSize]byte]struct{}
+	used       map[[actionIDSize]byte]struct{}
+	order      [][]byte
 
 	uploads  chan upload
 	uploadWG sync.WaitGroup
@@ -210,6 +213,13 @@ func (c *Cache) prefetch() {
 	if !ok || len(data)%actionIDSize != 0 {
 		return
 	}
+	prefetched := make(map[[actionIDSize]byte]struct{}, len(data)/actionIDSize)
+	for i := 0; i < len(data); i += actionIDSize {
+		prefetched[[actionIDSize]byte(data[i:i+actionIDSize])] = struct{}{}
+	}
+	c.usedMu.Lock()
+	c.prefetched = prefetched
+	c.usedMu.Unlock()
 	sem := make(chan struct{}, c.opts.Concurrency)
 	var wg sync.WaitGroup
 	for i := 0; i < len(data) && c.remoteUp(); i += actionIDSize {
@@ -262,12 +272,21 @@ func (c *Cache) uploadLoop() {
 	}
 }
 
+// uploadEntry streams the output from local disk, so pending uploads hold no
+// output in memory whatever its size.
 func (c *Cache) uploadEntry(u upload) error {
-	body, err := os.ReadFile(c.disk.outputPath(u.outputID))
+	f, err := os.Open(c.disk.outputPath(u.outputID))
 	if err != nil {
 		return nil
 	}
-	return c.remote.upload(c.ctx, c.version(u.actionID), c.key(u.actionID), encodeEntry(u.outputID, body))
+	defer func() { _ = f.Close() }()
+	info, err := f.Stat()
+	if err != nil {
+		return nil
+	}
+	header := append(bytes.Clone(entryMagic), u.outputID...)
+	body := io.MultiReader(bytes.NewReader(header), f)
+	return c.remote.upload(c.ctx, c.version(u.actionID), c.key(u.actionID), body, int64(len(header))+info.Size())
 }
 
 // Close implements Handler: within CloseTimeout, it waits for pending uploads,
@@ -299,25 +318,26 @@ func (c *Cache) Close() error {
 
 // uploadManifest saves the entries this go command used, in the order it
 // first used them, as a new entry: cache entries are immutable, and a lookup
-// by prefix returns the newest.
+// by prefix returns the newest. A go command that only used entries it
+// prefetched saves nothing, so a build that keeps running unchanged does not
+// add a manifest per run. The entries it no longer uses stay in the manifest
+// until the next run that uses a new one.
 func (c *Cache) uploadManifest(ctx context.Context) {
 	c.usedMu.Lock()
 	data := bytes.Join(c.order, nil)
+	unchanged := true
+	for id := range c.used {
+		if _, ok := c.prefetched[id]; !ok {
+			unchanged = false
+			break
+		}
+	}
 	c.usedMu.Unlock()
-	if len(data) == 0 {
+	if len(data) == 0 || unchanged {
 		return
 	}
 	key := c.opts.ManifestKey + "-" + strconv.FormatInt(time.Now().UnixNano(), 36)
-	_ = c.remote.upload(ctx, c.manifestVersion(), key, data)
-}
-
-func encodeEntry(outputID, body []byte) []byte {
-	var buf bytes.Buffer
-	buf.Grow(len(entryMagic) + len(outputID) + len(body))
-	buf.Write(entryMagic)
-	buf.Write(outputID)
-	buf.Write(body)
-	return buf.Bytes()
+	_ = c.remote.upload(ctx, c.manifestVersion(), key, bytes.NewReader(data), int64(len(data)))
 }
 
 func decodeEntry(data []byte) (outputID, body []byte, err error) {

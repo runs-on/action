@@ -86,6 +86,12 @@ func (d *diskStore) writeAtomically(path string, data []byte) error {
 	}
 	if err != nil {
 		_ = os.Remove(tmp)
+		// Windows refuses to replace a file that another go command's helper
+		// has open. What is there is then a complete earlier write: the same
+		// output, or an entry for the same action.
+		if _, statErr := os.Stat(path); statErr == nil {
+			return nil
+		}
 	}
 	return err
 }

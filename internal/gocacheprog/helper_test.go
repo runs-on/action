@@ -229,6 +229,9 @@ func TestGoCommandSharesBuildsButNotTestResults(t *testing.T) {
 	if got := service.createCount() - createsBefore; got != 0 {
 		t.Errorf("a build with an empty cache directory tried to upload %d outputs, want 0: it compiled something", got)
 	}
+	if _, manifests := service.entries(); manifests != coldManifests {
+		t.Errorf("a build that used what it prefetched saved %d more manifests, want 0", manifests-coldManifests)
+	}
 	if service.downloadCount() < coldOutputs {
 		t.Errorf("warm build downloaded %d entries, want at least the %d the cold build stored", service.downloadCount(), coldOutputs)
 	}

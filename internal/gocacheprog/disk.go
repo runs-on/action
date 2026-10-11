@@ -1,8 +1,12 @@
 package gocacheprog
 
 import (
+	"bytes"
+	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -60,26 +64,45 @@ func (d *diskStore) get(actionID []byte) (Entry, bool) {
 func (d *diskStore) put(actionID, outputID, body []byte, now time.Time) (string, error) {
 	path := d.outputPath(outputID)
 	if info, err := os.Stat(path); err != nil || info.Size() != int64(len(body)) {
-		if err := d.writeAtomically(path, body); err != nil {
+		if _, err := d.writeAtomically(path, bytes.NewReader(body), nil); err != nil {
 			return "", err
 		}
 	}
-	entry := fmt.Sprintf("%x %d %d\n", outputID, len(body), now.UnixNano())
-	if err := d.writeAtomically(filepath.Join(d.dir, "a", hex.EncodeToString(actionID)), []byte(entry)); err != nil {
-		return "", err
-	}
-	return path, nil
+	return path, d.putAction(actionID, outputID, int64(len(body)), now)
 }
 
-func (d *diskStore) writeAtomically(path string, data []byte) error {
-	f, err := os.CreateTemp(filepath.Join(d.dir, "tmp"), "put-*")
+// putStream stores an output read from body without holding it in memory. The
+// go command's output ID is the SHA-256 of the output: one that does not
+// match is not stored.
+func (d *diskStore) putStream(actionID, outputID []byte, body io.Reader, now time.Time) error {
+	size, err := d.writeAtomically(d.outputPath(outputID), body, outputID)
 	if err != nil {
 		return err
 	}
+	return d.putAction(actionID, outputID, size, now)
+}
+
+func (d *diskStore) putAction(actionID, outputID []byte, size int64, now time.Time) error {
+	entry := fmt.Sprintf("%x %d %d\n", outputID, size, now.UnixNano())
+	_, err := d.writeAtomically(filepath.Join(d.dir, "a", hex.EncodeToString(actionID)), strings.NewReader(entry), nil)
+	return err
+}
+
+// writeAtomically writes data to path and returns its size. With a non-nil
+// sum, data must hash to it.
+func (d *diskStore) writeAtomically(path string, data io.Reader, sum []byte) (int64, error) {
+	f, err := os.CreateTemp(filepath.Join(d.dir, "tmp"), "put-*")
+	if err != nil {
+		return 0, err
+	}
 	tmp := f.Name()
-	_, err = f.Write(data)
+	hash := sha256.New()
+	size, err := io.Copy(io.MultiWriter(f, hash), data)
 	if closeErr := f.Close(); err == nil {
 		err = closeErr
+	}
+	if err == nil && sum != nil && !bytes.Equal(hash.Sum(nil), sum) {
+		err = errCorruptEntry
 	}
 	if err == nil {
 		err = os.Rename(tmp, path)
@@ -89,9 +112,9 @@ func (d *diskStore) writeAtomically(path string, data []byte) error {
 		// Windows refuses to replace a file that another go command's helper
 		// has open. What is there is then a complete earlier write: the same
 		// output, or an entry for the same action.
-		if _, statErr := os.Stat(path); statErr == nil {
-			return nil
+		if _, statErr := os.Stat(path); statErr == nil && !errors.Is(err, errCorruptEntry) {
+			return size, nil
 		}
 	}
-	return err
+	return size, err
 }

@@ -80,7 +80,7 @@ jobs:
       # What another job starts with: nothing on local disk.
       - name: Empty the local cache
         run: |
-          local_cache="${LOCALAPPDATA:-${XDG_CACHE_HOME:-${HOME}/.cache}}/runs-on-gocacheprog"
+          local_cache="${RUNNER_TEMP}/runs-on-gocacheprog"
           if [[ ! -d "${local_cache}/o" ]]; then
             echo "::error::no local cache at ${local_cache}"
             exit 1

@@ -155,7 +155,7 @@ func newFakeCacheService() (*httptest.Server, *fakeCacheService) {
 
 // TestGoCommandSharesBuildsButNotTestResults drives the real go command
 // through the helper against an in-memory cache service. Each build or test
-// run uses its own home directory, as another job would.
+// run uses its own home and temporary directory, as another job would.
 func TestGoCommandSharesBuildsButNotTestResults(t *testing.T) {
 	goBin, err := exec.LookPath("go")
 	if err != nil {
@@ -201,7 +201,7 @@ func TestGoCommandSharesBuildsButNotTestResults(t *testing.T) {
 		cmd.Dir = module
 		cmd.Env = append(os.Environ(),
 			"HOME="+home,
-			"XDG_CACHE_HOME="+filepath.Join(home, ".cache"),
+			"RUNNER_TEMP="+home,
 			"GOCACHEPROG="+helper,
 			"GOCACHE="+filepath.Join(home, "gocache"),
 			"GOFLAGS=",

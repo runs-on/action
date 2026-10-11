@@ -86,9 +86,9 @@ func (c *ghaClient) call(ctx context.Context, method string, req, resp any) erro
 	return json.Unmarshal(data, resp)
 }
 
-// download returns the content of the entry key, or of the newest entry
-// matching one of restoreKeys as a prefix, or ok=false on a miss.
-func (c *ghaClient) download(ctx context.Context, version, key string, restoreKeys ...string) ([]byte, bool, error) {
+// open returns the content of the entry key, or of the newest entry matching
+// one of restoreKeys as a prefix, or ok=false on a miss. The caller closes it.
+func (c *ghaClient) open(ctx context.Context, version, key string, restoreKeys ...string) (io.ReadCloser, bool, error) {
 	var resp struct {
 		Ok             bool   `json:"ok"`
 		URL            string `json:"signedDownloadUrl"`
@@ -116,18 +116,14 @@ func (c *ghaClient) download(ctx context.Context, version, key string, restoreKe
 	if err != nil {
 		return nil, false, err
 	}
-	defer func() { _ = httpResp.Body.Close() }()
-	if httpResp.StatusCode == http.StatusNotFound {
-		return nil, false, nil
-	}
 	if httpResp.StatusCode != http.StatusOK {
+		_ = httpResp.Body.Close()
+		if httpResp.StatusCode == http.StatusNotFound {
+			return nil, false, nil
+		}
 		return nil, false, fmt.Errorf("download %s: HTTP %d", key, httpResp.StatusCode)
 	}
-	data, err := io.ReadAll(httpResp.Body)
-	if err != nil {
-		return nil, false, err
-	}
-	return data, true, nil
+	return httpResp.Body, true, nil
 }
 
 // upload creates the entry with a single blob PUT of size bytes read from

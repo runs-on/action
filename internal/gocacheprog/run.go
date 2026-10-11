@@ -23,8 +23,11 @@ func Run(in io.Reader, out io.Writer) error {
 	if resultsURL == "" {
 		resultsURL = os.Getenv("RUNS_ON_MAGIC_CACHE_URL")
 	}
-	base, err := os.UserCacheDir()
-	if err != nil {
+	// The runner empties RUNNER_TEMP for each job, so the local layer, and
+	// with it the test results that are only kept there, never outlives the
+	// job on a runner that does.
+	base := os.Getenv("RUNNER_TEMP")
+	if base == "" {
 		base = os.TempDir()
 	}
 	c, err := New(Options{

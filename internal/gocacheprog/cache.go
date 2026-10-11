@@ -3,7 +3,6 @@ package gocacheprog
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -180,7 +179,7 @@ func (c *Cache) fetch(actionID []byte) bool {
 		if !c.remoteUp() {
 			return false, nil
 		}
-		data, ok, err := c.remote.download(c.ctx, c.version(actionID), c.key(actionID))
+		body, ok, err := c.remote.open(c.ctx, c.version(actionID), c.key(actionID))
 		if err != nil {
 			c.remoteDown.Store(true)
 			return false, nil
@@ -188,15 +187,17 @@ func (c *Cache) fetch(actionID []byte) bool {
 		if !ok {
 			return false, nil
 		}
-		outputID, body, err := decodeEntry(data)
-		if err == nil && sha256.Sum256(body) != [outputIDSize]byte(outputID) {
-			// The go command's output ID is the SHA-256 of the output.
-			err = errCorruptEntry
-		}
-		if err != nil {
+		defer func() { _ = body.Close() }()
+		// The output goes from the response to local disk, so concurrent
+		// prefetches hold no output in memory.
+		header := make([]byte, len(entryMagic)+outputIDSize)
+		if _, err := io.ReadFull(body, header); err != nil || !bytes.HasPrefix(header, entryMagic) {
 			return false, nil
 		}
-		_, err = c.disk.put(actionID, outputID, body, time.Now())
+		err = c.disk.putStream(actionID, header[len(entryMagic):], body, time.Now())
+		if err != nil && !errors.Is(err, errCorruptEntry) {
+			c.remoteDown.Store(true)
+		}
 		return err == nil, nil
 	})
 	return found.(bool)
@@ -205,12 +206,17 @@ func (c *Cache) fetch(actionID []byte) bool {
 // prefetch downloads the entries that the previous run of the same go command
 // used, before the go command asks for them one at a time.
 func (c *Cache) prefetch() {
-	data, ok, err := c.remote.download(c.ctx, c.manifestVersion(), c.opts.ManifestKey, c.opts.ManifestKey+"-")
+	body, ok, err := c.remote.open(c.ctx, c.manifestVersion(), c.opts.ManifestKey, c.opts.ManifestKey+"-")
 	if err != nil {
 		c.remoteDown.Store(true)
 		return
 	}
-	if !ok || len(data)%actionIDSize != 0 {
+	if !ok {
+		return
+	}
+	data, err := io.ReadAll(body)
+	_ = body.Close()
+	if err != nil || len(data)%actionIDSize != 0 {
 		return
 	}
 	prefetched := make(map[[actionIDSize]byte]struct{}, len(data)/actionIDSize)
@@ -338,12 +344,4 @@ func (c *Cache) uploadManifest(ctx context.Context) {
 	}
 	key := c.opts.ManifestKey + "-" + strconv.FormatInt(time.Now().UnixNano(), 36)
 	_ = c.remote.upload(ctx, c.manifestVersion(), key, bytes.NewReader(data), int64(len(data)))
-}
-
-func decodeEntry(data []byte) (outputID, body []byte, err error) {
-	if len(data) < len(entryMagic)+outputIDSize || !bytes.Equal(data[:len(entryMagic)], entryMagic) {
-		return nil, nil, io.ErrUnexpectedEOF
-	}
-	rest := data[len(entryMagic):]
-	return rest[:outputIDSize], rest[outputIDSize:], nil
 }

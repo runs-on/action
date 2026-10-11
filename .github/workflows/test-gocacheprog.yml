@@ -20,6 +20,9 @@ jobs:
             container: golang:1.26
           - leg: windows
             image: windows25-full-x64
+          - leg: with-tests
+            image: ubuntu24-full-x64
+            mode: with-tests
     runs-on: runs-on=${{ github.run_id }}/env=bootstrap/cpu=2/family=m7/image=${{ matrix.image }}/extras=s3-cache
     container: ${{ matrix.container }}
     defaults:
@@ -30,7 +33,7 @@ jobs:
       - uses: ./.github/actions/use-dist
       - uses: ./
         with:
-          gocacheprog: true
+          gocacheprog: ${{ matrix.mode || 'true' }}
       - if: ${{ !matrix.container }}
         uses: actions/setup-go@v6.4.0
         with:
@@ -95,12 +98,18 @@ jobs:
             echo "::error::a build with every package in Magic Cache compiled some"
             exit 1
           fi
-      - name: Test results are not shared
+      - name: Test results are shared only with with-tests
+        env:
+          MODE: ${{ matrix.mode || 'true' }}
         run: |
           cd "${RUNNER_TEMP}/gocacheprog"
           go test ./... | tee first.log
           go test ./... | tee second.log
-          if grep -q "(cached)" first.log; then
+          if [[ "${MODE}" == "with-tests" ]] && ! grep -q "(cached)" first.log; then
+            echo "::error::a test result shared through Magic Cache was not reused"
+            exit 1
+          fi
+          if [[ "${MODE}" != "with-tests" ]] && grep -q "(cached)" first.log; then
             echo "::error::a test result came from Magic Cache"
             exit 1
           fi

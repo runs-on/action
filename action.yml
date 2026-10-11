@@ -31,7 +31,7 @@ inputs:
     required: false
     default: ''
   gocacheprog:
-    description: 'Set to "true" to share the go command''s build cache (Go 1.24+) through Magic Cache: later steps get GOCACHEPROG, and each go command prefetches what its previous run used. Test results are not shared between jobs. Requires Magic Cache; otherwise the action warns and Go keeps its local build cache.'
+    description: 'Set to "true" to share the go command''s build cache (Go 1.24+) through Magic Cache: later steps get GOCACHEPROG, and each go command prefetches what its previous run used. Test results are not shared between jobs; set to "with-tests" to share them too. Requires Magic Cache; otherwise the action warns and Go keeps its local build cache.'
     required: false
     default: 'false'
   sticky_cache:

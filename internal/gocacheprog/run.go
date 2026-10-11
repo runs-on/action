@@ -18,7 +18,7 @@ const namespace = "runs-on-gocacheprog-v1"
 // reach Magic Cache; without them, the cache stays on local disk. Steps see
 // the URL as ACTIONS_RESULTS_URL, or on custom runners, which give it to
 // actions only, as RUNS_ON_MAGIC_CACHE_URL.
-func Run(in io.Reader, out io.Writer) error {
+func Run(in io.Reader, out io.Writer, shareTestResults bool) error {
 	resultsURL := os.Getenv("ACTIONS_RESULTS_URL")
 	if resultsURL == "" {
 		resultsURL = os.Getenv("RUNS_ON_MAGIC_CACHE_URL")
@@ -36,6 +36,8 @@ func Run(in io.Reader, out io.Writer) error {
 		Token:       os.Getenv("ACTIONS_RUNTIME_TOKEN"),
 		Namespace:   namespace,
 		ManifestKey: namespace + "-manifest-" + commandID(),
+
+		ShareTestResults: shareTestResults,
 	})
 	if err != nil {
 		return fmt.Errorf("open the build cache: %w", err)

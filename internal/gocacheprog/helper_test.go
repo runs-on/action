@@ -194,15 +194,20 @@ func TestGoCommandSharesBuildsButNotTestResults(t *testing.T) {
 	srv, service := newFakeCacheService()
 	defer srv.Close()
 
+	shareTests := false
 	goCmd := func(job, resultsURL string, args ...string) string {
 		t.Helper()
 		home := filepath.Join(tmp, job)
+		prog := helper
+		if shareTests {
+			prog += " --share-test-results"
+		}
 		cmd := exec.Command(goBin, args...)
 		cmd.Dir = module
 		cmd.Env = append(os.Environ(),
 			"HOME="+home,
 			"RUNNER_TEMP="+home,
-			"GOCACHEPROG="+helper,
+			"GOCACHEPROG="+prog,
 			"GOCACHE="+filepath.Join(home, "gocache"),
 			"GOFLAGS=",
 			"GOTOOLCHAIN=local",
@@ -253,5 +258,17 @@ func TestGoCommandSharesBuildsButNotTestResults(t *testing.T) {
 	}
 	if n := service.testLogCount(); n != 0 {
 		t.Errorf("%d test input records reached the cache service, want 0", n)
+	}
+
+	// Jobs that opt in share test results with each other, and only with
+	// each other.
+	shareTests = true
+	goCmd("shared-job-1", srv.URL, "test", "./...")
+	if out := goCmd("shared-job-2", srv.URL, "test", "./..."); !strings.Contains(out, "(cached)") {
+		t.Errorf("a job that shares test results reran another's tests:\n%s", out)
+	}
+	shareTests = false
+	if out := goCmd("test-job-3", srv.URL, "test", "./..."); strings.Contains(out, "(cached)") {
+		t.Errorf("a job that did not opt in reused a shared test result:\n%s", out)
 	}
 }

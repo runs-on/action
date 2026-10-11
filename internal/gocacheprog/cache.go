@@ -1,6 +1,7 @@
 package gocacheprog
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/hex"
@@ -47,6 +48,10 @@ type Options struct {
 	// ManifestKey names the list of entries this go command used, which the
 	// next run of the same command prefetches. Empty disables prefetching.
 	ManifestKey string
+	// ShareTestResults also shares the records the go command looks up test
+	// results through. Without it they stay on local disk, and the ones
+	// other jobs shared are ignored.
+	ShareTestResults bool
 	// Concurrency bounds background uploads and prefetches.
 	Concurrency int
 	// CloseTimeout bounds what the go command waits for when it exits: the
@@ -190,11 +195,15 @@ func (c *Cache) fetch(actionID []byte) bool {
 		defer func() { _ = body.Close() }()
 		// The output goes from the response to local disk, so concurrent
 		// prefetches hold no output in memory.
+		output := bufio.NewReader(body)
 		header := make([]byte, len(entryMagic)+outputIDSize)
-		if _, err := io.ReadFull(body, header); err != nil || !bytes.HasPrefix(header, entryMagic) {
+		if _, err := io.ReadFull(output, header); err != nil || !bytes.HasPrefix(header, entryMagic) {
 			return false, nil
 		}
-		err = c.disk.putStream(actionID, header[len(entryMagic):], body, time.Now())
+		if start, _ := output.Peek(len(testLogMagic)); !c.opts.ShareTestResults && bytes.Equal(start, testLogMagic) {
+			return false, nil
+		}
+		err = c.disk.putStream(actionID, header[len(entryMagic):], output, time.Now())
 		if err != nil && !errors.Is(err, errCorruptEntry) {
 			c.remoteDown.Store(true)
 		}
@@ -249,7 +258,7 @@ func (c *Cache) Put(actionID, outputID, body []byte) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if bytes.HasPrefix(body, testLogMagic) {
+	if !c.opts.ShareTestResults && bytes.HasPrefix(body, testLogMagic) {
 		return path, nil
 	}
 	c.markUsed(actionID)

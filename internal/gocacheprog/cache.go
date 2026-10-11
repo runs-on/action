@@ -88,8 +88,8 @@ type Cache struct {
 	opts   Options
 	disk   *diskStore
 	remote *ghaClient
-	// remoteDown stops remote lookups and uploads for this go command after a
-	// failure: a cache that times out would otherwise add its timeout to
+	// remoteDown stops remote lookups and uploads for this go command once
+	// the cache does not answer: its timeout would otherwise be added to
 	// every lookup of the build.
 	remoteDown atomic.Bool
 	// ctx is cancelled once the go command stops waiting for uploads.
@@ -173,6 +173,14 @@ func (c *Cache) remoteUp() bool {
 	return c.remote != nil && !c.remoteDown.Load()
 }
 
+// failed records a failed request. A cache that answered with an error only
+// loses that entry; one that did not answer is not asked again.
+func (c *Cache) failed(err error) {
+	if !errors.Is(err, errAnswered) {
+		c.remoteDown.Store(true)
+	}
+}
+
 func (c *Cache) markUsed(actionID []byte) {
 	if len(actionID) != actionIDSize {
 		return
@@ -200,8 +208,8 @@ func (c *Cache) Get(actionID []byte) (Entry, bool, error) {
 
 // fetch downloads an entry to local disk, once even when a prefetch and the
 // go command ask for it at the same time. A cache that fails or holds a
-// corrupt entry must not fail the build: it reports a miss, and a failing
-// cache is not asked again by this go command.
+// corrupt entry must not fail the build: it reports a miss, and a cache that
+// does not answer is not asked again by this go command.
 func (c *Cache) fetch(actionID []byte) bool {
 	found, _, _ := c.fetches.Do(string(actionID), func() (any, error) {
 		if _, ok := c.disk.get(actionID); ok {
@@ -212,7 +220,7 @@ func (c *Cache) fetch(actionID []byte) bool {
 		}
 		body, ok, err := c.remote.open(c.ctx, c.version(actionID), c.key(actionID))
 		if err != nil {
-			c.remoteDown.Store(true)
+			c.failed(err)
 			return false, nil
 		}
 		if !ok {
@@ -246,7 +254,7 @@ func (c *Cache) fetch(actionID []byte) bool {
 func (c *Cache) prefetch() {
 	body, ok, err := c.remote.open(c.ctx, c.manifestVersion(), c.opts.ManifestKey, c.opts.ManifestKey+"-")
 	if err != nil {
-		c.remoteDown.Store(true)
+		c.failed(err)
 		return
 	}
 	if !ok {
@@ -305,13 +313,13 @@ func (c *Cache) Put(actionID, outputID, body []byte) (string, error) {
 }
 
 // uploadLoop uploads entries in the background. An entry another job already
-// saved costs this one entry; a failing cache stops this go command's
-// uploads.
+// saved, or that the cache refuses, costs this one entry; a cache that does
+// not answer stops this go command's uploads.
 func (c *Cache) uploadLoop() {
 	for u := range c.uploads {
 		if c.remoteUp() {
 			if err := c.uploadEntry(u); err != nil && !errors.Is(err, errEntryExists) {
-				c.remoteDown.Store(true)
+				c.failed(err)
 			}
 		}
 		c.uploadWG.Done()

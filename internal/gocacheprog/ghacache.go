@@ -24,6 +24,11 @@ type ghaClient struct {
 
 var errEntryExists = errors.New("cache entry already exists")
 
+// errAnswered marks a request the cache service answered with an error: the
+// service is reachable, and only that entry is lost. Magic Cache answers this
+// way when another job replaces an entry while it is being downloaded.
+var errAnswered = errors.New("the cache service refused the request")
+
 const twirpPrefix = "twirp/github.actions.results.api.v1.CacheService/"
 
 func newGHAClient(resultsURL, token string) *ghaClient {
@@ -81,7 +86,7 @@ func (c *ghaClient) call(ctx context.Context, method string, req, resp any) erro
 		if twErr.Msg == "" {
 			twErr.Msg = strings.TrimSpace(string(data))
 		}
-		return twErr
+		return fmt.Errorf("%w: %w", errAnswered, twErr)
 	}
 	return json.Unmarshal(data, resp)
 }
@@ -121,7 +126,7 @@ func (c *ghaClient) open(ctx context.Context, version, key string, restoreKeys .
 		if httpResp.StatusCode == http.StatusNotFound {
 			return nil, false, nil
 		}
-		return nil, false, fmt.Errorf("download %s: HTTP %d", key, httpResp.StatusCode)
+		return nil, false, fmt.Errorf("%w: download %s: HTTP %d", errAnswered, key, httpResp.StatusCode)
 	}
 	return httpResp.Body, true, nil
 }
@@ -159,7 +164,7 @@ func (c *ghaClient) upload(ctx context.Context, version, key string, body io.Rea
 	_, _ = io.Copy(io.Discard, httpResp.Body)
 	_ = httpResp.Body.Close()
 	if httpResp.StatusCode/100 != 2 {
-		return fmt.Errorf("upload %s: HTTP %d", key, httpResp.StatusCode)
+		return fmt.Errorf("%w: upload %s: HTTP %d", errAnswered, key, httpResp.StatusCode)
 	}
 	var finalized struct {
 		Ok bool `json:"ok"`
@@ -169,7 +174,7 @@ func (c *ghaClient) upload(ctx context.Context, version, key string, body io.Rea
 		return err
 	}
 	if !finalized.Ok {
-		return fmt.Errorf("finalize %s: not ok", key)
+		return fmt.Errorf("%w: finalize %s: not ok", errAnswered, key)
 	}
 	return nil
 }

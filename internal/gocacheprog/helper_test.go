@@ -2,6 +2,7 @@ package gocacheprog_test
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,6 +15,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/runs-on/action/internal/gocacheprog"
 )
 
 // fakeCacheService is an in-memory GitHub Actions cache service (v2 Twirp):
@@ -25,7 +28,10 @@ type fakeCacheService struct {
 	order     []string // committed ids, oldest first
 	downloads int
 	creates   int // CreateCacheEntry calls for outputs, rejected ones too
-	testData  int // uploaded entries holding what a test read or printed
+	// refuseDownloads answers downloads as Magic Cache does when another job
+	// replaced the entry since the lookup.
+	refuseDownloads bool
+	testData        int // uploaded entries holding what a test read or printed
 }
 
 // entries counts committed entries, build outputs and manifests apart.
@@ -146,6 +152,10 @@ func newFakeCacheService() (*httptest.Server, *fakeCacheService) {
 			data, ok := f.committed[key]
 			if !ok {
 				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			if f.refuseDownloads {
+				w.WriteHeader(http.StatusPreconditionFailed)
 				return
 			}
 			f.downloads++
@@ -284,5 +294,45 @@ func TestGoCommandSharesBuildsButNotTestResults(t *testing.T) {
 	shareTests = false
 	if out := goCmd("test-job-3", srv.URL, "test", "-v", "./..."); strings.Contains(out, "(cached)") {
 		t.Errorf("a job that did not opt in reused a shared test result:\n%s", out)
+	}
+}
+
+// TestRefusedDownloadLosesOnlyThatEntry covers two jobs writing the same
+// entries at once: a download the cache refuses is a miss, and the outputs
+// compiled after it are still uploaded.
+func TestRefusedDownloadLosesOnlyThatEntry(t *testing.T) {
+	srv, service := newFakeCacheService()
+	defer srv.Close()
+	open := func() *gocacheprog.Cache {
+		c, err := gocacheprog.New(gocacheprog.Options{Dir: t.TempDir(), ResultsURL: srv.URL, Token: "test-token", Namespace: "test"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	put := func(c *gocacheprog.Cache, action byte, output string) {
+		t.Helper()
+		outputID := sha256.Sum256([]byte(output))
+		if _, err := c.Put(bytes.Repeat([]byte{action}, 32), outputID[:], []byte(output)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	first := open()
+	put(first, 1, "one")
+	_ = first.Close()
+
+	service.mu.Lock()
+	service.refuseDownloads = true
+	service.mu.Unlock()
+	second := open()
+	if _, ok, err := second.Get(bytes.Repeat([]byte{1}, 32)); ok || err != nil {
+		t.Fatalf("a refused download returned %v, %v, want a miss", ok, err)
+	}
+	put(second, 2, "two")
+	_ = second.Close()
+
+	if outputs, _ := service.entries(); outputs != 2 {
+		t.Errorf("the cache service holds %d outputs, want the 2 that were put", outputs)
 	}
 }

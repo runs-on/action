@@ -28,6 +28,7 @@ type fakeCacheService struct {
 	order     []string // committed ids, oldest first
 	downloads int
 	creates   int // CreateCacheEntry calls for outputs, rejected ones too
+	rejected  int // calls with another token, answered 401
 	// refuseDownloads answers downloads as Magic Cache does when another job
 	// replaced the entry since the lookup.
 	refuseDownloads bool
@@ -77,6 +78,9 @@ func newFakeCacheService() (*httptest.Server, *fakeCacheService) {
 	twirp := func(method string, handle func(req map[string]any) (int, any)) {
 		mux.HandleFunc("/twirp/github.actions.results.api.v1.CacheService/"+method, func(w http.ResponseWriter, r *http.Request) {
 			if r.Header.Get("Authorization") != "Bearer test-token" {
+				f.mu.Lock()
+				f.rejected++
+				f.mu.Unlock()
 				w.WriteHeader(http.StatusUnauthorized)
 				return
 			}
@@ -297,10 +301,11 @@ func TestGoCommandSharesBuildsButNotTestResults(t *testing.T) {
 	}
 }
 
-// TestRefusedDownloadLosesOnlyThatEntry covers two jobs writing the same
-// entries at once: a download the cache refuses is a miss, and the outputs
-// compiled after it are still uploaded.
-func TestRefusedDownloadLosesOnlyThatEntry(t *testing.T) {
+// TestEntryReplacedDuringDownloadIsAMiss covers two jobs writing the same
+// entries at once: Magic Cache refuses the download of an entry replaced
+// since its lookup. That is a miss, and the outputs compiled after it are
+// still uploaded.
+func TestEntryReplacedDuringDownloadIsAMiss(t *testing.T) {
 	srv, service := newFakeCacheService()
 	defer srv.Close()
 	open := func() *gocacheprog.Cache {
@@ -334,5 +339,33 @@ func TestRefusedDownloadLosesOnlyThatEntry(t *testing.T) {
 
 	if outputs, _ := service.entries(); outputs != 2 {
 		t.Errorf("the cache service holds %d outputs, want the 2 that were put", outputs)
+	}
+}
+
+// TestRejectedTokenIsNotAskedAgain: a cache that rejects the job's token will
+// reject every request of the build, so the go command stops asking after the
+// first one instead of paying for each lookup and upload.
+func TestRejectedTokenIsNotAskedAgain(t *testing.T) {
+	srv, service := newFakeCacheService()
+	defer srv.Close()
+	c, err := gocacheprog.New(gocacheprog.Options{Dir: t.TempDir(), ResultsURL: srv.URL, Token: "expired-token", Namespace: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for action := byte(1); action <= 3; action++ {
+		if _, ok, err := c.Get(bytes.Repeat([]byte{action}, 32)); ok || err != nil {
+			t.Fatalf("a lookup with a rejected token returned %v, %v, want a miss", ok, err)
+		}
+	}
+	output := sha256.Sum256([]byte("out"))
+	if _, err := c.Put(bytes.Repeat([]byte{4}, 32), output[:], []byte("out")); err != nil {
+		t.Fatal(err)
+	}
+	_ = c.Close()
+
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	if service.rejected != 1 {
+		t.Errorf("the cache service rejected %d requests, want 1: the first", service.rejected)
 	}
 }

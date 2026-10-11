@@ -10,23 +10,27 @@ import (
 	"github.com/sethvargo/go-githubactions"
 )
 
-func TestConfigureExportsGOCACHEPROGWhereTheAgentServesIt(t *testing.T) {
+func TestConfigureExportsGOCACHEPROGOnlyWithMagicCacheAndAToken(t *testing.T) {
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, tc := range []struct {
-		name, advertised, token string
-		want                    []string
+		name       string
+		magicCache bool
+		token      string
+		want       []string
 	}{
-		{name: "agent serves it", advertised: "/runs-on/agent", token: "job-token", want: []string{"GOCACHEPROG", "/runs-on/agent --gocacheprog", "ACTIONS_RUNTIME_TOKEN", "job-token"}},
-		{name: "agent path with a space", advertised: `C:\Program Files\runs-on\agent.exe`, token: "job-token", want: []string{`"C:\Program Files\runs-on\agent.exe" --gocacheprog`}},
-		{name: "no Magic Cache or older agent", token: "job-token"},
-		{name: "no runtime token", advertised: "/runs-on/agent"},
+		{name: "Magic Cache and a token", magicCache: true, token: "job-token", want: []string{"GOCACHEPROG", self, Flag, "ACTIONS_RUNTIME_TOKEN", "job-token"}},
+		{name: "no Magic Cache", token: "job-token"},
+		{name: "no runtime token", magicCache: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Setenv("RUNS_ON_GOCACHEPROG", tc.advertised)
 			envFile := filepath.Join(t.TempDir(), "env")
 			t.Setenv("GITHUB_ENV", envFile)
 			var log bytes.Buffer
 
-			Configure(githubactions.New(githubactions.WithWriter(&log)), tc.token)
+			Configure(githubactions.New(githubactions.WithWriter(&log)), tc.magicCache, tc.token)
 
 			exported, _ := os.ReadFile(envFile)
 			for _, want := range tc.want {

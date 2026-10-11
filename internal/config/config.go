@@ -149,6 +149,13 @@ func (c *Config) HasGoCacheProg() bool {
 	return c.IsUsingRunsOn() && c.GoCacheProg
 }
 
+// HasMagicCache reports whether the runner serves the GitHub Actions cache
+// from Magic Cache: the agent then hides GitHub's own results URL behind
+// ZCTIONS_RESULTS_URL, or on custom runners sets RUNS_ON_MAGIC_CACHE_URL.
+func (c *Config) HasMagicCache() bool {
+	return c.ZctionsResultsURL != "" || os.Getenv("RUNS_ON_MAGIC_CACHE_URL") != ""
+}
+
 func (c *Config) HasSccache() bool {
 	return c.IsUsingRunsOn() && c.Sccache != ""
 }

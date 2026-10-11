@@ -124,7 +124,7 @@ func handleMainExecution(action *githubactions.Action, ctx context.Context) {
 	}
 
 	if cfg.HasGoCacheProg() {
-		gocacheprog.Configure(action, cfg.ActionsRuntimeToken)
+		gocacheprog.Configure(action, cfg.HasMagicCache(), cfg.ActionsRuntimeToken)
 	}
 
 	// Configure sticky disk cache mounts (or restore-only mode) if requested
@@ -205,7 +205,16 @@ func main() {
 	ctx := context.Background()
 	postFlag := flag.Bool("post", false, "Indicates the post-execution phase")
 	gitProxyFlag := flag.Bool("git-proxy-serve", false, "Run the local git mirror proxy (internal, spawned by the git cache mode)")
+	goCacheProgFlag := flag.Bool(strings.TrimLeft(gocacheprog.Flag, "-"), false, "Serve the go command's build cache (internal, started by the go command through GOCACHEPROG)")
 	flag.Parse()
+
+	if *goCacheProgFlag {
+		if err := gocacheprog.Run(os.Stdin, os.Stdout); err != nil {
+			fmt.Fprintf(os.Stderr, "gocacheprog: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	if *gitProxyFlag {
 		if err := gitproxy.RunFromEnv(ctx); err != nil {

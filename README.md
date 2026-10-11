@@ -371,7 +371,7 @@ Previously every repository on a stack shared the flat `cache/sccache` prefix. M
 
 ### `gocacheprog`
 
-Shares the go command's build cache (Go 1.24 or later) between jobs through Magic Cache. Later steps get [`GOCACHEPROG`](https://pkg.go.dev/cmd/go#hdr-Build_and_test_caching) pointing at the RunsOn agent, which keeps the cache on local disk and in the stack's S3 cache bucket, with GitHub's branch scoping: a pull request reads its base branch's entries and writes only its own. Each go command (same directory and command line) prefetches the entries its previous run used, so a warm build reads them in parallel instead of one at a time.
+Shares the go command's build cache (Go 1.24 or later) between jobs through Magic Cache. Later steps get [`GOCACHEPROG`](https://pkg.go.dev/cmd/go#hdr-Build_and_test_caching) pointing at this action's own binary, which keeps the cache on local disk and in the stack's S3 cache bucket, with GitHub's branch scoping: a pull request reads its base branch's entries and writes only its own. Each go command (same directory and command line) prefetches the entries its previous run used, so a warm build reads them in parallel instead of one at a time.
 
 ```yaml
 jobs:
@@ -393,7 +393,9 @@ jobs:
       - run: go build ./... && go test ./...
 ```
 
-Requires Magic Cache and RunsOn v3.5.0 or later. Without them, the action warns and the go command keeps its local build cache. Go also caches test results in this cache: tests whose inputs did not change are reported as `(cached)` instead of running again. Run `go test -count=1` for tests that depend on anything outside their inputs, such as a database or the network.
+Requires Magic Cache (`extras=s3-cache`). Without it, the action warns and the go command keeps its local build cache. Container jobs work too: the runner mounts the action, and so the helper, into the job container.
+
+Compiled packages are shared between jobs; test results are not. Within a job, tests whose inputs did not change are still reported as `(cached)`, but a new job runs its tests again, because a test can depend on things Go does not track, such as a database or the network.
 
 ### `sticky_cache`
 

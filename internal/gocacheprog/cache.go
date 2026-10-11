@@ -1,0 +1,329 @@
+package gocacheprog
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"strconv"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"golang.org/x/sync/singleflight"
+)
+
+// Remote entries hold one action: a magic header, the 32-byte output ID, then
+// the output. Go action and output IDs are SHA-256 hashes of every input
+// (sources, flags, toolchain, GOOS/GOARCH), so a key never needs a platform.
+var entryMagic = []byte("RGC1")
+
+const (
+	outputIDSize = 32
+	actionIDSize = 32
+)
+
+// testLogMagic starts the record of what a test read (files, environment
+// variables), which the go command looks up first to decide whether a cached
+// test result still applies (cmd/go/internal/test.testlogMagic, unchanged
+// since Go 1.10). Keeping that record on local disk only makes every job run
+// its tests: a result is reused within a job, as on a laptop, but a test that
+// passed in another job is not skipped. Compiled test code is still shared.
+var testLogMagic = []byte("# test log\n")
+
+var errCorruptEntry = errors.New("remote entry does not match its output ID")
+
+// Options configures a Cache.
+type Options struct {
+	Dir        string
+	ResultsURL string
+	Token      string
+	// Namespace prefixes remote keys and versions, so a format change starts
+	// from an empty cache.
+	Namespace string
+	// ManifestKey names the list of entries this go command used, which the
+	// next run of the same command prefetches. Empty disables prefetching.
+	ManifestKey string
+	// Concurrency bounds background uploads and prefetches.
+	Concurrency int
+	// CloseTimeout bounds what the go command waits for when it exits: the
+	// pending uploads and the manifest.
+	CloseTimeout time.Duration
+}
+
+// Cache is the Handler: local disk first, then the remote cache.
+type Cache struct {
+	opts   Options
+	disk   *diskStore
+	remote *ghaClient
+	// remoteDown stops remote lookups and uploads for this go command after a
+	// failure: a cache that times out would otherwise add its timeout to
+	// every lookup of the build.
+	remoteDown atomic.Bool
+	// ctx is cancelled once the go command stops waiting for uploads.
+	ctx    context.Context
+	cancel context.CancelFunc
+
+	// fetches makes a prefetch and the go command's own lookup of the same
+	// entry share one download.
+	fetches singleflight.Group
+
+	usedMu sync.Mutex
+	used   map[[actionIDSize]byte]struct{}
+	order  [][]byte
+
+	uploads  chan upload
+	uploadWG sync.WaitGroup
+}
+
+// upload names an output already on local disk, so a queue of pending
+// uploads holds no output in memory.
+type upload struct {
+	actionID []byte
+	outputID []byte
+}
+
+// uploadQueueSize bounds the pending uploads. Uploads are best effort: when
+// the cache falls this far behind, more outputs are only kept locally.
+const uploadQueueSize = 65536
+
+// New opens the cache. Without a results URL or token it only uses local
+// disk.
+func New(opts Options) (*Cache, error) {
+	disk, err := newDiskStore(opts.Dir)
+	if err != nil {
+		return nil, err
+	}
+	if opts.Concurrency <= 0 {
+		opts.Concurrency = 64
+	}
+	if opts.CloseTimeout <= 0 {
+		opts.CloseTimeout = 2 * time.Minute
+	}
+	c := &Cache{opts: opts, disk: disk, used: map[[actionIDSize]byte]struct{}{}}
+	c.ctx, c.cancel = context.WithCancel(context.Background())
+	if opts.ResultsURL != "" && opts.Token != "" {
+		c.remote = newGHAClient(opts.ResultsURL, opts.Token)
+		c.uploads = make(chan upload, uploadQueueSize)
+		for range opts.Concurrency {
+			go c.uploadLoop()
+		}
+		if opts.ManifestKey != "" {
+			go c.prefetch()
+		}
+	}
+	return c, nil
+}
+
+func (c *Cache) key(actionID []byte) string {
+	return c.opts.Namespace + "-" + hex.EncodeToString(actionID)
+}
+
+// version shards entries across 16 cache versions by the first hex digit of
+// their action ID. Each version is one directory in Magic Cache, whose lookup
+// index covers a directory only while it holds fewer than 50,000 entries, and
+// only once 8 lookups asked for it: 16 directories hold 800,000 entries and
+// cost a cold build 128 listed lookups.
+func (c *Cache) version(actionID []byte) string {
+	return c.opts.Namespace + "-" + hex.EncodeToString(actionID[:1])[:1]
+}
+
+func (c *Cache) manifestVersion() string {
+	return c.opts.Namespace + "-manifest"
+}
+
+func (c *Cache) remoteUp() bool {
+	return c.remote != nil && !c.remoteDown.Load()
+}
+
+func (c *Cache) markUsed(actionID []byte) {
+	if len(actionID) != actionIDSize {
+		return
+	}
+	c.usedMu.Lock()
+	defer c.usedMu.Unlock()
+	id := [actionIDSize]byte(actionID)
+	if _, ok := c.used[id]; !ok {
+		c.used[id] = struct{}{}
+		c.order = append(c.order, id[:])
+	}
+}
+
+// Get implements Handler.
+func (c *Cache) Get(actionID []byte) (Entry, bool, error) {
+	entry, ok := c.disk.get(actionID)
+	if !ok && len(actionID) == actionIDSize && c.fetch(actionID) {
+		entry, ok = c.disk.get(actionID)
+	}
+	if ok {
+		c.markUsed(actionID)
+	}
+	return entry, ok, nil
+}
+
+// fetch downloads an entry to local disk, once even when a prefetch and the
+// go command ask for it at the same time. A cache that fails or holds a
+// corrupt entry must not fail the build: it reports a miss, and a failing
+// cache is not asked again by this go command.
+func (c *Cache) fetch(actionID []byte) bool {
+	found, _, _ := c.fetches.Do(string(actionID), func() (any, error) {
+		if _, ok := c.disk.get(actionID); ok {
+			return true, nil
+		}
+		if !c.remoteUp() {
+			return false, nil
+		}
+		data, ok, err := c.remote.download(c.ctx, c.version(actionID), c.key(actionID))
+		if err != nil {
+			c.remoteDown.Store(true)
+			return false, nil
+		}
+		if !ok {
+			return false, nil
+		}
+		outputID, body, err := decodeEntry(data)
+		if err == nil && sha256.Sum256(body) != [outputIDSize]byte(outputID) {
+			// The go command's output ID is the SHA-256 of the output.
+			err = errCorruptEntry
+		}
+		if err != nil {
+			return false, nil
+		}
+		_, err = c.disk.put(actionID, outputID, body, time.Now())
+		return err == nil, nil
+	})
+	return found.(bool)
+}
+
+// prefetch downloads the entries that the previous run of the same go command
+// used, before the go command asks for them one at a time.
+func (c *Cache) prefetch() {
+	data, ok, err := c.remote.download(c.ctx, c.manifestVersion(), c.opts.ManifestKey, c.opts.ManifestKey+"-")
+	if err != nil {
+		c.remoteDown.Store(true)
+		return
+	}
+	if !ok || len(data)%actionIDSize != 0 {
+		return
+	}
+	sem := make(chan struct{}, c.opts.Concurrency)
+	var wg sync.WaitGroup
+	for i := 0; i < len(data) && c.remoteUp(); i += actionIDSize {
+		actionID := data[i : i+actionIDSize]
+		sem <- struct{}{}
+		wg.Go(func() {
+			defer func() { <-sem }()
+			c.fetch(actionID)
+		})
+	}
+	wg.Wait()
+}
+
+// Put implements Handler. The upload runs in the background; Close waits for
+// it.
+func (c *Cache) Put(actionID, outputID, body []byte) (string, error) {
+	if len(outputID) != outputIDSize {
+		return "", fmt.Errorf("output ID is %d bytes, want %d", len(outputID), outputIDSize)
+	}
+	path, err := c.disk.put(actionID, outputID, body, time.Now())
+	if err != nil {
+		return "", err
+	}
+	if bytes.HasPrefix(body, testLogMagic) {
+		return path, nil
+	}
+	c.markUsed(actionID)
+	if c.remoteUp() && len(actionID) == actionIDSize {
+		c.uploadWG.Add(1)
+		select {
+		case c.uploads <- upload{actionID: actionID, outputID: outputID}:
+		default:
+			c.uploadWG.Done()
+		}
+	}
+	return path, nil
+}
+
+// uploadLoop uploads entries in the background. An entry another job already
+// saved costs this one entry; a failing cache stops this go command's
+// uploads.
+func (c *Cache) uploadLoop() {
+	for u := range c.uploads {
+		if c.remoteUp() {
+			if err := c.uploadEntry(u); err != nil && !errors.Is(err, errEntryExists) {
+				c.remoteDown.Store(true)
+			}
+		}
+		c.uploadWG.Done()
+	}
+}
+
+func (c *Cache) uploadEntry(u upload) error {
+	body, err := os.ReadFile(c.disk.outputPath(u.outputID))
+	if err != nil {
+		return nil
+	}
+	return c.remote.upload(c.ctx, c.version(u.actionID), c.key(u.actionID), encodeEntry(u.outputID, body))
+}
+
+// Close implements Handler: within CloseTimeout, it waits for pending uploads,
+// then records the entries this go command used for the next run to
+// prefetch.
+func (c *Cache) Close() error {
+	defer c.cancel()
+	if c.remote == nil {
+		return nil
+	}
+	deadline := time.Now().Add(c.opts.CloseTimeout)
+	done := make(chan struct{})
+	go func() {
+		c.uploadWG.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Until(deadline)):
+		return nil
+	}
+	if c.opts.ManifestKey != "" && c.remoteUp() {
+		ctx, cancel := context.WithDeadline(c.ctx, deadline)
+		defer cancel()
+		c.uploadManifest(ctx)
+	}
+	return nil
+}
+
+// uploadManifest saves the entries this go command used, in the order it
+// first used them, as a new entry: cache entries are immutable, and a lookup
+// by prefix returns the newest.
+func (c *Cache) uploadManifest(ctx context.Context) {
+	c.usedMu.Lock()
+	data := bytes.Join(c.order, nil)
+	c.usedMu.Unlock()
+	if len(data) == 0 {
+		return
+	}
+	key := c.opts.ManifestKey + "-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	_ = c.remote.upload(ctx, c.manifestVersion(), key, data)
+}
+
+func encodeEntry(outputID, body []byte) []byte {
+	var buf bytes.Buffer
+	buf.Grow(len(entryMagic) + len(outputID) + len(body))
+	buf.Write(entryMagic)
+	buf.Write(outputID)
+	buf.Write(body)
+	return buf.Bytes()
+}
+
+func decodeEntry(data []byte) (outputID, body []byte, err error) {
+	if len(data) < len(entryMagic)+outputIDSize || !bytes.Equal(data[:len(entryMagic)], entryMagic) {
+		return nil, nil, io.ErrUnexpectedEOF
+	}
+	rest := data[len(entryMagic):]
+	return rest[:outputIDSize], rest[outputIDSize:], nil
+}

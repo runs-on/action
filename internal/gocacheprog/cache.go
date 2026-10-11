@@ -36,22 +36,30 @@ const (
 	headerSize   = magicSize + timeSize + outputIDSize
 )
 
-// The go command caches a test result as two records (cmd/go/internal/test,
-// both formats unchanged since Go 1.10): what the test read (files,
-// environment variables), which starts with testLogMagic, and what it
-// printed, whose last line starts with testResultPrefix. Keeping both on
-// local disk only makes every job run its tests: a result is reused within a
-// job, as on a laptop, but a test that passed in another job is not skipped,
-// and what it printed does not leave the job. Compiled test code is still
-// shared.
+// The go command caches a test result as up to three records
+// (cmd/go/internal/test): what the test read (files, environment variables),
+// which starts with testLogMagic; what it printed, whose last line starts
+// with testResultPrefix (both formats unchanged since Go 1.10); and, with
+// -coverprofile, its coverage profile, whose first line is coverProfilePrefix
+// and a mode. Keeping them on local disk only makes every job run its tests:
+// a result is reused within a job, as on a laptop, but a test that passed in
+// another job is not skipped, and what it printed or covered does not leave
+// the job. Compiled test code is still shared.
 var (
-	testLogMagic     = []byte("# test log\n")
-	testResultPrefix = []byte("ok  \t")
+	testLogMagic       = []byte("# test log\n")
+	testResultPrefix   = []byte("ok  \t")
+	coverProfilePrefix = []byte("mode: ")
 )
 
 func isTestRecord(body []byte) bool {
 	if bytes.HasPrefix(body, testLogMagic) {
 		return true
+	}
+	if firstLine, _, ok := bytes.Cut(body, []byte("\n")); ok && bytes.HasPrefix(firstLine, coverProfilePrefix) {
+		switch string(firstLine[len(coverProfilePrefix):]) {
+		case "set", "count", "atomic":
+			return true
+		}
 	}
 	if len(body) == 0 || body[len(body)-1] != '\n' {
 		return false

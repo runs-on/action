@@ -30,12 +30,18 @@ func Run(in io.Reader, out io.Writer, shareTestResults bool) error {
 	if base == "" {
 		base = os.TempDir()
 	}
+	// Jobs that share test results list test records in their manifests,
+	// which the others would prefetch only to reject: each has its own.
+	manifests := namespace + "-manifest-"
+	if shareTestResults {
+		manifests += "tests-"
+	}
 	c, err := New(Options{
 		Dir:         filepath.Join(base, "runs-on-gocacheprog"),
 		ResultsURL:  resultsURL,
 		Token:       os.Getenv("ACTIONS_RUNTIME_TOKEN"),
 		Namespace:   namespace,
-		ManifestKey: namespace + "-manifest-" + commandID(),
+		ManifestKey: manifests + commandID(),
 
 		ShareTestResults: shareTestResults,
 	})

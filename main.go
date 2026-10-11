@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/runs-on/action/internal/cache"
+	"github.com/runs-on/action/internal/magiccache"
 	"github.com/runs-on/action/internal/config"
 	"github.com/runs-on/action/internal/costs"
 	"github.com/runs-on/action/internal/env"
@@ -104,7 +104,7 @@ func handleMainExecution(action *githubactions.Action, ctx context.Context) {
 		env.DisplayEnvVars()
 	}
 
-	cache.UpdateZctionsConfig(action, cfg.ActionsResultsURL, cfg.ZctionsResultsURL, cfg.ZctionsCacheURL, cfg.ActionsRuntimeToken)
+	magiccache.UpdateZctionsConfig(action, cfg.ActionsResultsURL, cfg.ZctionsResultsURL, cfg.ZctionsCacheURL, cfg.ActionsRuntimeToken)
 
 	claimed := claimCostTracking(action, cfg.ShowCosts)
 	if modeFile := costs.AgentModeFile(); modeFile != "" {

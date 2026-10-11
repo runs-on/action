@@ -47,13 +47,13 @@ func Run(in io.Reader, out io.Writer, shareTestResults bool) error {
 
 // commandID identifies the go command that started this helper, so the next
 // run of the same command in the same directory prefetches what this one
-// used: go build and go test use different entries. The parent's command line
-// is only readable on Linux; elsewhere the directory alone identifies it.
+// used: go build and go test use different entries. Where the parent's
+// command line cannot be read, the directory alone identifies it.
 func commandID() string {
 	h := sha256.New()
 	dir, _ := os.Getwd()
 	h.Write([]byte(dir))
-	if cmdline, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", os.Getppid())); err == nil {
+	if cmdline := parentCommandLine(); len(cmdline) > 0 {
 		h.Write([]byte{0})
 		h.Write(cmdline)
 	}

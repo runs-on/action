@@ -117,3 +117,8 @@ jobs:
             echo "::error::a repeat with a local cache reran its tests"
             exit 1
           fi
+      # The build job runs the unit tests on Linux only; reading the parent's
+      # command line is different code on Windows.
+      - name: Read the go command's command line
+        if: matrix.leg == 'windows'
+        run: go test ./internal/gocacheprog/ -run TestParentCommandLineIsTheGoCommand -count=1 -v

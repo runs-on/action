@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"io"
+	"runtime"
 	"strings"
 	"testing"
 	"testing/iotest"
@@ -40,5 +41,16 @@ func TestPutStreamStoresOnlyOutputsThatMatchTheirID(t *testing.T) {
 	}
 	if entry, ok := disk.get(good); !ok || entry.Size != int64(len(output)) {
 		t.Errorf("got %+v, %v after a broken download, want the stored output", entry, ok)
+	}
+}
+
+// The go command starts the helper, as it starts this test: its command line
+// tells go build from go test, which use different entries.
+func TestParentCommandLineIsTheGoCommand(t *testing.T) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "windows" {
+		t.Skip("the parent's command line is only read on Linux and Windows")
+	}
+	if line := string(parentCommandLine()); !strings.Contains(line, "test") {
+		t.Errorf("parent command line is %q, want the go test command", line)
 	}
 }

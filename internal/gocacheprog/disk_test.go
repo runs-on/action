@@ -3,8 +3,10 @@ package gocacheprog
 import (
 	"bytes"
 	"crypto/sha256"
+	"io"
 	"strings"
 	"testing"
+	"testing/iotest"
 	"time"
 )
 
@@ -29,5 +31,14 @@ func TestPutStreamStoresOnlyOutputsThatMatchTheirID(t *testing.T) {
 	}
 	if entry, ok := disk.get(good); !ok || entry.Size != int64(len(output)) {
 		t.Errorf("got %+v, %v, want the stored output", entry, ok)
+	}
+
+	// A download that breaks off does not replace what is stored.
+	broken := io.MultiReader(strings.NewReader(output[:4]), iotest.ErrReader(io.ErrUnexpectedEOF))
+	if err := disk.putStream(good, sum[:], broken, time.Now()); err == nil {
+		t.Error("stored an output whose download broke off")
+	}
+	if entry, ok := disk.get(good); !ok || entry.Size != int64(len(output)) {
+		t.Errorf("got %+v, %v after a broken download, want the stored output", entry, ok)
 	}
 }

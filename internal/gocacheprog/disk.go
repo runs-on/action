@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -104,17 +103,18 @@ func (d *diskStore) writeAtomically(path string, data io.Reader, sum []byte) (in
 	if err == nil && sum != nil && !bytes.Equal(hash.Sum(nil), sum) {
 		err = errCorruptEntry
 	}
-	if err == nil {
-		err = os.Rename(tmp, path)
-	}
 	if err != nil {
+		_ = os.Remove(tmp)
+		return 0, err
+	}
+	if err := os.Rename(tmp, path); err != nil {
 		_ = os.Remove(tmp)
 		// Windows refuses to replace a file that another go command's helper
 		// has open. What is there is then a complete earlier write: the same
 		// output, or an entry for the same action.
-		if _, statErr := os.Stat(path); statErr == nil && !errors.Is(err, errCorruptEntry) {
-			return size, nil
+		if _, statErr := os.Stat(path); statErr != nil {
+			return 0, err
 		}
 	}
-	return size, err
+	return size, nil
 }

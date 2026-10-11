@@ -25,7 +25,7 @@ type fakeCacheService struct {
 	order     []string // committed ids, oldest first
 	downloads int
 	creates   int // CreateCacheEntry calls for outputs, rejected ones too
-	testLogs  int // uploaded entries holding a test's input record
+	testData  int // uploaded entries holding what a test read or printed
 }
 
 // entries counts committed entries, build outputs and manifests apart.
@@ -42,10 +42,14 @@ func (f *fakeCacheService) entries() (outputs, manifests int) {
 	return outputs, manifests
 }
 
-func (f *fakeCacheService) testLogCount() int {
+// testOutputMarker is what the module's test prints. It reaches the test
+// through its environment, so no compiled package holds it.
+const testOutputMarker = "printed-by-the-test"
+
+func (f *fakeCacheService) testDataCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.testLogs
+	return f.testData
 }
 
 func (f *fakeCacheService) createCount() int {
@@ -132,11 +136,10 @@ func newFakeCacheService() (*httptest.Server, *fakeCacheService) {
 				return
 			}
 			f.pending[key], _ = io.ReadAll(r.Body)
-			// An entry is a 4-byte magic, a 32-byte output ID, then the output.
-			// The compiled testing/internal/testdeps package holds the same
-			// string further in.
-			if body := f.pending[key]; len(body) > 36 && bytes.HasPrefix(body[36:], []byte("# test log\n")) {
-				f.testLogs++
+			// An entry is a 44-byte header, then the output. The compiled
+			// testing/internal/testdeps package holds "# test log" further in.
+			if body := f.pending[key]; len(body) > 44 && (bytes.HasPrefix(body[44:], []byte("# test log\n")) || bytes.Contains(body, []byte(testOutputMarker))) {
+				f.testData++
 			}
 			w.WriteHeader(http.StatusCreated)
 		case http.MethodGet:
@@ -172,7 +175,7 @@ func TestGoCommandSharesBuildsButNotTestResults(t *testing.T) {
 		"go.mod":          "module example.com/m\n\ngo 1.24\n",
 		"main.go":         "package main\n\nimport (\n\t\"fmt\"\n\t\"example.com/m/lib\"\n)\n\nfunc main() { fmt.Println(lib.Answer()) }\n",
 		"lib/lib.go":      "package lib\n\nfunc Answer() int { return 42 }\n",
-		"lib/lib_test.go": "package lib\n\nimport \"testing\"\n\nfunc TestAnswer(t *testing.T) {\n\tif Answer() != 42 {\n\t\tt.Fatal(Answer())\n\t}\n}\n",
+		"lib/lib_test.go": "package lib\n\nimport (\n\t\"fmt\"\n\t\"os\"\n\t\"testing\"\n)\n\nfunc TestAnswer(t *testing.T) {\n\tfmt.Println(os.Getenv(\"TEST_OUTPUT\"))\n\tif Answer() != 42 {\n\t\tt.Fatal(Answer())\n\t}\n}\n",
 	}
 	// The go command does not cache its module index for files modified in
 	// the last few seconds, so fresh files would make the cold and warm
@@ -208,6 +211,7 @@ func TestGoCommandSharesBuildsButNotTestResults(t *testing.T) {
 			"HOME="+home,
 			"RUNNER_TEMP="+home,
 			"GOCACHEPROG="+prog,
+			"TEST_OUTPUT="+testOutputMarker,
 			"GOCACHE="+filepath.Join(home, "gocache"),
 			"GOFLAGS=",
 			"GOTOOLCHAIN=local",
@@ -249,26 +253,36 @@ func TestGoCommandSharesBuildsButNotTestResults(t *testing.T) {
 
 	// Test results stay in the job that produced them: another job runs its
 	// tests, while a repeat in the same job is cached as usual.
-	goCmd("test-job-1", srv.URL, "test", "./...")
-	if out := goCmd("test-job-2", srv.URL, "test", "./..."); strings.Contains(out, "(cached)") {
+	goCmd("test-job-1", srv.URL, "test", "-v", "./...")
+	if out := goCmd("test-job-2", srv.URL, "test", "-v", "./..."); strings.Contains(out, "(cached)") {
 		t.Errorf("a job reused another job's test result:\n%s", out)
 	}
-	if out := goCmd("test-job-2", srv.URL, "test", "./..."); !strings.Contains(out, "(cached)") {
+	if out := goCmd("test-job-2", srv.URL, "test", "-v", "./..."); !strings.Contains(out, "(cached)") {
 		t.Errorf("a repeat in the same job reran its tests:\n%s", out)
 	}
-	if n := service.testLogCount(); n != 0 {
-		t.Errorf("%d test input records reached the cache service, want 0", n)
+	if n := service.testDataCount(); n != 0 {
+		t.Errorf("%d records of what a test read or printed reached the cache service, want 0", n)
 	}
 
 	// Jobs that opt in share test results with each other, and only with
 	// each other.
 	shareTests = true
-	goCmd("shared-job-1", srv.URL, "test", "./...")
-	if out := goCmd("shared-job-2", srv.URL, "test", "./..."); !strings.Contains(out, "(cached)") {
+	goCmd("shared-job-1", srv.URL, "test", "-v", "./...")
+	if out := goCmd("shared-job-2", srv.URL, "test", "-v", "./..."); !strings.Contains(out, "(cached)") {
 		t.Errorf("a job that shares test results reran another's tests:\n%s", out)
 	}
+	// go clean -testcache expires the results stored before it, shared ones
+	// included.
+	if err := os.MkdirAll(filepath.Join(tmp, "shared-job-3", "gocache"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	goCmd("shared-job-3", srv.URL, "clean", "-testcache")
+	if out := goCmd("shared-job-3", srv.URL, "test", "-v", "./..."); strings.Contains(out, "(cached)") {
+		t.Errorf("a shared test result outlived go clean -testcache:\n%s", out)
+	}
+
 	shareTests = false
-	if out := goCmd("test-job-3", srv.URL, "test", "./..."); strings.Contains(out, "(cached)") {
+	if out := goCmd("test-job-3", srv.URL, "test", "-v", "./..."); strings.Contains(out, "(cached)") {
 		t.Errorf("a job that did not opt in reused a shared test result:\n%s", out)
 	}
 }

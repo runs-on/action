@@ -397,7 +397,7 @@ Requires Magic Cache (`extras=s3-cache`). Without it, the action warns and the g
 
 Compiled packages are shared between jobs; test results are not. Within a job, tests whose inputs did not change are still reported as `(cached)`, but a new job runs its tests again, because a test can depend on things Go does not track, such as a database or the network.
 
-To share test results too, set `gocacheprog: with-tests`. A job then reports `(cached)` for a test that passed in another job with the same inputs: the package, its dependencies, and the files and environment variables the test read through the standard library. Go does not see a database, the network or a file read by a child process, so keep the default for tests that depend on those, or run them with `go test -count=1`. Jobs that use `true` never read the results that `with-tests` jobs share.
+To share test results too, set `gocacheprog: with-tests`. A job then reports `(cached)` for a test that passed in another job with the same inputs: the package, its dependencies, and the files and environment variables the test read through the standard library. Go does not see a database, the network or a file read by a child process, so keep the default for tests that depend on those, or run them with `go test -count=1`. Jobs that use `true` never read the results that `with-tests` jobs share. What a passing test printed is stored with its result, so with `with-tests` it is readable by any job that can read the cache, including pull requests from forks: do not use it for tests that print secrets.
 
 ### `sticky_cache`
 

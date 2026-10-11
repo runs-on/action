@@ -1,9 +1,9 @@
 package gocacheprog
 
 import (
-	"bufio"
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -17,23 +17,48 @@ import (
 	"golang.org/x/sync/singleflight"
 )
 
-// Remote entries hold one action: a magic header, the 32-byte output ID, then
-// the output. Go action and output IDs are SHA-256 hashes of every input
+// Remote entries hold one action: a magic header, the time the entry was
+// first stored (8 bytes, Unix nanoseconds), the 32-byte output ID, then the
+// output. Go action and output IDs are SHA-256 hashes of every input
 // (sources, flags, toolchain, GOOS/GOARCH), so a key never needs a platform.
-var entryMagic = []byte("RGC1")
-
-const (
-	outputIDSize = 32
-	actionIDSize = 32
+// Test records have their own magic, so a job that does not share test
+// results rejects them from the header.
+var (
+	buildMagic = []byte("RGB1")
+	testMagic  = []byte("RGT1")
 )
 
-// testLogMagic starts the record of what a test read (files, environment
-// variables), which the go command looks up first to decide whether a cached
-// test result still applies (cmd/go/internal/test.testlogMagic, unchanged
-// since Go 1.10). Keeping that record on local disk only makes every job run
-// its tests: a result is reused within a job, as on a laptop, but a test that
-// passed in another job is not skipped. Compiled test code is still shared.
-var testLogMagic = []byte("# test log\n")
+const (
+	magicSize    = 4
+	timeSize     = 8
+	outputIDSize = 32
+	actionIDSize = 32
+	headerSize   = magicSize + timeSize + outputIDSize
+)
+
+// The go command caches a test result as two records (cmd/go/internal/test,
+// both formats unchanged since Go 1.10): what the test read (files,
+// environment variables), which starts with testLogMagic, and what it
+// printed, whose last line starts with testResultPrefix. Keeping both on
+// local disk only makes every job run its tests: a result is reused within a
+// job, as on a laptop, but a test that passed in another job is not skipped,
+// and what it printed does not leave the job. Compiled test code is still
+// shared.
+var (
+	testLogMagic     = []byte("# test log\n")
+	testResultPrefix = []byte("ok  \t")
+)
+
+func isTestRecord(body []byte) bool {
+	if bytes.HasPrefix(body, testLogMagic) {
+		return true
+	}
+	if len(body) == 0 || body[len(body)-1] != '\n' {
+		return false
+	}
+	lastLine := body[bytes.LastIndexByte(body[:len(body)-1], '\n')+1:]
+	return bytes.HasPrefix(lastLine, testResultPrefix)
+}
 
 var errCorruptEntry = errors.New("remote entry does not match its output ID")
 
@@ -48,9 +73,8 @@ type Options struct {
 	// ManifestKey names the list of entries this go command used, which the
 	// next run of the same command prefetches. Empty disables prefetching.
 	ManifestKey string
-	// ShareTestResults also shares the records the go command looks up test
-	// results through. Without it they stay on local disk, and the ones
-	// other jobs shared are ignored.
+	// ShareTestResults also shares test records. Without it they stay on
+	// local disk, and the ones other jobs shared are ignored.
 	ShareTestResults bool
 	// Concurrency bounds background uploads and prefetches.
 	Concurrency int
@@ -92,6 +116,8 @@ type Cache struct {
 type upload struct {
 	actionID []byte
 	outputID []byte
+	stored   time.Time
+	test     bool
 }
 
 // uploadQueueSize bounds the pending uploads. Uploads are best effort: when
@@ -195,15 +221,18 @@ func (c *Cache) fetch(actionID []byte) bool {
 		defer func() { _ = body.Close() }()
 		// The output goes from the response to local disk, so concurrent
 		// prefetches hold no output in memory.
-		output := bufio.NewReader(body)
-		header := make([]byte, len(entryMagic)+outputIDSize)
-		if _, err := io.ReadFull(output, header); err != nil || !bytes.HasPrefix(header, entryMagic) {
+		header := make([]byte, headerSize)
+		if _, err := io.ReadFull(body, header); err != nil {
 			return false, nil
 		}
-		if start, _ := output.Peek(len(testLogMagic)); !c.opts.ShareTestResults && bytes.Equal(start, testLogMagic) {
+		magic, rest := header[:magicSize], header[magicSize:]
+		if !bytes.Equal(magic, buildMagic) && !(c.opts.ShareTestResults && bytes.Equal(magic, testMagic)) {
 			return false, nil
 		}
-		err = c.disk.putStream(actionID, header[len(entryMagic):], output, time.Now())
+		// The entry keeps the time it was first stored: the go command
+		// expires test results older than its last go clean -testcache.
+		stored := time.Unix(0, int64(binary.BigEndian.Uint64(rest[:timeSize])))
+		err = c.disk.putStream(actionID, rest[timeSize:], body, stored)
 		if err != nil && !errors.Is(err, errCorruptEntry) {
 			c.remoteDown.Store(true)
 		}
@@ -254,18 +283,20 @@ func (c *Cache) Put(actionID, outputID, body []byte) (string, error) {
 	if len(outputID) != outputIDSize {
 		return "", fmt.Errorf("output ID is %d bytes, want %d", len(outputID), outputIDSize)
 	}
-	path, err := c.disk.put(actionID, outputID, body, time.Now())
+	stored := time.Now()
+	path, err := c.disk.put(actionID, outputID, body, stored)
 	if err != nil {
 		return "", err
 	}
-	if !c.opts.ShareTestResults && bytes.HasPrefix(body, testLogMagic) {
+	test := isTestRecord(body)
+	if test && !c.opts.ShareTestResults {
 		return path, nil
 	}
 	c.markUsed(actionID)
 	if c.remoteUp() && len(actionID) == actionIDSize {
 		c.uploadWG.Add(1)
 		select {
-		case c.uploads <- upload{actionID: actionID, outputID: outputID}:
+		case c.uploads <- upload{actionID: actionID, outputID: outputID, stored: stored, test: test}:
 		default:
 			c.uploadWG.Done()
 		}
@@ -299,7 +330,12 @@ func (c *Cache) uploadEntry(u upload) error {
 	if err != nil {
 		return nil
 	}
-	header := append(bytes.Clone(entryMagic), u.outputID...)
+	magic := buildMagic
+	if u.test {
+		magic = testMagic
+	}
+	header := binary.BigEndian.AppendUint64(bytes.Clone(magic), uint64(u.stored.UnixNano()))
+	header = append(header, u.outputID...)
 	body := io.MultiReader(bytes.NewReader(header), f)
 	return c.remote.upload(c.ctx, c.version(u.actionID), c.key(u.actionID), body, int64(len(header))+info.Size())
 }

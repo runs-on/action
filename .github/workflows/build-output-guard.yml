@@ -1,0 +1,18 @@
+name: Build output guard
+
+# CI only runs on pushes to some branch patterns. This catches committed build
+# output on any pull request before it merges, without running the suites.
+on:
+  pull_request:
+    branches-ignore:
+      - v*
+
+permissions:
+  contents: read
+
+jobs:
+  reject-build-output:
+    runs-on: ubuntu-slim
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/reject-build-output

@@ -11,7 +11,7 @@ import (
 
 // namespace versions the remote entry format: a change starts from an empty
 // cache.
-const namespace = "runs-on-gocacheprog-v2"
+const namespace = "runs-on-gocacheprog-v1"
 
 // Run serves the go command on in and out until it exits. The job's
 // ACTIONS_RUNTIME_TOKEN, which Configure exports, and the cache service URL

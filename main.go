@@ -9,11 +9,11 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/runs-on/action/internal/magiccache"
 	"github.com/runs-on/action/internal/config"
 	"github.com/runs-on/action/internal/costs"
 	"github.com/runs-on/action/internal/env"
 	"github.com/runs-on/action/internal/gitproxy"
+	"github.com/runs-on/action/internal/magiccache"
 	"github.com/runs-on/action/internal/monitoring"
 	"github.com/runs-on/action/internal/sccache"
 	"github.com/runs-on/action/internal/stickydisk"

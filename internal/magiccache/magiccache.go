@@ -1,4 +1,4 @@
-package cache
+package magiccache
 
 import (
 	"net/http"

@@ -1,13 +1,12 @@
 name: CI
 
+# Every branch of this repository, so a pull request gets the suites whatever
+# its branch is called. Pull requests from forks are not built here: the
+# suites run on RunsOn runners and publish a mirror.
 on:
   push:
-    branches:
-      - main
-      - v*
-      - feature/*
-      - fix/*
-      - auto/*
+    branches-ignore:
+      - dist/**
   workflow_dispatch:
 
 permissions:

@@ -1,0 +1,110 @@
+name: Test / gocacheprog
+
+on:
+  workflow_call:
+
+env:
+  GOTOOLCHAIN: local
+
+jobs:
+  gocacheprog:
+    name: gocacheprog (${{ matrix.leg }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - leg: linux
+            image: ubuntu24-full-x64
+          - leg: container
+            image: ubuntu24-full-x64
+            container: golang:1.26
+          - leg: windows
+            image: windows25-full-x64
+    runs-on: runs-on=${{ github.run_id }}/env=bootstrap/cpu=2/family=m7/image=${{ matrix.image }}/extras=s3-cache
+    container: ${{ matrix.container }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/use-dist
+      - uses: ./
+        with:
+          gocacheprog: true
+      - if: ${{ !matrix.container }}
+        uses: actions/setup-go@v6.4.0
+        with:
+          go-version: "1.26.x"
+          cache: false
+      # One package holds this run's ID, so the first build always has
+      # something to compile and upload.
+      - name: Create a module
+        env:
+          RUN: ${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.leg }}
+        run: |
+          mkdir -p "${RUNNER_TEMP}/gocacheprog/lib"
+          cd "${RUNNER_TEMP}/gocacheprog"
+          printf 'module example.com/gocacheprog\n\ngo 1.24\n' > go.mod
+          cat > main.go <<'EOT'
+          package main
+
+          import (
+          	"encoding/json"
+          	"fmt"
+          	"net/http"
+
+          	"example.com/gocacheprog/lib"
+          )
+
+          func main() {
+          	out, _ := json.Marshal(map[string]string{"run": lib.Run, "method": http.MethodGet})
+          	fmt.Println(string(out))
+          }
+          EOT
+          printf 'package lib\n\nconst Run = "%s"\n' "${RUN}" > lib/lib.go
+          printf 'package lib\n\nimport "testing"\n\nfunc TestRun(t *testing.T) {\n\tif Run == "" {\n\t\tt.Fatal("empty")\n\t}\n}\n' > lib/lib_test.go
+          # The go command does not cache its view of files written in the
+          # last two seconds.
+          sleep 3
+      - name: Build and test
+        run: |
+          cd "${RUNNER_TEMP}/gocacheprog"
+          echo "GOCACHEPROG=${GOCACHEPROG}"
+          go build -x -o app . 2> build.log
+          ./app
+          if ! grep -Eq 'compile(\.exe)?"? -o' build.log; then
+            echo "::error::the first build compiled nothing"
+            exit 1
+          fi
+          go test ./...
+      # What another job starts with: nothing on local disk.
+      - name: Empty the local cache
+        run: |
+          local_cache="${LOCALAPPDATA:-${XDG_CACHE_HOME:-${HOME}/.cache}}/runs-on-gocacheprog"
+          if [[ ! -d "${local_cache}/o" ]]; then
+            echo "::error::no local cache at ${local_cache}"
+            exit 1
+          fi
+          rm -rf "${local_cache}"
+      - name: Build without compiling
+        run: |
+          cd "${RUNNER_TEMP}/gocacheprog"
+          go build -x -o app . 2> build.log
+          ./app
+          if grep -E 'compile(\.exe)?"? -o' build.log; then
+            echo "::error::a build with every package in Magic Cache compiled some"
+            exit 1
+          fi
+      - name: Test results are not shared
+        run: |
+          cd "${RUNNER_TEMP}/gocacheprog"
+          go test ./... | tee first.log
+          go test ./... | tee second.log
+          if grep -q "(cached)" first.log; then
+            echo "::error::a test result came from Magic Cache"
+            exit 1
+          fi
+          if ! grep -q "(cached)" second.log; then
+            echo "::error::a repeat with a local cache reran its tests"
+            exit 1
+          fi

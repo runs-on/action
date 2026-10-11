@@ -57,6 +57,9 @@ jobs:
   default:
     needs: build
     uses: ./.github/workflows/test-default.yml
+  gocacheprog:
+    needs: build
+    uses: ./.github/workflows/test-gocacheprog.yml
   magic-cache:
     needs: build
     uses: ./.github/workflows/test-magic-cache.yml

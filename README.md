@@ -371,7 +371,7 @@ Previously every repository on a stack shared the flat `cache/sccache` prefix. M
 
 ### `gocacheprog`
 
-Shares the go command's build cache (Go 1.24 or later) between jobs through Magic Cache. Later steps get [`GOCACHEPROG`](https://pkg.go.dev/cmd/go#hdr-Build_and_test_caching) pointing at this action's own binary, which keeps the cache on local disk and in the stack's S3 cache bucket, with GitHub's branch scoping: a pull request reads its base branch's entries and writes only its own. When the job starts, the action downloads in the background the entries the same job used in its previous run, so the go command finds them on local disk instead of fetching them one at a time. Its post step saves the list of what the job used.
+Shares the go command's build cache (Go 1.24 or later) between jobs through Magic Cache. Later steps get [`GOCACHEPROG`](https://pkg.go.dev/cmd/go#hdr-Build_and_test_caching) pointing at this action's own binary, which keeps the cache on local disk and in the stack's S3 cache bucket, with GitHub's branch scoping: a pull request reads its base branch's entries and writes only its own. When the job starts, the action downloads in the background the entries the same job used in its previous run, so the go command finds them on local disk instead of fetching them one at a time. Its post step saves the list of what the job used. Put the action first in the job: the download then runs while the next steps check out the code and install Go. A job is its workflow file, its name and its matrix leg, so each leg of a matrix keeps its own list.
 
 ```yaml
 jobs:

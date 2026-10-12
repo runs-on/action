@@ -35,18 +35,21 @@ type fakeCacheService struct {
 	testData        int // uploaded entries holding what a test read or printed
 }
 
-// entries counts committed entries, build outputs and manifests apart.
-func (f *fakeCacheService) entries() (outputs, manifests int) {
+// isList tells a job's list from a build output by its cache version.
+func isList(id string) bool { return strings.Contains(id, "-lists/") }
+
+// entries counts committed entries, build outputs and job lists apart.
+func (f *fakeCacheService) entries() (outputs, lists int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for id := range f.committed {
-		if strings.Contains(id, "-manifest") {
-			manifests++
+		if isList(id) {
+			lists++
 		} else {
 			outputs++
 		}
 	}
-	return outputs, manifests
+	return outputs, lists
 }
 
 // testOutputMarker is what the module's test prints. It reaches the test
@@ -95,7 +98,7 @@ func newFakeCacheService() (*httptest.Server, *fakeCacheService) {
 	twirp("CreateCacheEntry", func(req map[string]any) (int, any) {
 		f.mu.Lock()
 		defer f.mu.Unlock()
-		if !strings.Contains(fmt.Sprint(req["key"]), "-manifest") {
+		if !isList(id(req)) {
 			f.creates++
 		}
 		if _, ok := f.committed[id(req)]; ok {
@@ -241,22 +244,54 @@ func TestGoCommandSharesBuildsButNotTestResults(t *testing.T) {
 	// The go command re-links once for a new output path, so keep it.
 	app := filepath.Join(tmp, "app")
 
-	goCmd("cold", srv.URL, "build", "-o", app, ".")
-	coldOutputs, coldManifests := service.entries()
-	if coldOutputs == 0 || coldManifests != 1 {
-		t.Fatalf("cold build uploaded %d outputs and %d manifests, want outputs and 1 manifest", coldOutputs, coldManifests)
+	// What the action does around a job's steps: when the job starts, it
+	// prefetches what the job used last time; when it ends, it saves what
+	// the job used.
+	const buildJob = "list-of-the-build-job"
+	options := func(job string) gocacheprog.Options {
+		t.Setenv("RUNNER_TEMP", filepath.Join(tmp, job))
+		t.Setenv("ACTIONS_RESULTS_URL", srv.URL)
+		t.Setenv("ACTIONS_RUNTIME_TOKEN", "test-token")
+		return gocacheprog.OptionsFromEnv(false)
+	}
+	startJob := func(job string) {
+		t.Helper()
+		if err := gocacheprog.Prefetch(options(job), buildJob); err != nil {
+			t.Fatal(err)
+		}
+	}
+	endJob := func(job string) int {
+		t.Helper()
+		saved, err := gocacheprog.SaveList(options(job), buildJob)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return saved
 	}
 
-	createsBefore := service.createCount()
+	startJob("cold")
+	goCmd("cold", srv.URL, "build", "-o", app, ".")
+	if saved := endJob("cold"); saved == 0 {
+		t.Fatal("a job that compiled its packages saved no list of what it used")
+	}
+	coldOutputs, lists := service.entries()
+	if coldOutputs == 0 || lists != 1 {
+		t.Fatalf("the cold job left %d outputs and %d lists, want outputs and 1 list", coldOutputs, lists)
+	}
+
+	// The job's next run, on another runner: the prefetch brings everything
+	// before the go command asks.
+	startJob("warm")
+	createsBefore, downloadsBefore := service.createCount(), service.downloadCount()
 	goCmd("warm", srv.URL, "build", "-o", app, ".")
 	if got := service.createCount() - createsBefore; got != 0 {
-		t.Errorf("a build with an empty cache directory tried to upload %d outputs, want 0: it compiled something", got)
+		t.Errorf("a build after its job's prefetch tried to upload %d outputs, want 0: it compiled something", got)
 	}
-	if _, manifests := service.entries(); manifests != coldManifests {
-		t.Errorf("a build that used what it prefetched saved %d more manifests, want 0", manifests-coldManifests)
+	if got := service.downloadCount() - downloadsBefore; got != 0 {
+		t.Errorf("the go command downloaded %d entries its job's prefetch did not bring, want 0", got)
 	}
-	if service.downloadCount() < coldOutputs {
-		t.Errorf("warm build downloaded %d entries, want at least the %d the cold build stored", service.downloadCount(), coldOutputs)
+	if saved := endJob("warm"); saved != 0 {
+		t.Errorf("a job that used what it prefetched saved a list of %d entries, want none", saved)
 	}
 	if out, err := exec.Command(app).Output(); err != nil || string(out) != "42\n" {
 		t.Errorf("binary linked from remote outputs printed %q, %v", out, err)
@@ -374,15 +409,15 @@ func TestRejectedTokenIsNotAskedAgain(t *testing.T) {
 	}
 }
 
-// TestManifestListsOnlySharedEntries: a test record kept on local disk is not
-// in the remote cache, so the next run has nothing to prefetch for it, even
-// after a later go command of the same job read it back.
-func TestManifestListsOnlySharedEntries(t *testing.T) {
+// TestJobListHoldsOnlySharedEntries: a test record kept on local disk is not
+// in the remote cache, so the job's next run has nothing to prefetch for it,
+// even after a later go command of the same job read it back.
+func TestJobListHoldsOnlySharedEntries(t *testing.T) {
 	srv, service := newFakeCacheService()
 	defer srv.Close()
-	dir := t.TempDir()
+	job := gocacheprog.Options{Dir: t.TempDir(), ResultsURL: srv.URL, Token: "test-token", Namespace: "test"}
 	open := func() *gocacheprog.Cache {
-		c, err := gocacheprog.New(gocacheprog.Options{Dir: dir, ResultsURL: srv.URL, Token: "test-token", Namespace: "test", ManifestKey: "test-manifest-command"})
+		c, err := gocacheprog.New(job)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -411,18 +446,18 @@ func TestManifestListsOnlySharedEntries(t *testing.T) {
 	put(second, 3, "another package")
 	_ = second.Close()
 
+	if saved, err := gocacheprog.SaveList(job, "test-list"); saved != 2 || err != nil {
+		t.Fatalf("saved a list of %d entries, %v, want the 2 shared ones", saved, err)
+	}
 	service.mu.Lock()
 	defer service.mu.Unlock()
-	var manifest []byte
+	var list []byte
 	for _, entry := range service.order {
-		if strings.Contains(entry, "-manifest") {
-			manifest = service.committed[entry]
+		if isList(entry) {
+			list = service.committed[entry]
 		}
 	}
-	if !bytes.Contains(manifest, id(2)) || !bytes.Contains(manifest, id(3)) {
-		t.Fatalf("the newest manifest lacks the shared entries: %x", manifest)
-	}
-	if bytes.Contains(manifest, id(1)) {
-		t.Errorf("the newest manifest lists a test record that was never uploaded")
+	if !bytes.Equal(list, append(id(2), id(3)...)) {
+		t.Errorf("the job's list is %x, want the two shared entries in the order the job first used them", list)
 	}
 }

@@ -15,6 +15,23 @@ inputs:
 runs:
   using: composite
   steps:
+    # runs-on/action started the download of what this job used in its
+    # previous run, in the background. Once over, it leaves the list it
+    # downloaded, which is empty for a job that never ran.
+    - name: The job's prefetch ran
+      shell: bash
+      run: |
+        local_cache="${RUNNER_TEMP}/runs-on-gocacheprog"
+        for _ in $(seq 1 120); do
+          [[ -f "${local_cache}/prefetched" ]] && break
+          sleep 1
+        done
+        if [[ ! -f "${local_cache}/prefetched" ]]; then
+          echo "::error::the prefetch left no list in ${local_cache}"
+          cat "${local_cache}/prefetch.log" || true
+          exit 1
+        fi
+        echo "Entries prefetched from this job's previous run: $(( $(wc -c < "${local_cache}/prefetched") / 32 ))"
     # One package holds the module's identity, so the first build of a run
     # always has something to compile and upload.
     - name: Create a module

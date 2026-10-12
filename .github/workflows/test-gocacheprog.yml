@@ -42,12 +42,6 @@ jobs:
         with:
           module: ${{ github.run_id }}-${{ matrix.leg }}
           mode: ${{ matrix.mode || 'true' }}
-      # The build job runs the unit tests on Linux only; reading the parent's
-      # command line is different code on Windows.
-      - name: Read the go command's command line
-        if: matrix.leg == 'windows'
-        shell: bash
-        run: go test ./internal/gocacheprog/ -run TestParentCommandLineIsTheGoCommand -count=1 -v
 
   # Magic Cache answers a runner's own uploads straight from S3. Only another
   # job goes through its lookup index and reads entries it did not write.

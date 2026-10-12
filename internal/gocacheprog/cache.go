@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strconv"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -78,16 +78,13 @@ type Options struct {
 	// Namespace prefixes remote keys and versions, so a format change starts
 	// from an empty cache.
 	Namespace string
-	// ManifestKey names the list of entries this go command used, which the
-	// next run of the same command prefetches. Empty disables prefetching.
-	ManifestKey string
 	// ShareTestResults also shares test records. Without it they stay on
 	// local disk, and the ones other jobs shared are ignored.
 	ShareTestResults bool
 	// Concurrency bounds background uploads and prefetches.
 	Concurrency int
 	// CloseTimeout bounds what the go command waits for when it exits: the
-	// pending uploads and the manifest.
+	// pending uploads.
 	CloseTimeout time.Duration
 }
 
@@ -104,16 +101,14 @@ type Cache struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	// fetches makes a prefetch and the go command's own lookup of the same
-	// entry share one download.
+	// fetches makes concurrent lookups of the same entry share one download.
 	fetches singleflight.Group
 
-	usedMu sync.Mutex
-	// prefetched holds the entries of the manifest this go command started
-	// from.
-	prefetched map[[actionIDSize]byte]struct{}
-	used       map[[actionIDSize]byte]struct{}
-	order      [][]byte
+	// used holds the entries this process already recorded in the journal of
+	// what the job used.
+	usedMu  sync.Mutex
+	used    map[[actionIDSize]byte]struct{}
+	journal *os.File
 
 	uploads  chan upload
 	uploadWG sync.WaitGroup
@@ -153,9 +148,9 @@ func New(opts Options) (*Cache, error) {
 		for range opts.Concurrency {
 			go c.uploadLoop()
 		}
-		if opts.ManifestKey != "" {
-			go c.prefetch()
-		}
+		// Every go command of the job appends to the same journal. Without
+		// it the build still works: the job's next run prefetches less.
+		c.journal, _ = os.OpenFile(filepath.Join(opts.Dir, usedFile), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	}
 	return c, nil
 }
@@ -173,16 +168,14 @@ func (c *Cache) version(actionID []byte) string {
 	return c.opts.Namespace + "-" + hex.EncodeToString(actionID[:1])[:1]
 }
 
-func (c *Cache) manifestVersion() string {
-	return c.opts.Namespace + "-manifest"
-}
-
 func (c *Cache) remoteUp() bool {
 	return c.remote != nil && !c.remoteDown.Load()
 }
 
+// markUsed records an entry in the journal of what the job used, which its
+// post step saves for the job's next run to prefetch.
 func (c *Cache) markUsed(actionID []byte) {
-	if len(actionID) != actionIDSize {
+	if len(actionID) != actionIDSize || c.journal == nil {
 		return
 	}
 	c.usedMu.Lock()
@@ -190,7 +183,7 @@ func (c *Cache) markUsed(actionID []byte) {
 	id := [actionIDSize]byte(actionID)
 	if _, ok := c.used[id]; !ok {
 		c.used[id] = struct{}{}
-		c.order = append(c.order, id[:])
+		_, _ = c.journal.Write(id[:])
 	}
 }
 
@@ -200,18 +193,18 @@ func (c *Cache) Get(actionID []byte) (Entry, bool, error) {
 	if !ok && len(actionID) == actionIDSize && c.fetch(actionID) {
 		entry, local, ok = c.disk.get(actionID)
 	}
-	// A record kept on local disk is not in the remote cache: the next run
-	// would have nothing to prefetch for it.
+	// A record kept on local disk is not in the remote cache: the job's next
+	// run would have nothing to prefetch for it.
 	if ok && !local {
 		c.markUsed(actionID)
 	}
 	return entry, ok, nil
 }
 
-// fetch downloads an entry to local disk, once even when a prefetch and the
-// go command ask for it at the same time. A cache that fails or holds a
-// corrupt entry must not fail the build: it reports a miss, and a failing
-// cache is not asked again by this go command.
+// fetch downloads an entry to local disk, once even when it is asked for
+// several times at once. A cache that fails or holds a corrupt entry must not
+// fail the build: it reports a miss, and a failing cache is not asked again
+// by this process.
 func (c *Cache) fetch(actionID []byte) bool {
 	found, _, _ := c.fetches.Do(string(actionID), func() (any, error) {
 		if _, _, ok := c.disk.get(actionID); ok {
@@ -230,7 +223,7 @@ func (c *Cache) fetch(actionID []byte) bool {
 		}
 		defer func() { _ = body.Close() }()
 		// The output goes from the response to local disk, so concurrent
-		// prefetches hold no output in memory.
+		// downloads hold no output in memory.
 		header := make([]byte, headerSize)
 		if _, err := io.ReadFull(body, header); err != nil {
 			return false, nil
@@ -249,42 +242,6 @@ func (c *Cache) fetch(actionID []byte) bool {
 		return err == nil, nil
 	})
 	return found.(bool)
-}
-
-// prefetch downloads the entries that the previous run of the same go command
-// used, before the go command asks for them one at a time.
-func (c *Cache) prefetch() {
-	body, ok, err := c.remote.open(c.ctx, c.manifestVersion(), c.opts.ManifestKey, c.opts.ManifestKey+"-")
-	if err != nil {
-		c.remoteDown.Store(true)
-		return
-	}
-	if !ok {
-		return
-	}
-	data, err := io.ReadAll(body)
-	_ = body.Close()
-	if err != nil || len(data)%actionIDSize != 0 {
-		return
-	}
-	prefetched := make(map[[actionIDSize]byte]struct{}, len(data)/actionIDSize)
-	for i := 0; i < len(data); i += actionIDSize {
-		prefetched[[actionIDSize]byte(data[i:i+actionIDSize])] = struct{}{}
-	}
-	c.usedMu.Lock()
-	c.prefetched = prefetched
-	c.usedMu.Unlock()
-	sem := make(chan struct{}, c.opts.Concurrency)
-	var wg sync.WaitGroup
-	for i := 0; i < len(data) && c.remoteUp(); i += actionIDSize {
-		actionID := data[i : i+actionIDSize]
-		sem <- struct{}{}
-		wg.Go(func() {
-			defer func() { <-sem }()
-			c.fetch(actionID)
-		})
-	}
-	wg.Wait()
 }
 
 // Put implements Handler. The upload runs in the background; Close waits for
@@ -348,15 +305,15 @@ func (c *Cache) uploadEntry(u upload) error {
 	return c.remote.upload(c.ctx, c.version(u.actionID), c.key(u.actionID), body, int64(len(header))+info.Size())
 }
 
-// Close implements Handler: within CloseTimeout, it waits for pending uploads,
-// then records the entries this go command used for the next run to
-// prefetch.
+// Close implements Handler: it waits for pending uploads, within CloseTimeout.
 func (c *Cache) Close() error {
 	defer c.cancel()
 	if c.remote == nil {
 		return nil
 	}
-	deadline := time.Now().Add(c.opts.CloseTimeout)
+	if c.journal != nil {
+		_ = c.journal.Close()
+	}
 	done := make(chan struct{})
 	go func() {
 		c.uploadWG.Wait()
@@ -364,37 +321,7 @@ func (c *Cache) Close() error {
 	}()
 	select {
 	case <-done:
-	case <-time.After(time.Until(deadline)):
-		return nil
-	}
-	if c.opts.ManifestKey != "" && c.remoteUp() {
-		ctx, cancel := context.WithDeadline(c.ctx, deadline)
-		defer cancel()
-		c.uploadManifest(ctx)
+	case <-time.After(c.opts.CloseTimeout):
 	}
 	return nil
-}
-
-// uploadManifest saves the entries this go command used, in the order it
-// first used them, as a new entry: cache entries are immutable, and a lookup
-// by prefix returns the newest. A go command that only used entries it
-// prefetched saves nothing, so a build that keeps running unchanged does not
-// add a manifest per run. The entries it no longer uses stay in the manifest
-// until the next run that uses a new one.
-func (c *Cache) uploadManifest(ctx context.Context) {
-	c.usedMu.Lock()
-	data := bytes.Join(c.order, nil)
-	unchanged := true
-	for id := range c.used {
-		if _, ok := c.prefetched[id]; !ok {
-			unchanged = false
-			break
-		}
-	}
-	c.usedMu.Unlock()
-	if len(data) == 0 || unchanged {
-		return
-	}
-	key := c.opts.ManifestKey + "-" + strconv.FormatInt(time.Now().UnixNano(), 36)
-	_ = c.remote.upload(ctx, c.manifestVersion(), key, bytes.NewReader(data), int64(len(data)))
 }

@@ -373,3 +373,56 @@ func TestRejectedTokenIsNotAskedAgain(t *testing.T) {
 		t.Errorf("the cache service rejected %d requests, want 1: the first", service.rejected)
 	}
 }
+
+// TestManifestListsOnlySharedEntries: a test record kept on local disk is not
+// in the remote cache, so the next run has nothing to prefetch for it, even
+// after a later go command of the same job read it back.
+func TestManifestListsOnlySharedEntries(t *testing.T) {
+	srv, service := newFakeCacheService()
+	defer srv.Close()
+	dir := t.TempDir()
+	open := func() *gocacheprog.Cache {
+		c, err := gocacheprog.New(gocacheprog.Options{Dir: dir, ResultsURL: srv.URL, Token: "test-token", Namespace: "test", ManifestKey: "test-manifest-command"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	id := func(action byte) []byte { return bytes.Repeat([]byte{action}, 32) }
+	put := func(c *gocacheprog.Cache, action byte, output string) {
+		t.Helper()
+		outputID := sha256.Sum256([]byte(output))
+		if _, err := c.Put(id(action), outputID[:], []byte(output)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	first := open()
+	put(first, 1, "# test log\ngetenv HOME\n")
+	put(first, 2, "compiled package")
+	_ = first.Close()
+
+	second := open()
+	for _, action := range []byte{1, 2} {
+		if _, ok, err := second.Get(id(action)); !ok || err != nil {
+			t.Fatalf("entry %d of the same job: %v, %v, want a hit", action, ok, err)
+		}
+	}
+	put(second, 3, "another package")
+	_ = second.Close()
+
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	var manifest []byte
+	for _, entry := range service.order {
+		if strings.Contains(entry, "-manifest") {
+			manifest = service.committed[entry]
+		}
+	}
+	if !bytes.Contains(manifest, id(2)) || !bytes.Contains(manifest, id(3)) {
+		t.Fatalf("the newest manifest lacks the shared entries: %x", manifest)
+	}
+	if bytes.Contains(manifest, id(1)) {
+		t.Errorf("the newest manifest lists a test record that was never uploaded")
+	}
+}

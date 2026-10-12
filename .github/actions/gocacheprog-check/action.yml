@@ -1,0 +1,105 @@
+name: Check gocacheprog
+description: Builds and tests a small Go module through the gocacheprog helper, and checks what came from Magic Cache.
+
+inputs:
+  module:
+    description: Identifies the module's content. The job that uploads it and the job that restores it pass the same value.
+    required: true
+  mode:
+    description: The gocacheprog input the job gave runs-on/action.
+    default: 'true'
+  uploads:
+    description: '"true" in the job that compiles and uploads the module, "false" in a later job that only restores it.'
+    default: 'true'
+
+runs:
+  using: composite
+  steps:
+    # One package holds the module's identity, so the first build of a run
+    # always has something to compile and upload.
+    - name: Create a module
+      shell: bash
+      env:
+        MODULE: ${{ inputs.module }}
+      run: |
+        mkdir -p "${RUNNER_TEMP}/gocacheprog/lib"
+        cd "${RUNNER_TEMP}/gocacheprog"
+        printf 'module example.com/gocacheprog\n\ngo 1.24\n' > go.mod
+        cat > main.go <<'EOT'
+        package main
+
+        import (
+        	"encoding/json"
+        	"fmt"
+        	"net/http"
+
+        	"example.com/gocacheprog/lib"
+        )
+
+        func main() {
+        	out, _ := json.Marshal(map[string]string{"run": lib.Run, "method": http.MethodGet})
+        	fmt.Println(string(out))
+        }
+        EOT
+        printf 'package lib\n\nconst Run = "%s"\n' "${MODULE}" > lib/lib.go
+        printf 'package lib\n\nimport "testing"\n\nfunc TestRun(t *testing.T) {\n\tif Run == "" {\n\t\tt.Fatal("empty")\n\t}\n}\n' > lib/lib_test.go
+        # The go command does not cache its view of files written in the
+        # last two seconds.
+        sleep 3
+    - name: Build and test
+      if: inputs.uploads == 'true'
+      shell: bash
+      env:
+        ATTEMPT: ${{ github.run_attempt }}
+      run: |
+        cd "${RUNNER_TEMP}/gocacheprog"
+        echo "GOCACHEPROG=${GOCACHEPROG}"
+        go build -x -o app . 2> build.log
+        ./app
+        # A re-run finds what the first attempt uploaded.
+        if [[ "${ATTEMPT}" == "1" ]] && ! grep -Eq 'compile(\.exe)?"? -o' build.log; then
+          echo "::error::the first build compiled nothing"
+          exit 1
+        fi
+        go test ./...
+    # What another job starts with: nothing on local disk.
+    - name: Empty the local cache
+      if: inputs.uploads == 'true'
+      shell: bash
+      run: |
+        local_cache="${RUNNER_TEMP}/runs-on-gocacheprog"
+        if [[ ! -d "${local_cache}/o" ]]; then
+          echo "::error::no local cache at ${local_cache}"
+          exit 1
+        fi
+        rm -rf "${local_cache}"
+    - name: Build without compiling
+      shell: bash
+      run: |
+        cd "${RUNNER_TEMP}/gocacheprog"
+        go build -x -o app . 2> build.log
+        ./app
+        if grep -E 'compile(\.exe)?"? -o' build.log; then
+          echo "::error::a build with every package in Magic Cache compiled some"
+          exit 1
+        fi
+    - name: Test results are shared only with with-tests
+      shell: bash
+      env:
+        MODE: ${{ inputs.mode }}
+      run: |
+        cd "${RUNNER_TEMP}/gocacheprog"
+        go test ./... | tee first.log
+        go test ./... | tee second.log
+        if [[ "${MODE}" == "with-tests" ]] && ! grep -q "(cached)" first.log; then
+          echo "::error::a test result shared through Magic Cache was not reused"
+          exit 1
+        fi
+        if [[ "${MODE}" != "with-tests" ]] && grep -q "(cached)" first.log; then
+          echo "::error::a test result came from Magic Cache"
+          exit 1
+        fi
+        if ! grep -q "(cached)" second.log; then
+          echo "::error::a repeat with a local cache reran its tests"
+          exit 1
+        fi

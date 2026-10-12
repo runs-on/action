@@ -196,11 +196,13 @@ func (c *Cache) markUsed(actionID []byte) {
 
 // Get implements Handler.
 func (c *Cache) Get(actionID []byte) (Entry, bool, error) {
-	entry, ok := c.disk.get(actionID)
+	entry, local, ok := c.disk.get(actionID)
 	if !ok && len(actionID) == actionIDSize && c.fetch(actionID) {
-		entry, ok = c.disk.get(actionID)
+		entry, local, ok = c.disk.get(actionID)
 	}
-	if ok {
+	// A record kept on local disk is not in the remote cache: the next run
+	// would have nothing to prefetch for it.
+	if ok && !local {
 		c.markUsed(actionID)
 	}
 	return entry, ok, nil
@@ -212,7 +214,7 @@ func (c *Cache) Get(actionID []byte) (Entry, bool, error) {
 // cache is not asked again by this go command.
 func (c *Cache) fetch(actionID []byte) bool {
 	found, _, _ := c.fetches.Do(string(actionID), func() (any, error) {
-		if _, ok := c.disk.get(actionID); ok {
+		if _, _, ok := c.disk.get(actionID); ok {
 			return true, nil
 		}
 		if !c.remoteUp() {
@@ -292,13 +294,11 @@ func (c *Cache) Put(actionID, outputID, body []byte) (string, error) {
 		return "", fmt.Errorf("output ID is %d bytes, want %d", len(outputID), outputIDSize)
 	}
 	stored := time.Now()
-	path, err := c.disk.put(actionID, outputID, body, stored)
-	if err != nil {
-		return "", err
-	}
 	test := isTestRecord(body)
-	if test && !c.opts.ShareTestResults {
-		return path, nil
+	local := test && !c.opts.ShareTestResults
+	path, err := c.disk.put(actionID, outputID, body, stored, local)
+	if err != nil || local {
+		return path, err
 	}
 	c.markUsed(actionID)
 	if c.remoteUp() && len(actionID) == actionIDSize {

@@ -16,7 +16,8 @@ import (
 // diskStore is the local layer. The go command reads every hit from the
 // returned DiskPath, so even remote hits land here first. Outputs live at
 // o/<outputID> and action entries at a/<actionID>, whose content is
-// "<outputID hex> <size> <unix nanos>".
+// "<outputID hex> <size> <unix nanos>", followed by " local" for a record that
+// is never uploaded.
 type diskStore struct {
 	dir string
 }
@@ -34,40 +35,40 @@ func (d *diskStore) outputPath(outputID []byte) string {
 	return filepath.Join(d.dir, "o", hex.EncodeToString(outputID))
 }
 
-func (d *diskStore) get(actionID []byte) (Entry, bool) {
+func (d *diskStore) get(actionID []byte) (entry Entry, local, ok bool) {
 	data, err := os.ReadFile(filepath.Join(d.dir, "a", hex.EncodeToString(actionID)))
 	if err != nil {
-		return Entry{}, false
+		return Entry{}, false, false
 	}
 	fields := strings.Fields(string(data))
-	if len(fields) != 3 {
-		return Entry{}, false
+	if len(fields) != 3 && len(fields) != 4 {
+		return Entry{}, false, false
 	}
 	outputID, err := hex.DecodeString(fields[0])
 	if err != nil {
-		return Entry{}, false
+		return Entry{}, false, false
 	}
 	size, err1 := strconv.ParseInt(fields[1], 10, 64)
 	nanos, err2 := strconv.ParseInt(fields[2], 10, 64)
 	if err1 != nil || err2 != nil {
-		return Entry{}, false
+		return Entry{}, false, false
 	}
 	path := d.outputPath(outputID)
 	info, err := os.Stat(path)
 	if err != nil || info.Size() != size {
-		return Entry{}, false
+		return Entry{}, false, false
 	}
-	return Entry{OutputID: outputID, Size: size, Time: time.Unix(0, nanos), DiskPath: path}, true
+	return Entry{OutputID: outputID, Size: size, Time: time.Unix(0, nanos), DiskPath: path}, len(fields) == 4, true
 }
 
-func (d *diskStore) put(actionID, outputID, body []byte, now time.Time) (string, error) {
+func (d *diskStore) put(actionID, outputID, body []byte, now time.Time, local bool) (string, error) {
 	path := d.outputPath(outputID)
 	if info, err := os.Stat(path); err != nil || info.Size() != int64(len(body)) {
 		if _, err := d.writeAtomically(path, bytes.NewReader(body), nil); err != nil {
 			return "", err
 		}
 	}
-	return path, d.putAction(actionID, outputID, int64(len(body)), now)
+	return path, d.putAction(actionID, outputID, int64(len(body)), now, local)
 }
 
 // putStream stores an output read from body without holding it in memory. The
@@ -78,11 +79,14 @@ func (d *diskStore) putStream(actionID, outputID []byte, body io.Reader, now tim
 	if err != nil {
 		return err
 	}
-	return d.putAction(actionID, outputID, size, now)
+	return d.putAction(actionID, outputID, size, now, false)
 }
 
-func (d *diskStore) putAction(actionID, outputID []byte, size int64, now time.Time) error {
+func (d *diskStore) putAction(actionID, outputID []byte, size int64, now time.Time, local bool) error {
 	entry := fmt.Sprintf("%x %d %d\n", outputID, size, now.UnixNano())
+	if local {
+		entry = fmt.Sprintf("%x %d %d local\n", outputID, size, now.UnixNano())
+	}
 	_, err := d.writeAtomically(filepath.Join(d.dir, "a", hex.EncodeToString(actionID)), strings.NewReader(entry), nil)
 	return err
 }

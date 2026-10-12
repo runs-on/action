@@ -34,8 +34,6 @@ type Request struct {
 	ActionID []byte `json:",omitempty"`
 	OutputID []byte `json:",omitempty"`
 	BodySize int64  `json:",omitempty"`
-	// ObjectID is OutputID's name before Go 1.24.
-	ObjectID []byte `json:",omitempty"`
 }
 
 // Response answers a Request. The first response, with ID 0, is sent unprompted
@@ -139,11 +137,7 @@ func handle(h Handler, req *Request, body []byte) *Response {
 			}
 		}
 	case CmdPut:
-		outputID := req.OutputID
-		if len(outputID) == 0 {
-			outputID = req.ObjectID
-		}
-		path, err := h.Put(req.ActionID, outputID, body)
+		path, err := h.Put(req.ActionID, req.OutputID, body)
 		if err != nil {
 			resp.Err = err.Error()
 		} else {

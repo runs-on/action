@@ -226,6 +226,8 @@ func (c *Cache) fetch(actionID []byte) bool {
 		// downloads hold no output in memory.
 		header := make([]byte, headerSize)
 		if _, err := io.ReadFull(body, header); err != nil {
+			// Every entry starts with a header: the transfer broke off.
+			c.remoteDown.Store(true)
 			return false, nil
 		}
 		magic, rest := header[:magicSize], header[magicSize:]

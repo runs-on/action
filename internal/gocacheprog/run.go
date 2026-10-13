@@ -41,13 +41,14 @@ func StoreToken(token string) error {
 // OptionsFromEnv describes the job's cache from what its steps see. The job's
 // runtime token and the cache service URL reach Magic Cache; without them,
 // the cache stays on local disk. Actions have the token in their environment;
-// the helper, started from a run step, reads the copy StoreToken kept. Steps
-// see the URL as ACTIONS_RESULTS_URL, or on custom runners, which give it to
-// actions only, as RUNS_ON_MAGIC_CACHE_URL.
+// the helper, started from a run step, reads the copy StoreToken kept. Custom
+// runners name the Magic Cache URL RUNS_ON_MAGIC_CACHE_URL, and it comes
+// first: the action, its prefetch and the helper must all use the same
+// service. The others point ACTIONS_RESULTS_URL at Magic Cache.
 func OptionsFromEnv(shareTestResults bool) Options {
-	resultsURL := os.Getenv("ACTIONS_RESULTS_URL")
+	resultsURL := os.Getenv("RUNS_ON_MAGIC_CACHE_URL")
 	if resultsURL == "" {
-		resultsURL = os.Getenv("RUNS_ON_MAGIC_CACHE_URL")
+		resultsURL = os.Getenv("ACTIONS_RESULTS_URL")
 	}
 	token := os.Getenv("ACTIONS_RUNTIME_TOKEN")
 	if token == "" {

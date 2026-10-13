@@ -67,6 +67,11 @@ func listVersion(opts Options) string {
 	return opts.Namespace + "-lists"
 }
 
+// listUploadTimeout bounds the upload of a job's list, which the action's
+// post step waits for: a cache that stops answering must not hold up the end
+// of the job for the HTTP client's five-minute limit.
+var listUploadTimeout = 30 * time.Second
+
 // Prefetch downloads the entries the job's previous run used, so its go
 // commands find them on local disk instead of asking for them one at a time.
 // The action starts it in the background when the job starts.
@@ -155,7 +160,9 @@ func SaveList(opts Options, listKey string) (int, error) {
 	}
 	key := listKey + "-" + strconv.FormatInt(time.Now().UnixNano(), 36)
 	client := newGHAClient(opts.ResultsURL, opts.Token)
-	if err := client.upload(context.Background(), listVersion(opts), key, bytes.NewReader(list), int64(len(list))); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), listUploadTimeout)
+	defer cancel()
+	if err := client.upload(ctx, listVersion(opts), key, bytes.NewReader(list), int64(len(list))); err != nil {
 		return 0, err
 	}
 	// A second runs-on/action step in the job has nothing more to save.

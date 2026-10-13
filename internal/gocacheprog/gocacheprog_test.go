@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sethvargo/go-githubactions"
 )
@@ -127,5 +130,55 @@ func TestListKeyIsTheJobAcrossRuns(t *testing.T) {
 	// workflow, where the legs of a matrix are one job.
 	if a, b := ListKey("not-a-jwt"), ListKey(runtimeToken("")); a != b || a == leg {
 		t.Errorf("list keys without a job claim: %q and %q, want the same one, apart from %q", a, b, leg)
+	}
+}
+
+func TestOptionsFromEnvUseTheMagicCacheURL(t *testing.T) {
+	for _, tc := range []struct {
+		name, magicCacheURL, resultsURL, want string
+	}{
+		{name: "a runner that points the results URL at Magic Cache", resultsURL: "http://10.0.0.1:6871/", want: "http://10.0.0.1:6871/"},
+		{name: "a custom runner's run step", magicCacheURL: "http://10.0.0.1:6871/", want: "http://10.0.0.1:6871/"},
+		{name: "a custom runner's action, if it sees another results URL", magicCacheURL: "http://10.0.0.1:6871/", resultsURL: "https://results.example.com/", want: "http://10.0.0.1:6871/"},
+		{name: "no cache service"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("RUNS_ON_MAGIC_CACHE_URL", tc.magicCacheURL)
+			t.Setenv("ACTIONS_RESULTS_URL", tc.resultsURL)
+			if got := OptionsFromEnv(false).ResultsURL; got != tc.want {
+				t.Errorf("cache service URL is %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// A cache that accepts the list and then stops answering must not hold up
+// the action's post step.
+func TestSaveListGivesUpOnACacheThatStopsAnswering(t *testing.T) {
+	var srv *httptest.Server
+	stopped := make(chan struct{})
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "signedUploadUrl": srv.URL + "/blob"})
+			return
+		}
+		<-stopped
+	}))
+	defer srv.Close()
+	defer close(stopped)
+	timeout := listUploadTimeout
+	listUploadTimeout = 200 * time.Millisecond
+	defer func() { listUploadTimeout = timeout }()
+
+	opts := Options{Dir: t.TempDir(), ResultsURL: srv.URL, Token: "test-token", Namespace: "test"}
+	if err := os.WriteFile(filepath.Join(opts.Dir, usedFile), bytes.Repeat([]byte{1}, actionIDSize), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	if saved, err := SaveList(opts, "test-list"); saved != 0 || err == nil {
+		t.Errorf("saved %d entries, %v, want an error", saved, err)
+	}
+	if elapsed := time.Since(start); elapsed > 10*time.Second {
+		t.Errorf("the post step waited %v for a cache that stopped answering", elapsed.Round(time.Second))
 	}
 }

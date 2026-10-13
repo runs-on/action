@@ -33,7 +33,10 @@ type fakeCacheService struct {
 	// refuseDownloads answers downloads as Magic Cache does when another job
 	// replaced the entry since the lookup.
 	refuseDownloads bool
-	testData        int // uploaded entries holding what a test read or printed
+	// cutDownloads answers downloads with a few bytes, as a transfer that
+	// breaks off.
+	cutDownloads bool
+	testData     int // uploaded entries holding what a test read or printed
 }
 
 // isList tells a job's list from a build output by its cache version.
@@ -167,6 +170,10 @@ func newFakeCacheService() (*httptest.Server, *fakeCacheService) {
 				return
 			}
 			f.downloads++
+			if f.cutDownloads {
+				_, _ = w.Write(data[:8])
+				return
+			}
 			_, _ = w.Write(data)
 		}
 	})
@@ -529,5 +536,45 @@ func TestJobReplacesAListItCouldNotUse(t *testing.T) {
 	// The list and the build output, and no longer the test record.
 	if saved, downloads := run(); saved != 0 || downloads != 2 {
 		t.Errorf("the next run saved %d entries and made %d downloads, want 0 and 2", saved, downloads)
+	}
+}
+
+// TestCutDownloadStopsRemoteLookups: a cache whose transfers break off would
+// fail every lookup of the build the same way, so the go command stops asking
+// after the first one.
+func TestCutDownloadStopsRemoteLookups(t *testing.T) {
+	srv, service := newFakeCacheService()
+	defer srv.Close()
+	open := func() *gocacheprog.Cache {
+		c, err := gocacheprog.New(gocacheprog.Options{Dir: t.TempDir(), ResultsURL: srv.URL, Token: "test-token", Namespace: "test"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	id := func(action byte) []byte { return bytes.Repeat([]byte{action}, 32) }
+
+	first := open()
+	for action, output := range map[byte]string{1: "one", 2: "two"} {
+		outputID := sha256.Sum256([]byte(output))
+		if _, err := first.Put(id(action), outputID[:], []byte(output)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_ = first.Close()
+
+	service.mu.Lock()
+	service.cutDownloads = true
+	service.mu.Unlock()
+	before := service.downloadCount()
+	second := open()
+	for _, action := range []byte{1, 2} {
+		if _, ok, err := second.Get(id(action)); ok || err != nil {
+			t.Fatalf("entry %d from a cache that cuts transfers: %v, %v, want a miss", action, ok, err)
+		}
+	}
+	_ = second.Close()
+	if got := service.downloadCount() - before; got != 1 {
+		t.Errorf("the go command started %d downloads, want 1: the one that broke off", got)
 	}
 }

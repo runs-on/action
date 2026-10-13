@@ -13,15 +13,18 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
-// A job keeps two files next to its local entries: the journal of the action
-// IDs its go commands used, and the list its prefetch downloaded, written
-// once the prefetch is over. Both are concatenated 32-byte action IDs.
+// A job keeps these files next to its local entries: the journal of the
+// action IDs its go commands used, and the list its prefetch downloaded,
+// written once the prefetch is over. Both are concatenated 32-byte action
+// IDs. An empty third file marks a list the prefetch could not bring whole.
 const (
 	usedFile       = "used"
 	prefetchedFile = "prefetched"
+	staleFile      = "stale"
 )
 
 // ListKey names the list of entries a job used, which the job's next run
@@ -88,15 +91,26 @@ func Prefetch(opts Options, listKey string) error {
 	list = list[:len(list)-len(list)%actionIDSize]
 	sem := make(chan struct{}, c.opts.Concurrency)
 	var wg sync.WaitGroup
-	for i := 0; i < len(list) && c.remoteUp(); i += actionIDSize {
+	var missed atomic.Bool
+	for i := 0; i < len(list); i += actionIDSize {
 		actionID := list[i : i+actionIDSize]
 		sem <- struct{}{}
 		wg.Go(func() {
 			defer func() { <-sem }()
-			c.fetch(actionID)
+			if !c.fetch(actionID) {
+				missed.Store(true)
+			}
 		})
 	}
 	wg.Wait()
+	// A list with entries that are gone, or that this job may not use (the
+	// test records of a run that shared them), costs every run a lookup per
+	// such entry: the post step replaces it.
+	if missed.Load() {
+		if err := os.WriteFile(filepath.Join(opts.Dir, staleFile), nil, 0o644); err != nil {
+			return err
+		}
+	}
 	// Written even when empty: the post step compares what the job used with
 	// it.
 	_, err = c.disk.writeAtomically(filepath.Join(opts.Dir, prefetchedFile), bytes.NewReader(list), nil)
@@ -109,6 +123,7 @@ func Prefetch(opts Options, listKey string) error {
 // returns the newest. A job that only used entries it prefetched saves
 // nothing, so a job that keeps running unchanged does not add a list per run;
 // the entries it no longer uses stay in its list until a run uses a new one.
+// A list the prefetch could not bring whole is replaced.
 func SaveList(opts Options, listKey string) (int, error) {
 	if opts.ResultsURL == "" || opts.Token == "" {
 		return 0, nil
@@ -131,7 +146,11 @@ func SaveList(opts Options, listKey string) (int, error) {
 		list = append(list, id[:]...)
 		changed = changed || !known[id]
 	}
-	if !changed {
+	stale := filepath.Join(opts.Dir, staleFile)
+	if _, err := os.Stat(stale); err == nil {
+		changed = true
+	}
+	if !changed || len(list) == 0 {
 		return 0, nil
 	}
 	key := listKey + "-" + strconv.FormatInt(time.Now().UnixNano(), 36)
@@ -141,5 +160,6 @@ func SaveList(opts Options, listKey string) (int, error) {
 	}
 	// A second runs-on/action step in the job has nothing more to save.
 	_ = os.WriteFile(filepath.Join(opts.Dir, prefetchedFile), list, 0o644)
+	_ = os.Remove(stale)
 	return len(list) / actionIDSize, nil
 }

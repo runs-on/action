@@ -461,3 +461,63 @@ func TestJobListHoldsOnlySharedEntries(t *testing.T) {
 		t.Errorf("the job's list is %x, want the two shared entries in the order the job first used them", list)
 	}
 }
+
+// TestJobReplacesAListItCouldNotUse: a job that does not share test results
+// may start from the list of a run that did. It rejects the test records in
+// it, and saves a list without them, so its next run asks for none of them.
+func TestJobReplacesAListItCouldNotUse(t *testing.T) {
+	srv, service := newFakeCacheService()
+	defer srv.Close()
+	const listKey = "test-list"
+	job := func(shareTestResults bool) gocacheprog.Options {
+		return gocacheprog.Options{Dir: t.TempDir(), ResultsURL: srv.URL, Token: "test-token", Namespace: "test", ShareTestResults: shareTestResults}
+	}
+	id := func(action byte) []byte { return bytes.Repeat([]byte{action}, 32) }
+
+	sharing := job(true)
+	c, err := gocacheprog.New(sharing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for action, output := range map[byte]string{1: "# test log\ngetenv HOME\n", 2: "compiled package"} {
+		outputID := sha256.Sum256([]byte(output))
+		if _, err := c.Put(id(action), outputID[:], []byte(output)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_ = c.Close()
+	if saved, err := gocacheprog.SaveList(sharing, listKey); saved != 2 || err != nil {
+		t.Fatalf("the sharing job saved a list of %d entries, %v, want 2", saved, err)
+	}
+
+	// Two runs of the job without sharing: each prefetches, uses the build
+	// output, and saves its list.
+	run := func() (saved, downloads int) {
+		t.Helper()
+		opts := job(false)
+		before := service.downloadCount()
+		if err := gocacheprog.Prefetch(opts, listKey); err != nil {
+			t.Fatal(err)
+		}
+		c, err := gocacheprog.New(opts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, ok, err := c.Get(id(2)); !ok || err != nil {
+			t.Fatalf("the build output after the prefetch: %v, %v, want a hit", ok, err)
+		}
+		_ = c.Close()
+		saved, err = gocacheprog.SaveList(opts, listKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return saved, service.downloadCount() - before
+	}
+	if saved, _ := run(); saved != 1 {
+		t.Errorf("a job that could not use its whole list saved %d entries, want the 1 it used", saved)
+	}
+	// The list and the build output, and no longer the test record.
+	if saved, downloads := run(); saved != 0 || downloads != 2 {
+		t.Errorf("the next run saved %d entries and made %d downloads, want 0 and 2", saved, downloads)
+	}
+}

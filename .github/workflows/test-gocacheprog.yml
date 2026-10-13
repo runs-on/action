@@ -1,0 +1,73 @@
+name: Test / gocacheprog
+
+on:
+  workflow_call:
+
+env:
+  GOTOOLCHAIN: local
+
+jobs:
+  # Each leg compiles and uploads a module, empties its local cache, and
+  # restores the module from Magic Cache.
+  gocacheprog:
+    name: gocacheprog (${{ matrix.leg }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - leg: linux
+            image: ubuntu24-full-x64
+          - leg: container
+            image: ubuntu24-full-x64
+            container: golang:1.26
+          - leg: windows
+            image: windows25-full-x64
+          - leg: with-tests
+            image: ubuntu24-full-x64
+            mode: with-tests
+    runs-on: runs-on=${{ github.run_id }}/env=bootstrap/cpu=2/family=m7/image=${{ matrix.image }}/extras=s3-cache
+    container: ${{ matrix.container }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/use-dist
+      - uses: ./
+        with:
+          gocacheprog: ${{ matrix.mode || 'true' }}
+      - if: ${{ !matrix.container }}
+        uses: actions/setup-go@v6.4.0
+        with:
+          go-version: "1.26.x"
+          cache: false
+      - uses: ./.github/actions/gocacheprog-check
+        with:
+          module: ${{ github.run_id }}-${{ matrix.leg }}
+          mode: ${{ matrix.mode || 'true' }}
+
+  # Magic Cache answers a runner's own uploads straight from S3. Only another
+  # job goes through its lookup index and reads entries it did not write.
+  another-job:
+    name: another job (${{ matrix.leg }})
+    needs: gocacheprog
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - leg: linux
+          - leg: with-tests
+            mode: with-tests
+    runs-on: runs-on=${{ github.run_id }}/env=bootstrap/cpu=2/family=m7/image=ubuntu24-full-x64/extras=s3-cache
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/use-dist
+      - uses: ./
+        with:
+          gocacheprog: ${{ matrix.mode || 'true' }}
+      - uses: actions/setup-go@v6.4.0
+        with:
+          go-version: "1.26.x"
+          cache: false
+      - uses: ./.github/actions/gocacheprog-check
+        with:
+          module: ${{ github.run_id }}-${{ matrix.leg }}
+          mode: ${{ matrix.mode || 'true' }}
+          uploads: 'false'

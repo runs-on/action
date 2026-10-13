@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -222,9 +223,19 @@ func TestGoCommandSharesBuildsButNotTestResults(t *testing.T) {
 		if shareTests {
 			prog += " --share-test-results"
 		}
+		// As in a job: the action kept the token in a file for the helper,
+		// and run steps do not have it in their environment.
+		if err := os.MkdirAll(home, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("RUNNER_TEMP", home)
+		if err := gocacheprog.StoreToken("test-token"); err != nil {
+			t.Fatal(err)
+		}
+		stepEnv := slices.DeleteFunc(os.Environ(), func(kv string) bool { return strings.HasPrefix(kv, "ACTIONS_RUNTIME_TOKEN=") })
 		cmd := exec.Command(goBin, args...)
 		cmd.Dir = module
-		cmd.Env = append(os.Environ(),
+		cmd.Env = append(stepEnv,
 			"HOME="+home,
 			"RUNNER_TEMP="+home,
 			"GOCACHEPROG="+prog,
@@ -233,7 +244,6 @@ func TestGoCommandSharesBuildsButNotTestResults(t *testing.T) {
 			"GOFLAGS=",
 			"GOTOOLCHAIN=local",
 			"ACTIONS_RESULTS_URL="+resultsURL,
-			"ACTIONS_RUNTIME_TOKEN=test-token",
 		)
 		out, err := cmd.CombinedOutput()
 		if err != nil {

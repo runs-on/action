@@ -27,9 +27,10 @@ const (
 // Configure exports GOCACHEPROG for the job's next steps: this binary, run
 // with Flag, serves the go command's build cache (Go 1.24+) through Magic
 // Cache. The helper needs the job's runtime token, which only actions
-// receive. Without Magic Cache or a token, the go command keeps its local
-// build cache. It also starts, in the background, the download of the entries
-// the job's previous run used.
+// receive: Configure keeps it in a file for the helper instead of exporting
+// it. Without Magic Cache or a token, the go command keeps its local build
+// cache. It also starts, in the background, the download of the entries the
+// job's previous run used.
 func Configure(action *githubactions.Action, mode string, magicCache bool, runtimeToken string) {
 	if mode != modeBuilds && mode != modeWithTests {
 		action.Warningf("gocacheprog is %q, want %q or %q; the go command keeps its local build cache.", mode, modeBuilds, modeWithTests)
@@ -57,8 +58,11 @@ func Configure(action *githubactions.Action, mode string, magicCache bool, runti
 	if mode == modeWithTests {
 		command += " " + ShareTestResultsFlag
 	}
+	if err := StoreToken(runtimeToken); err != nil {
+		action.Warningf("gocacheprog could not keep the job's token for its helper (%v); the go command keeps its local build cache.", err)
+		return
+	}
 	action.SetEnv("GOCACHEPROG", command)
-	action.SetEnv("ACTIONS_RUNTIME_TOKEN", runtimeToken)
 	action.Infof("Set GOCACHEPROG=%s: the go command's build cache uses Magic Cache in the next steps.", command)
 	if err := startPrefetch(self, mode == modeWithTests); err != nil {
 		action.Warningf("gocacheprog could not start prefetching what this job used last time (%v); the go command fetches entries as it asks for them.", err)

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -30,7 +31,7 @@ func TestConfigureExportsGOCACHEPROGOnlyWithMagicCacheAndAToken(t *testing.T) {
 		// wantPrefetch is whether each prefetch started shares test results.
 		wantPrefetch []bool
 	}{
-		{name: "builds only", mode: "true", magicCache: true, token: "job-token", want: []string{"GOCACHEPROG", self, Flag, "ACTIONS_RUNTIME_TOKEN", "job-token"}, wantPrefetch: []bool{false}},
+		{name: "builds only", mode: "true", magicCache: true, token: "job-token", want: []string{"GOCACHEPROG", self, Flag}, wantPrefetch: []bool{false}},
 		{name: "with test results", mode: "with-tests", magicCache: true, token: "job-token", want: []string{"GOCACHEPROG", self, Flag}, wantShared: true, wantPrefetch: []bool{true}},
 		{name: "unknown mode", mode: "tests", magicCache: true, token: "job-token"},
 		{name: "no Magic Cache", mode: "true", token: "job-token"},
@@ -39,6 +40,8 @@ func TestConfigureExportsGOCACHEPROGOnlyWithMagicCacheAndAToken(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			envFile := filepath.Join(t.TempDir(), "env")
 			t.Setenv("GITHUB_ENV", envFile)
+			t.Setenv("RUNNER_TEMP", t.TempDir())
+			t.Setenv("ACTIONS_RUNTIME_TOKEN", "")
 			var log bytes.Buffer
 			var prefetches []bool
 			startPrefetch = func(_ string, shareTestResults bool) error {
@@ -64,8 +67,20 @@ func TestConfigureExportsGOCACHEPROGOnlyWithMagicCacheAndAToken(t *testing.T) {
 			if len(tc.want) == 0 && len(exported) > 0 {
 				t.Errorf("exported %q, want nothing", exported)
 			}
-			if strings.Contains(log.String(), "job-token") {
-				t.Errorf("the runtime token reached the log")
+			if strings.Contains(log.String(), "job-token") || strings.Contains(string(exported), "job-token") {
+				t.Errorf("the runtime token reached the log or the next steps' environment")
+			}
+			// The helper, started from a run step, reads the token Configure
+			// kept for it, in a file only the runner's user reads.
+			wantStored := ""
+			if len(tc.want) > 0 {
+				wantStored = tc.token
+			}
+			if got := OptionsFromEnv(false).Token; got != wantStored {
+				t.Errorf("the helper's token is %q, want %q: the job's only when GOCACHEPROG is exported", got, wantStored)
+			}
+			if info, err := os.Stat(filepath.Join(os.Getenv("RUNNER_TEMP"), tokenFile)); err == nil && runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
+				t.Errorf("the token file has mode %v, want 0600", info.Mode().Perm())
 			}
 		})
 	}

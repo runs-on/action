@@ -15,6 +15,15 @@ inputs:
 runs:
   using: composite
   steps:
+    # GitHub gives the job's runtime token to actions only. runs-on/action
+    # keeps it in a file for its helper and must not export it.
+    - name: The runtime token is not in the steps' environment
+      shell: bash
+      run: |
+        if [[ -n "${ACTIONS_RUNTIME_TOKEN:-}" ]]; then
+          echo "::error::the job's runtime token is in the environment of its run steps"
+          exit 1
+        fi
     # runs-on/action started the download of what this job used in its
     # previous run, in the background. Once over, it leaves the list it
     # downloaded, which is empty for a job that never ran.

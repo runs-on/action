@@ -15,6 +15,10 @@ func TestHasSccacheOnRunsOn(t *testing.T) {
 		t.Fatal("sccache was disabled on a RunsOn runner")
 	}
 
+	if (&Config{Sccache: "false"}).HasSccache() {
+		t.Fatal("sccache: false enabled sccache")
+	}
+
 	t.Setenv("RUNS_ON_RUNNER_NAME", "")
 	if cfg.HasSccache() {
 		t.Fatal("sccache was enabled outside RunsOn")

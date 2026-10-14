@@ -27,7 +27,7 @@ inputs:
     required: false
     default: 'nvme0n1p1'
   sccache:
-    description: 'Enable sccache. Can take either "s3" (RunsOn S3 cache bucket) or be empty (disabled). You still need to setup sccache in your workflow, for instance with mozilla-actions/sccache-action.'
+    description: 'Set to "true" to cache compilations with sccache through Magic Cache: the action starts the sccache server with Magic Cache as its storage, and later steps get RUSTC_WRAPPER=sccache. Install sccache before this action. Requires Magic Cache (extras=s3-cache), and RunsOn v3.5.0 or later for sccache to write to it. Set to "s3" to have sccache write straight to the RunsOn S3 cache bucket instead; run this action before anything starts the sccache server then. Empty or "false" disables it.'
     required: false
     default: ''
   gocacheprog:

@@ -1,0 +1,139 @@
+name: Check sccache
+description: Builds a small crate through the sccache server runs-on/action started, and checks what went to and came from Magic Cache.
+
+inputs:
+  uploads:
+    description: '"true" in the job that compiles and uploads, "false" in a later job that only restores.'
+    default: 'true'
+
+runs:
+  using: composite
+  steps:
+    # GitHub gives the job's runtime token to actions only. runs-on/action
+    # hands it to the sccache server it starts and must not export it.
+    - name: The runtime token is not in the steps' environment
+      shell: bash
+      run: |
+        if [[ -n "${ACTIONS_RUNTIME_TOKEN:-}" ]]; then
+          echo "::error::the job's runtime token is in the environment of its run steps"
+          exit 1
+        fi
+        if [[ "${RUSTC_WRAPPER:-}" != sccache ]]; then
+          echo "::error::RUSTC_WRAPPER is '${RUSTC_WRAPPER:-}', want sccache"
+          exit 1
+        fi
+    # The server holds the token, and not the action's inputs, which include
+    # a GitHub token.
+    - name: The sccache server holds the token, not the action's inputs
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        servers=0
+        for proc in /proc/[0-9]*; do
+          [[ "$(cat "${proc}/comm" 2>/dev/null)" == sccache ]] || continue
+          servers=$((servers + 1))
+          env=$(tr '\0' '\n' < "${proc}/environ")
+          if ! grep -q '^ACTIONS_RUNTIME_TOKEN=.' <<<"${env}"; then
+            echo "::error::the sccache server has no runtime token"
+            exit 1
+          fi
+          if grep -q '^INPUT_' <<<"${env}"; then
+            echo "::error::the sccache server has the action's inputs"
+            exit 1
+          fi
+        done
+        if [[ "${servers}" != 1 ]]; then
+          echo "::error::${servers} sccache processes are running, want the server alone"
+          exit 1
+        fi
+    - name: Create a crate
+      shell: bash
+      run: |
+        mkdir -p "${RUNNER_TEMP}/sccache-check/src"
+        cd "${RUNNER_TEMP}/sccache-check"
+        cat > Cargo.toml <<'EOT'
+        [package]
+        name = "sccache-check"
+        version = "0.1.0"
+        edition = "2021"
+
+        [dependencies]
+        serde = { version = "1", features = ["derive"] }
+        serde_json = "1"
+        EOT
+        cat > src/main.rs <<'EOT'
+        #[derive(serde::Serialize)]
+        struct Check {
+            cache: &'static str,
+        }
+
+        fn main() {
+            println!("{}", serde_json::to_string(&Check { cache: "magic" }).unwrap());
+        }
+        EOT
+        printf '#include <stdio.h>\n\nint main(void) {\n  puts("magic");\n  return 0;\n}\n' > check.c
+    # Each job has its own sccache namespace (SCCACHE_GHA_VERSION), so the
+    # first build of a run compiles and uploads every crate.
+    - name: Build and upload
+      if: inputs.uploads == 'true'
+      shell: bash
+      env:
+        ATTEMPT: ${{ github.run_attempt }}
+      run: |
+        cd "${RUNNER_TEMP}/sccache-check"
+        cargo build
+        sccache --show-stats | tee stats.txt
+        # Only the JSON stats count the writes.
+        json=$(sccache --show-stats --stats-format=json)
+        count() { grep -oE "\"$1\":[0-9]+" <<<"${json}" | cut -d: -f2; }
+        if ! grep -q '^Cache location *ghac' stats.txt; then
+          echo "::error::sccache does not store its cache through the GitHub Actions cache backend"
+          exit 1
+        fi
+        if [[ "$(count cache_write_errors)" != 0 ]]; then
+          echo "::error::sccache failed to write to Magic Cache"
+          exit 1
+        fi
+        # A re-run finds what the first attempt uploaded.
+        if [[ "${ATTEMPT}" == 1 && "$(count cache_writes)" == 0 ]]; then
+          echo "::error::sccache wrote nothing to Magic Cache"
+          exit 1
+        fi
+        cargo clean
+    - name: Build from Magic Cache
+      shell: bash
+      run: |
+        cd "${RUNNER_TEMP}/sccache-check"
+        sccache --zero-stats >/dev/null
+        cargo build
+        ./target/debug/sccache-check
+        stats=$(sccache --show-stats)
+        echo "${stats}"
+        hits=$(sed -nE 's/^Cache hits +([0-9]+)$/\1/p' <<<"${stats}")
+        if [[ "${hits:-0}" == 0 ]]; then
+          echo "::error::no crate came from Magic Cache"
+          exit 1
+        fi
+    # C and C++ builds call sccache themselves, as a compiler launcher, and
+    # reach the same server. The job that uploads compiles; a later job finds
+    # the object in Magic Cache.
+    - name: Compile C through sccache
+      if: runner.os == 'Linux'
+      shell: bash
+      env:
+        UPLOADS: ${{ inputs.uploads }}
+      run: |
+        cd "${RUNNER_TEMP}/sccache-check"
+        sccache --zero-stats >/dev/null
+        sccache cc -c check.c -o check.o
+        stats=$(sccache --show-stats)
+        echo "${stats}"
+        stat() { sed -nE "s/^$1 +([0-9]+)$/\1/p" <<<"${stats}"; }
+        if [[ "$(stat 'Compile requests executed')" != 1 || "$(stat 'Cache write errors')" != 0 ]]; then
+          echo "::error::the C compilation did not go through the sccache server"
+          exit 1
+        fi
+        if [[ "${UPLOADS}" != true && "$(stat 'Cache hits')" != 1 ]]; then
+          echo "::error::the C object did not come from Magic Cache"
+          exit 1
+        fi

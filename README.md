@@ -321,9 +321,36 @@ Available on RunsOn Linux and Windows runners.
 
 Configures [`sccache`](https://github.com/mozilla/sccache) so that you can cache the compilation of C/C++ code, Rust, as well as NVIDIA's CUDA.
 
-The only parameter it can take for now is `s3`, which will auto-configure the [S3 cache backend for sccache](https://github.com/mozilla/sccache/blob/main/docs/S3.md), using the RunsOn S3 cache bucket that comes for free (with crazy speed and unlimited storage) with your RunsOn installation.
+`sccache: true` stores sccache's cache through Magic Cache, with [sccache's GitHub Actions cache backend](https://github.com/mozilla/sccache/blob/main/docs/GHA.md). Entries live in the stack's S3 cache bucket, with GitHub's branch scoping: a pull request reads its base branch's entries and writes only its own. The stack's cache isolation, when enabled, covers them.
 
-Example:
+```yaml
+jobs:
+  build:
+    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/extras=s3-cache
+    env:
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: sccache
+      - uses: runs-on/action@v2
+        with:
+          sccache: true
+      - run: cargo build --release --locked
+```
+
+The backend needs the job's runtime token, which GitHub gives to actions, not to `run` steps. So the action starts the sccache server itself, with the token in the server's environment only, and the server stays up for the whole job (`SCCACHE_IDLE_TIMEOUT=0`). Later steps get `RUSTC_WRAPPER=sccache`, and every sccache client of the job uses that server: Cargo through `RUSTC_WRAPPER`, and C and C++ builds through a compiler launcher, for example `cmake -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache`.
+
+* Requires Magic Cache (`extras=s3-cache`) and RunsOn v3.5.0 or later. Earlier versions refuse sccache's writes: the action then warns, and sccache only reads from Magic Cache.
+* Install sccache before this action, since the action starts its server. Without sccache on the `PATH`, Magic Cache or the runtime token, the action warns and does not configure sccache. `mozilla-actions/sccache-action` works too, but it exports the job's runtime token to the environment of every later step; `taiki-e/install-action` does not.
+* The server reads sccache's own settings, such as `SCCACHE_DIRECT` or `SCCACHE_LOG`, when it starts: set them for the job, or in an earlier step. Its errors go to `$RUNNER_TEMP/runs-on-sccache.log`, unless `SCCACHE_ERROR_LOG` names another file.
+* sccache keys its cache by its own version, so upgrading sccache starts from an empty cache. `SCCACHE_GHA_VERSION` adds a namespace of your own.
+* For Rust, disable incremental compilation as shown above.
+
+#### `sccache: s3`
+
+`sccache: s3` auto-configures the [S3 cache backend for sccache](https://github.com/mozilla/sccache/blob/main/docs/S3.md) instead: sccache writes straight to the RunsOn S3 cache bucket, with the runner's instance role.
 
 ```yaml
 jobs:
@@ -341,11 +368,6 @@ jobs:
 ```
 
 For Rust, disable incremental compilation as shown above. Run this action before the installer or any command that starts the sccache server: a running server keeps its startup configuration. This action exports settings; the separate installer supplies the executable.
-
-Possible values:
-
-* `s3` - Use RunsOn S3 cache bucket for sccache backend
-* Empty string - Disable sccache configuration (default)
 
 What this does under the hood is the equivalent of:
 
@@ -365,7 +387,7 @@ cache/sccache/<repository id>/<runner os>-<runner arch>/v1
 
 The repository id is used rather than the `owner/name` slug so that renaming or transferring a repository does not invalidate its cache; the action falls back to the slug (as two key components, `<owner>/<name>`) when `GITHUB_REPOSITORY_ID` is not exposed. The trailing `v1` is a layout version, so a future change to the key layout can be rolled out without reusing existing objects.
 
-This is operational isolation, not a security boundary: repositories sharing a RunsOn stack still share the bucket and the runner IAM role. It provides per-repository cache ownership, growth and cost attribution, targeted invalidation, and freedom to change one repository's cache layout without touching the others.
+This is operational isolation, not a security boundary: repositories sharing a RunsOn stack still share the bucket and the runner IAM role, every branch of a repository reads and writes the same entries, and the stack's cache isolation does not cover them. It provides per-repository cache ownership, growth and cost attribution, targeted invalidation, and freedom to change one repository's cache layout without touching the others.
 
 Previously every repository on a stack shared the flat `cache/sccache` prefix. Moving to the scoped layout starts one cold cache per repository and platform. Objects written under the old prefix are left to the stack's cache lifecycle rule, which expires everything under `cache/` after `S3CacheExpirationInDays` (10 by default).
 

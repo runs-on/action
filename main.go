@@ -116,11 +116,8 @@ func handleMainExecution(action *githubactions.Action, ctx context.Context) {
 		action.Infof("Cost tracking is already registered by an earlier runs-on/action invocation; this invocation will skip duplicate cost reporting.")
 	}
 
-	// Configure sccache if requested
 	if cfg.HasSccache() {
-		if err := sccache.ConfigureSccache(action, cfg.Sccache); err != nil {
-			action.Errorf("Failed to configure sccache: %v", err)
-		}
+		sccache.Configure(action, cfg.Sccache, cfg.HasMagicCache(), cfg.ActionsRuntimeToken)
 	}
 
 	if cfg.HasGoCacheProg() {

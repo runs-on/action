@@ -21,9 +21,7 @@ func TestConfigureSccacheExportsResolvedPrefix(t *testing.T) {
 	envFile := filepath.Join(t.TempDir(), "env")
 	t.Setenv("GITHUB_ENV", envFile)
 	var log bytes.Buffer
-	if err := ConfigureSccache(githubactions.New(githubactions.WithWriter(&log)), "s3"); err != nil {
-		t.Fatal(err)
-	}
+	Configure(githubactions.New(githubactions.WithWriter(&log)), "s3", false, "")
 	data, err := os.ReadFile(envFile)
 	if err != nil {
 		t.Fatal(err)
@@ -129,5 +127,40 @@ func TestDefaultKeyPrefixSpellsThePlatformConsistently(t *testing.T) {
 	t.Setenv("RUNNER_ARCH", "")
 	if got := DefaultKeyPrefix(); got != withEnv && runtime.GOOS == "linux" && runtime.GOARCH == "amd64" {
 		t.Fatalf("DefaultKeyPrefix() = %q without platform env, want %q", got, withEnv)
+	}
+}
+
+// sccache: s3 recommends sccache: true on the stacks whose Magic Cache
+// accepts sccache's writes: v3.5.0 and later, prereleases included.
+func TestS3RecommendsMagicCacheFromV350(t *testing.T) {
+	t.Setenv("RUNS_ON_S3_BUCKET_CACHE", "test-cache-bucket")
+	t.Setenv("RUNS_ON_AWS_REGION", "us-east-1")
+	for _, tc := range []struct {
+		version   string
+		recommend bool
+	}{
+		{version: "v3.5.0", recommend: true},
+		{version: "v3.5.0-rc.3", recommend: true},
+		{version: "v3.10.0", recommend: true},
+		{version: "v4.0.0", recommend: true},
+		{version: "v3.4.1-flex-dev-local-crohr"},
+		{version: "v3.4.0"},
+		{version: "dev"},
+		{version: ""},
+	} {
+		t.Run(tc.version, func(t *testing.T) {
+			t.Setenv("RUNS_ON_VERSION", tc.version)
+			t.Setenv("GITHUB_ENV", filepath.Join(t.TempDir(), "env"))
+			var log bytes.Buffer
+
+			Configure(githubactions.New(githubactions.WithWriter(&log)), "s3", false, "")
+
+			if got := strings.Contains(log.String(), "supports sccache: true"); got != tc.recommend {
+				t.Errorf("recommends sccache: true: %v, want %v; log:\n%s", got, tc.recommend, log.String())
+			}
+			if exported, _ := os.ReadFile(os.Getenv("GITHUB_ENV")); !strings.Contains(string(exported), "SCCACHE_BUCKET") {
+				t.Errorf("sccache: s3 no longer exports SCCACHE_BUCKET: %q", exported)
+			}
+		})
 	}
 }

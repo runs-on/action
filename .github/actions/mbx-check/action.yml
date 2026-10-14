@@ -1,0 +1,91 @@
+name: Check mbx
+description: Builds a small workspace with mbx through the helper runs-on/action started, and checks what went to and came from Magic Cache.
+
+inputs:
+  uploads:
+    description: '"true" in the job that builds and publishes, "false" in a later job that only reads.'
+    default: 'true'
+
+runs:
+  using: composite
+  steps:
+    # GitHub gives the job's runtime token to actions only. runs-on/action
+    # hands it to the helper on stdin and must not export it.
+    - name: The runtime token is not in the steps' environment
+      shell: bash
+      run: |
+        if [[ -n "${ACTIONS_RUNTIME_TOKEN:-}" ]]; then
+          echo "::error::the job's runtime token is in the environment of its run steps"
+          exit 1
+        fi
+        if [[ "${MBX_REMOTE_URL:-}" != http://127.0.0.1:* || -z "${MBX_REMOTE_TOKEN:-}" ]]; then
+          echo "::error::MBX_REMOTE_URL is '${MBX_REMOTE_URL:-}', want the helper on 127.0.0.1, with MBX_REMOTE_TOKEN"
+          exit 1
+        fi
+    - name: The helper's environment holds neither the token nor the action's inputs
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        helpers=0
+        for proc in /proc/[0-9]*; do
+          tr '\0' ' ' < "${proc}/cmdline" 2>/dev/null | grep -q -- '--mbx-serve' || continue
+          env=$(tr '\0' '\n' < "${proc}/environ" 2>/dev/null) || continue
+          [[ -n "${env}" ]] || continue
+          helpers=$((helpers + 1))
+          if grep -q -e '^ACTIONS_RUNTIME_TOKEN=' -e '^INPUT_' <<<"${env}"; then
+            echo "::error::the helper's environment holds the runtime token or the action's inputs"
+            exit 1
+          fi
+        done
+        if [[ "${helpers}" != 1 ]]; then
+          echo "::error::${helpers} helpers are running, want 1"
+          exit 1
+        fi
+    - name: Create a workspace
+      shell: bash
+      run: |
+        dir="${RUNNER_TEMP}/mbx-check"
+        mkdir -p "${dir}/lib/src" "${dir}/app/src"
+        cd "${dir}"
+        printf '[workspace]\nmembers = ["lib", "app"]\nresolver = "2"\n' > Cargo.toml
+        printf '[package]\nname = "mbx-check-lib"\nversion = "0.1.0"\nedition = "2021"\n' > lib/Cargo.toml
+        printf 'pub fn greeting() -> &%sstatic str {\n    "built from Magic Cache"\n}\n' "'" > lib/src/lib.rs
+        printf '[package]\nname = "mbx-check-app"\nversion = "0.1.0"\nedition = "2021"\n\n[dependencies]\nmbx-check-lib = { path = "../lib" }\n' > app/Cargo.toml
+        printf 'fn main() {\n    println!("{}", mbx_check_lib::greeting());\n}\n' > app/src/main.rs
+        # mbx keys its predictions by the lockfile, which a project commits.
+        cargo generate-lockfile
+    # mbx only publishes from pushes to protected branches, and CI runs on
+    # every branch, so the job that publishes tells mbx it is one. Magic
+    # Cache still scopes what it writes to this job's ref.
+    - name: Build and publish
+      if: inputs.uploads == 'true'
+      shell: bash
+      run: |
+        cd "${RUNNER_TEMP}/mbx-check"
+        GITHUB_EVENT_NAME=push GITHUB_REF_TYPE=branch GITHUB_REF_PROTECTED=true mbx build --workspace --locked
+    - name: Build from Magic Cache
+      if: inputs.uploads != 'true'
+      shell: bash
+      run: |
+        cd "${RUNNER_TEMP}/mbx-check"
+        mbx build --workspace --locked
+    - name: Check what the helper served
+      shell: bash
+      env:
+        UPLOADS: ${{ inputs.uploads }}
+      run: |
+        stats=$(curl -fsS -H "Authorization: Bearer ${MBX_REMOTE_TOKEN}" "${MBX_REMOTE_URL}runs-on/stats")
+        echo "${stats}"
+        count() { sed -nE "s/.*\"$1\":([0-9]+).*/\1/p" <<<"${stats}"; }
+        if [[ "$(count errors)" != 0 || "$(count refused)" != 0 ]]; then
+          echo "::error::the helper failed requests to Magic Cache"
+          exit 1
+        fi
+        if [[ "${UPLOADS}" == true && "$(count uploads)" == 0 ]]; then
+          echo "::error::mbx published nothing through the helper"
+          exit 1
+        fi
+        if [[ "${UPLOADS}" != true && ( "$(count hits)" == 0 || "$(count uploads)" != 0 ) ]]; then
+          echo "::error::mbx did not build from Magic Cache, or published"
+          exit 1
+        fi

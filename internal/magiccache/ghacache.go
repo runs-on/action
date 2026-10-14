@@ -51,6 +51,15 @@ func (e *twirpError) Error() string {
 	return fmt.Sprintf("twirp %d %s: %s", e.Status, e.Code, e.Msg)
 }
 
+// IsForbidden reports whether the cache service refused a call for the job's
+// token, as it does a write from a job whose token only reads: asking again
+// gets the same answer.
+func IsForbidden(err error) bool {
+	var twErr *twirpError
+	return errors.As(err, &twErr) && (twErr.Status == http.StatusUnauthorized || twErr.Status == http.StatusForbidden ||
+		twErr.Code == "permission_denied" || twErr.Code == "unauthenticated")
+}
+
 // callTimeout bounds one Twirp call: a cache that accepts connections but
 // stops answering must not hold up the go command for the HTTP client's
 // five-minute limit, which is sized for large blob transfers.
@@ -89,10 +98,15 @@ func (c *CacheClient) call(ctx context.Context, method string, req, resp any) er
 	return json.Unmarshal(data, resp)
 }
 
-// Open returns the content of the entry key, or of the newest entry matching
-// one of restoreKeys as a prefix, and the key of the entry it found; ok is
-// false on a miss. The caller closes the content.
-func (c *CacheClient) Open(ctx context.Context, version, key string, restoreKeys ...string) (body io.ReadCloser, matched string, ok bool, err error) {
+// Lookup returns the key of the entry key, or of the newest entry matching
+// one of restoreKeys as a prefix, without downloading it; ok is false on a
+// miss.
+func (c *CacheClient) Lookup(ctx context.Context, version, key string, restoreKeys ...string) (matched string, ok bool, err error) {
+	_, matched, ok, err = c.lookup(ctx, version, key, restoreKeys)
+	return matched, ok, err
+}
+
+func (c *CacheClient) lookup(ctx context.Context, version, key string, restoreKeys []string) (url, matched string, ok bool, err error) {
 	var resp struct {
 		Ok             bool   `json:"ok"`
 		URL            string `json:"signedDownloadUrl"`
@@ -105,15 +119,26 @@ func (c *CacheClient) Open(ctx context.Context, version, key string, restoreKeys
 		req["restore_keys"] = restoreKeys
 	}
 	if err := c.call(ctx, "GetCacheEntryDownloadURL", req, &resp); err != nil {
-		return nil, "", false, err
+		return "", "", false, err
 	}
-	url := firstNonEmpty(resp.URL, resp.URLSnakeCase)
+	url = firstNonEmpty(resp.URL, resp.URLSnakeCase)
 	matched = firstNonEmpty(resp.MatchedKey, resp.MatchedKeySnke)
 	if !resp.Ok || url == "" || (len(restoreKeys) == 0 && matched != "" && matched != key) {
-		return nil, "", false, nil
+		return "", "", false, nil
 	}
 	if matched == "" {
 		matched = key
+	}
+	return url, matched, true, nil
+}
+
+// Open returns the content of the entry key, or of the newest entry matching
+// one of restoreKeys as a prefix, and the key of the entry it found; ok is
+// false on a miss. The caller closes the content.
+func (c *CacheClient) Open(ctx context.Context, version, key string, restoreKeys ...string) (body io.ReadCloser, matched string, ok bool, err error) {
+	url, matched, ok, err := c.lookup(ctx, version, key, restoreKeys)
+	if err != nil || !ok {
+		return nil, "", false, err
 	}
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {

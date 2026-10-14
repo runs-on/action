@@ -164,7 +164,7 @@ func (c *Config) HasMagicCache() bool {
 }
 
 func (c *Config) HasSccache() bool {
-	return c.IsUsingRunsOn() && c.Sccache != ""
+	return c.IsUsingRunsOn() && c.Sccache != "" && c.Sccache != "false"
 }
 
 // HasStickyDiskCache reports whether sticky disk caching was requested.

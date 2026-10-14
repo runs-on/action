@@ -1,0 +1,76 @@
+name: Bench sccache
+description: Builds ruff with sccache in one mode, and reports the build time and sccache's counters.
+inputs:
+  mode:
+    required: true
+  phase:
+    required: true
+  ns:
+    required: true
+runs:
+  using: composite
+  steps:
+    - uses: actions/checkout@v6
+      with:
+        repository: astral-sh/ruff
+        ref: "0.17.0"
+        path: ruff
+        persist-credentials: false
+    - name: Prepare (not measured)
+      shell: bash
+      run: |
+        cd ruff
+        rustup toolchain install
+        cargo fetch --locked
+        nproc
+    - if: inputs.mode == 'true'
+      uses: taiki-e/install-action@v2.87.28
+      with:
+        tool: sccache@0.18.0
+    - if: inputs.mode == 'true'
+      uses: ./
+      with:
+        sccache: "true"
+    - if: inputs.mode == 's3'
+      uses: ./
+      with:
+        sccache: s3
+    - if: inputs.mode == 's3'
+      shell: bash
+      env:
+        NS: ${{ inputs.ns }}
+      run: echo "SCCACHE_S3_KEY_PREFIX=cache/sccache-bench/${NS}" >> "${GITHUB_ENV}"
+    - if: inputs.mode == 's3'
+      uses: taiki-e/install-action@v2.87.28
+      with:
+        tool: sccache@0.18.0
+    - name: Build (measured)
+      shell: bash
+      run: |
+        cd ruff
+        start=$(date +%s.%N)
+        cargo build --locked -p ruff
+        end=$(date +%s.%N)
+        echo "BUILD_SECONDS=$(python3 -c "print(round(${end} - ${start}, 1))")" >> "${GITHUB_ENV}"
+    - name: Report
+      if: always()
+      shell: bash
+      env:
+        MODE: ${{ inputs.mode }}
+        PHASE: ${{ inputs.phase }}
+        NS: ${{ inputs.ns }}
+      run: |
+        sccache --show-stats
+        sccache --show-stats --stats-format=json > "${RUNNER_TEMP}/stats.json"
+        python3 - <<'PY' | tee -a "${GITHUB_STEP_SUMMARY}"
+        import json, os
+        s = json.load(open(os.path.join(os.environ["RUNNER_TEMP"], "stats.json")))
+        st = s["stats"]
+        d = lambda v: v["secs"] + v["nanos"] / 1e9
+        hits = sum(st["cache_hits"]["counts"].values())
+        misses = sum(st["cache_misses"]["counts"].values())
+        print("| mode | phase | ns | build s | requests | hits | misses | writes | write errors | write s (sum) | location |")
+        print("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |")
+        print(f"| {os.environ['MODE']} | {os.environ['PHASE']} | {os.environ['NS']} | {os.environ.get('BUILD_SECONDS', '?')} | {st['compile_requests']} | {hits} | {misses} | {st['cache_writes']} | {st['cache_write_errors']} | {d(st['cache_write_duration']):.0f} | {s['cache_location']} |")
+        PY
+        cat "${RUNNER_TEMP}/runs-on-sccache.log" 2>/dev/null || true

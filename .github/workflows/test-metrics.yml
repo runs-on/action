@@ -1,0 +1,131 @@
+name: Test / Metrics
+on:
+  workflow_call:
+
+jobs:
+  metrics:
+    permissions:
+      id-token: write
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [ubuntu24-full-x64, ubuntu24-full-arm64]
+        configuration: ["existing-aws-creds", "no-aws-creds", "cw-agent-stopped"]
+    runs-on: runs-on=${{ github.run_id }}/env=bootstrap/cpu=2/family=m7/image=${{ matrix.image }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: configure aws credentials
+        if: matrix.configuration == 'existing-aws-creds'
+        uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502
+        with:
+          role-to-assume: arn:aws:iam::756351362063:role/github-oidc
+          role-session-name: test
+          aws-region: ${{ env.RUNS_ON_AWS_REGION }}
+      - name: Stop CloudWatch agent
+        if: matrix.configuration == 'cw-agent-stopped'
+        run: sudo /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a stop || true
+      - uses: ./.github/actions/use-dist
+      - uses: ./
+        with:
+          metrics: cpu,network,memory,disk,io
+      - name: Setup
+        run: sudo apt-get update && sudo apt-get install -y stress-ng
+      - name: Generate load
+        run: |
+          # CPU intensive - variable load
+          for i in {1..10}; do
+            dd if=/dev/zero bs=1M count=$((RANDOM % 100 + 150)) | md5sum &
+            sleep 10
+          done &
+          
+          # Memory intensive - variable load
+          for i in {1..10}; do
+            stress-ng --vm $((RANDOM % 4 + 1)) --vm-bytes $((RANDOM % 512 + 256))M --timeout 10s &
+            sleep 10
+          done &
+          
+          # Disk intensive - variable load
+          for i in {1..10}; do
+            dd if=/dev/urandom of=/tmp/testfile$i bs=1M count=$((RANDOM % 100 + 150)) &
+            sleep 10
+          done &
+          
+          wait
+      - name: Verify per-mount disk dimensions
+        run: |
+          set -euo pipefail
+
+          # Query with the instance profile, like the action, not credentials from earlier steps.
+          unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_PROFILE AWS_DEFAULT_PROFILE
+          unset AWS_WEB_IDENTITY_TOKEN_FILE AWS_ROLE_ARN AWS_ROLE_SESSION_NAME AWS_EC2_METADATA_DISABLED
+
+          for path in / /tmp /var/lib/docker /home/runner; do
+            mountpoint -q "$path" || continue
+
+            # Resolve the dimensions the agent should publish with system tools,
+            # independently of the action's own resolution.
+            fstype=$(findmnt -nro FSTYPE --mountpoint "$path" | tail -1)
+            majmin=$(mountpoint -d "$path")
+            volume_id=""
+            if [[ -e "/sys/dev/block/$majmin" ]]; then
+              device=$(basename "$(readlink -f "/sys/dev/block/$majmin")")
+              disk=$(lsblk -ndo PKNAME "/dev/$device")
+              serial=$(tr -d '[:space:]' < "/sys/block/${disk:-$device}/device/serial" 2>/dev/null || true)
+              case "$serial" in
+                "") ;;
+                vol-*) volume_id=$serial ;;
+                vol*) volume_id="vol-${serial#vol}" ;;
+                *) volume_id=$serial ;;
+              esac
+            else
+              device=$(findmnt -nrvo SOURCE --mountpoint "$path" | tail -1)
+              device=${device#/dev/}
+            fi
+            echo "$path: device=$device fstype=$fstype VolumeId=${volume_id:-none}"
+
+            queries=$(jq -nc \
+              --arg instance_id "$RUNS_ON_INSTANCE_ID" --arg device "$device" \
+              --arg fstype "$fstype" --arg path "$path" --arg volume_id "$volume_id" \
+              '[{
+                Id: "disk",
+                MetricStat: {
+                  Metric: {
+                    Namespace: "CWAgent",
+                    MetricName: "disk_used_percent",
+                    Dimensions: ([
+                      {Name: "InstanceId", Value: $instance_id},
+                      {Name: "device", Value: $device},
+                      {Name: "fstype", Value: $fstype},
+                      {Name: "path", Value: $path}
+                    ] + (if $volume_id == "" then [] else [{Name: "VolumeId", Value: $volume_id}] end))
+                  },
+                  Period: 10,
+                  Stat: "Average"
+                },
+                ReturnData: true
+              }]')
+
+            found=""
+            for _ in {1..6}; do
+              count=$(aws cloudwatch get-metric-data --region "$RUNS_ON_AWS_REGION" \
+                --metric-data-queries "$queries" \
+                --start-time "$(date -u -d '15 minutes ago' +%Y-%m-%dT%H:%M:%SZ)" \
+                --end-time "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+                --query 'length(MetricDataResults[0].Values)' --output text || true)
+              if [[ "$count" =~ ^[1-9][0-9]*$ ]]; then
+                found=$count
+                break
+              fi
+              sleep 10
+            done
+
+            if [[ -z "$found" ]]; then
+              echo "::error::No disk_used_percent datapoints for $path with device=$device fstype=$fstype VolumeId=${volume_id:-none}"
+              aws cloudwatch list-metrics --region "$RUNS_ON_AWS_REGION" --namespace CWAgent \
+                --metric-name disk_used_percent \
+                --dimensions Name=InstanceId,Value="$RUNS_ON_INSTANCE_ID" || true
+              exit 1
+            fi
+            echo "Verified $found datapoints for $path"
+          done

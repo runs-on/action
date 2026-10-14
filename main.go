@@ -13,6 +13,7 @@ import (
 	"github.com/runs-on/action/internal/costs"
 	"github.com/runs-on/action/internal/env"
 	"github.com/runs-on/action/internal/gitproxy"
+	"github.com/runs-on/action/internal/gocacheprog"
 	"github.com/runs-on/action/internal/magiccache"
 	"github.com/runs-on/action/internal/monitoring"
 	"github.com/runs-on/action/internal/sccache"
@@ -122,6 +123,10 @@ func handleMainExecution(action *githubactions.Action, ctx context.Context) {
 		}
 	}
 
+	if cfg.HasGoCacheProg() {
+		gocacheprog.Configure(action, cfg.GoCacheProg, cfg.HasMagicCache(), cfg.ActionsRuntimeToken)
+	}
+
 	// Configure sticky disk cache mounts (or restore-only mode) if requested
 	if cfg.ConfiguresStickyDisk() {
 		if err := stickydisk.Configure(action, stickydisk.Options{
@@ -183,6 +188,10 @@ func handlePostExecution(action *githubactions.Action, ctx context.Context) {
 		monitoring.GenerateMetricsSummary(action, cfg.Metrics, "chart", cfg.NetworkInterface, cfg.DiskDevice)
 	}
 
+	if cfg.HasGoCacheProg() {
+		gocacheprog.SaveJobList(action, cfg.GoCacheProg)
+	}
+
 	// Run cache mode post-job hooks (e.g. stop the Buildx builder) before the sticky
 	// disk is unmounted and snapshotted, then display usage
 	if cfg.HasStickyDiskCache() {
@@ -200,7 +209,27 @@ func main() {
 	ctx := context.Background()
 	postFlag := flag.Bool("post", false, "Indicates the post-execution phase")
 	gitProxyFlag := flag.Bool("git-proxy-serve", false, "Run the local git mirror proxy (internal, spawned by the git cache mode)")
+	goCacheProgFlag := flag.Bool(strings.TrimLeft(gocacheprog.Flag, "-"), false, "Serve the go command's build cache (internal, started by the go command through GOCACHEPROG)")
+	goCachePrefetchFlag := flag.Bool(strings.TrimLeft(gocacheprog.PrefetchFlag, "-"), false, "Download the build cache entries the job's previous run used (internal, started by the action)")
+	shareTestResultsFlag := flag.Bool(strings.TrimLeft(gocacheprog.ShareTestResultsFlag, "-"), false, "With --gocacheprog or --gocacheprog-prefetch, share test results between jobs too (internal)")
 	flag.Parse()
+
+	if *goCacheProgFlag {
+		if err := gocacheprog.Run(os.Stdin, os.Stdout, *shareTestResultsFlag); err != nil {
+			fmt.Fprintf(os.Stderr, "gocacheprog: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	if *goCachePrefetchFlag {
+		opts := gocacheprog.OptionsFromEnv(*shareTestResultsFlag)
+		if err := gocacheprog.Prefetch(opts, gocacheprog.ListKey(opts.Token)); err != nil {
+			fmt.Fprintf(os.Stderr, "gocacheprog prefetch: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	if *gitProxyFlag {
 		if err := gitproxy.RunFromEnv(ctx); err != nil {

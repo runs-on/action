@@ -1,4 +1,4 @@
-package gocacheprog
+package magiccache
 
 import (
 	"bytes"
@@ -13,24 +13,27 @@ import (
 	"time"
 )
 
-// ghaClient talks to the GitHub Actions cache service (v2, Twirp), as served
-// by GitHub or by RunsOn's Magic Cache at ACTIONS_RESULTS_URL. Entries are
-// immutable: a key that already exists cannot be created again.
-type ghaClient struct {
+// CacheClient talks to the GitHub Actions cache service (v2, Twirp), as
+// served by GitHub or by RunsOn's Magic Cache at ACTIONS_RESULTS_URL. Entries
+// are immutable: a key that already exists cannot be created again.
+type CacheClient struct {
 	baseURL string
 	token   string
 	http    *http.Client
 }
 
-var errEntryExists = errors.New("cache entry already exists")
+// ErrEntryExists is what Upload returns for a key that is already stored.
+var ErrEntryExists = errors.New("cache entry already exists")
 
 const twirpPrefix = "twirp/github.actions.results.api.v1.CacheService/"
 
-func newGHAClient(resultsURL, token string) *ghaClient {
+// NewCacheClient returns a client for the cache service at resultsURL,
+// authenticated with the job's runtime token.
+func NewCacheClient(resultsURL, token string) *CacheClient {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.MaxIdleConns = 256
 	transport.MaxIdleConnsPerHost = 128
-	return &ghaClient{
+	return &CacheClient{
 		baseURL: strings.TrimSuffix(resultsURL, "/") + "/",
 		token:   token,
 		http:    &http.Client{Transport: transport, Timeout: 5 * time.Minute},
@@ -53,7 +56,7 @@ func (e *twirpError) Error() string {
 // five-minute limit, which is sized for large blob transfers.
 const callTimeout = 15 * time.Second
 
-func (c *ghaClient) call(ctx context.Context, method string, req, resp any) error {
+func (c *CacheClient) call(ctx context.Context, method string, req, resp any) error {
 	ctx, cancel := context.WithTimeout(ctx, callTimeout)
 	defer cancel()
 	body, err := json.Marshal(req)
@@ -86,9 +89,10 @@ func (c *ghaClient) call(ctx context.Context, method string, req, resp any) erro
 	return json.Unmarshal(data, resp)
 }
 
-// open returns the content of the entry key, or of the newest entry matching
-// one of restoreKeys as a prefix, or ok=false on a miss. The caller closes it.
-func (c *ghaClient) open(ctx context.Context, version, key string, restoreKeys ...string) (io.ReadCloser, bool, error) {
+// Open returns the content of the entry key, or of the newest entry matching
+// one of restoreKeys as a prefix, and the key of the entry it found; ok is
+// false on a miss. The caller closes the content.
+func (c *CacheClient) Open(ctx context.Context, version, key string, restoreKeys ...string) (body io.ReadCloser, matched string, ok bool, err error) {
 	var resp struct {
 		Ok             bool   `json:"ok"`
 		URL            string `json:"signedDownloadUrl"`
@@ -101,20 +105,23 @@ func (c *ghaClient) open(ctx context.Context, version, key string, restoreKeys .
 		req["restore_keys"] = restoreKeys
 	}
 	if err := c.call(ctx, "GetCacheEntryDownloadURL", req, &resp); err != nil {
-		return nil, false, err
+		return nil, "", false, err
 	}
 	url := firstNonEmpty(resp.URL, resp.URLSnakeCase)
-	matched := firstNonEmpty(resp.MatchedKey, resp.MatchedKeySnke)
+	matched = firstNonEmpty(resp.MatchedKey, resp.MatchedKeySnke)
 	if !resp.Ok || url == "" || (len(restoreKeys) == 0 && matched != "" && matched != key) {
-		return nil, false, nil
+		return nil, "", false, nil
+	}
+	if matched == "" {
+		matched = key
 	}
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, false, err
+		return nil, "", false, err
 	}
 	httpResp, err := c.http.Do(httpReq)
 	if err != nil {
-		return nil, false, err
+		return nil, "", false, err
 	}
 	switch httpResp.StatusCode {
 	case http.StatusOK:
@@ -122,17 +129,17 @@ func (c *ghaClient) open(ctx context.Context, version, key string, restoreKeys .
 		// Magic Cache answers 412 when another job replaced the entry since
 		// the lookup: a miss for this entry, not a failing cache.
 		_ = httpResp.Body.Close()
-		return nil, false, nil
+		return nil, "", false, nil
 	default:
 		_ = httpResp.Body.Close()
-		return nil, false, fmt.Errorf("download %s: HTTP %d", key, httpResp.StatusCode)
+		return nil, "", false, fmt.Errorf("download %s: HTTP %d", key, httpResp.StatusCode)
 	}
-	return httpResp.Body, true, nil
+	return httpResp.Body, matched, true, nil
 }
 
-// upload creates the entry with a single blob PUT of size bytes read from
+// Upload creates the entry with a single blob PUT of size bytes read from
 // body.
-func (c *ghaClient) upload(ctx context.Context, version, key string, body io.Reader, size int64) error {
+func (c *CacheClient) Upload(ctx context.Context, version, key string, body io.Reader, size int64) error {
 	var created struct {
 		Ok           bool   `json:"ok"`
 		URL          string `json:"signedUploadUrl"`
@@ -141,13 +148,13 @@ func (c *ghaClient) upload(ctx context.Context, version, key string, body io.Rea
 	if err := c.call(ctx, "CreateCacheEntry", map[string]any{"key": key, "version": version}, &created); err != nil {
 		var twErr *twirpError
 		if errors.As(err, &twErr) && (twErr.Status == http.StatusConflict || twErr.Code == "already_exists") {
-			return errEntryExists
+			return ErrEntryExists
 		}
 		return err
 	}
 	url := firstNonEmpty(created.URL, created.URLSnakeCase)
 	if !created.Ok || url == "" {
-		return errEntryExists
+		return ErrEntryExists
 	}
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPut, url, body)
 	if err != nil {

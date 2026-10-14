@@ -51,6 +51,9 @@ jobs:
           if-no-files-found: error
           overwrite: true
 
+  bazel-remote-cache:
+    needs: build
+    uses: ./.github/workflows/test-bazel-remote-cache.yml
   container:
     needs: build
     uses: ./.github/workflows/test-container.yml

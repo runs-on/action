@@ -399,6 +399,26 @@ Compiled packages are shared between jobs; test results are not. Within a job, t
 
 To share test results too, set `gocacheprog: with-tests`. A job then reports `(cached)` for a test that passed in another job with the same inputs: the package, its dependencies, and the files and environment variables the test read through the standard library. Go does not see a database, the network or a file read by a child process, so keep the default for tests that depend on those, or run them with `go test -count=1`. Jobs that use `true` never read the results that `with-tests` jobs share. What a passing test printed is stored with its result, so with `with-tests` it is readable by any job that can read the cache, including pull requests from forks: do not use it for tests that print secrets.
 
+### `bazel_remote_cache`
+
+Gives Bazel (6.3 or later) a remote cache stored through Magic Cache. The action writes `--remote_cache` into Bazel's system rc, so every later `bazel` command uses it without a flag, and a project that sets its own `--remote_cache` keeps it. Action results follow GitHub's branch scoping: a job writes them to its own branch or pull request, and reads its base and default branch's when it has none of its own. Outputs are verified against their digest and shared across the repository.
+
+```yaml
+jobs:
+  build:
+    runs-on: runs-on=${{ github.run_id }}/runner=8cpu-linux-x64/extras=s3-cache
+    steps:
+      - uses: runs-on/action@v2
+        with:
+          bazel_remote_cache: true
+      - uses: actions/checkout@v5
+      - run: bazel test //... --remote_download_minimal
+```
+
+Requires Magic Cache (`extras=s3-cache`) and RunsOn v3.5.1 or later. Otherwise, the action warns and Bazel builds without the remote cache. `--remote_download_minimal` skips downloading outputs that later actions do not need, which matters most on warm builds.
+
+Bazel's HTTP cache client sends no credentials, so the action registers the job's runtime token with the RunsOn agent, which answers with a cache URL that stands for the token. The rc gets `common --remote_cache=http://<runner IP>:6871/bazel/<id>`, in `/etc/bazel.bazelrc` (with `sudo`), or `%ProgramData%\bazel.bazelrc` on Windows. The URL is masked in the job's logs. In a container job, the action writes the container's system rc, which needs root or passwordless `sudo` in the container; without either, it warns.
+
 ### `sticky_cache`
 
 Available for Linux and Windows runners on jobs with a sticky-disk label. Use `sticky=<size>` for the default snapshot lineage or `sticky=<name>:<size>` for a named lineage; the optional name must come first. Volume settings follow the size, for example `sticky=go-cache:20gb:gp3:750mbs:6000iops`. The `apt`, `buildkit`, and `git` cache modes are Linux only.

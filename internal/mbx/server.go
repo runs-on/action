@@ -45,9 +45,14 @@ const (
 	maxBlobBytes   = 5 << 30
 )
 
-// StatsPath serves the helper's counters to the action's post step. It is not
-// part of mbx's protocol.
-const StatsPath = "/runs-on/stats"
+// The action's post step reads the helper's counters and stops it through
+// these paths, which are not part of mbx's protocol. They need the client
+// token like every other request, so the post step only ever stops this job's
+// helper.
+const (
+	StatsPath    = "/runs-on/stats"
+	ShutdownPath = "/runs-on/shutdown"
+)
 
 // Stats counts what the helper served.
 type Stats struct {
@@ -76,13 +81,21 @@ type Server struct {
 	manifestMu    sync.Mutex
 	manifestLocks map[string]*sync.Mutex
 
+	stopOnce sync.Once
+	stopped  chan struct{}
+
 	hits, misses, uploads, existing, errs, bytesDown, bytesUp, refused, manifests, conflicted atomic.Int64
 }
 
 // NewServer returns the helper's handler. Requests must carry clientToken as
 // a bearer token.
 func NewServer(cache *magiccache.CacheClient, clientToken string, log *slog.Logger) *Server {
-	return &Server{cache: cache, clientToken: clientToken, log: log, manifestLocks: map[string]*sync.Mutex{}}
+	return &Server{cache: cache, clientToken: clientToken, log: log, manifestLocks: map[string]*sync.Mutex{}, stopped: make(chan struct{})}
+}
+
+// Stopped is closed once the post step asked the helper to stop.
+func (s *Server) Stopped() <-chan struct{} {
+	return s.stopped
 }
 
 // Stats returns the counters.
@@ -118,6 +131,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.URL.Path == StatsPath && r.Method == http.MethodGet {
 		writeJSON(w, s.Stats())
+		return
+	}
+	if r.URL.Path == ShutdownPath && r.Method == http.MethodPost {
+		w.WriteHeader(http.StatusAccepted)
+		s.stopOnce.Do(func() { close(s.stopped) })
 		return
 	}
 	if v := r.Header.Get(protocolHeader); v != "" && v != "1" {

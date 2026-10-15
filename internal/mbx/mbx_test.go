@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -162,16 +163,58 @@ func TestConfigureStartsTheHelperAndPostStopsIt(t *testing.T) {
 	for name, value := range fileCommands(t, stateFile) {
 		t.Setenv("STATE_"+name, value)
 	}
+
+	// An upload still in flight when the post step starts completes before
+	// the helper exits.
+	body, upload := io.Pipe()
+	req, _ := http.NewRequest(http.MethodPut, env["MBX_REMOTE_URL"]+"v1/blobs/blake3/"+hash('b')+"/10", body)
+	req.ContentLength = 10
+	req.Header.Set("Authorization", "Bearer "+env["MBX_REMOTE_TOKEN"])
+	req.Header.Set(namespaceHeader, env["MBX_REMOTE_NAMESPACE"])
+	uploaded := make(chan int, 1)
+	go func() {
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			uploaded <- 0
+			return
+		}
+		_ = resp.Body.Close()
+		uploaded <- resp.StatusCode
+	}()
+	_, _ = upload.Write([]byte("hello"))
+	time.Sleep(200 * time.Millisecond)
+
 	log.Reset()
-	Post(action)
+	posted := make(chan struct{})
+	go func() {
+		Post(action)
+		close(posted)
+	}()
+	select {
+	case <-posted:
+		t.Fatal("the post step returned while an upload was in flight")
+	case <-time.After(500 * time.Millisecond):
+	}
+	_, _ = upload.Write([]byte("world"))
+	_ = upload.Close()
+	if status := <-uploaded; status != http.StatusCreated {
+		t.Fatalf("the upload in flight got status %d, want 201", status)
+	}
+	select {
+	case <-posted:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the post step did not return")
+	}
 	if !strings.Contains(log.String(), "1 hits, 0 misses, 1 uploads") {
 		t.Errorf("post: %s", log.String())
 	}
-	deadline := time.Now().Add(5 * time.Second)
-	for healthy(state.Port, env["MBX_REMOTE_TOKEN"]) {
-		if time.Now().After(deadline) {
-			t.Fatal("the helper still answers after the post step")
-		}
-		time.Sleep(50 * time.Millisecond)
+	if cache.entryCount() != 2 {
+		t.Errorf("%d cache entries, want 2", cache.entryCount())
+	}
+	if healthy(state.Port, env["MBX_REMOTE_TOKEN"]) {
+		t.Error("the helper still answers after the post step")
+	}
+	if _, err := os.Stat(filepath.Join(os.Getenv("RUNNER_TEMP"), stateFileName)); !os.IsNotExist(err) {
+		t.Errorf("the helper's state file is still there: %v", err)
 	}
 }

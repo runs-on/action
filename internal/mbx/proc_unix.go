@@ -22,7 +22,8 @@ func startDetached(newCmd func() *exec.Cmd) (int, error) {
 	return pid, cmd.Process.Release()
 }
 
-// stopHelper sends SIGTERM to pid if it still runs the helper.
+// stopHelper is the fallback for a helper that does not answer: SIGTERM, if
+// pid still runs the helper.
 func stopHelper(pid int) error {
 	cmdline, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))
 	if err != nil || !strings.Contains(string(cmdline), "\x00"+Flag) {

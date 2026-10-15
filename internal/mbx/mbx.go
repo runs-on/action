@@ -195,10 +195,41 @@ func Post(action *githubactions.Action) {
 			action.Warningf("mbx: Magic Cache refused %d requests for this job's cache token. A job whose token only reads (cache-mode: read, or a trigger GitHub treats as low-trust) cannot publish.", stats.Refused)
 		}
 	}
-	if err := stopHelper(state.PID); err != nil {
+	if err := stop(state, stateFile, os.Getenv("STATE_"+stateToken)); err != nil {
 		action.Warningf("mbx: could not stop the helper (PID %d): %v", state.PID, err)
 	}
 	_ = os.Remove(stateFile)
+}
+
+// stop asks the helper to stop, which it does once the requests in flight are
+// done, and waits until it removed its state file. A helper that does not
+// answer gets SIGTERM where its process can be identified first; otherwise the
+// runner ends it with the job.
+func stop(state State, stateFile, clientToken string) error {
+	req, err := http.NewRequest(http.MethodPost, fmt.Sprintf("http://127.0.0.1:%d%s", state.Port, ShutdownPath), nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+clientToken)
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return stopHelper(state.PID)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		return fmt.Errorf("the helper answered HTTP %d", resp.StatusCode)
+	}
+	deadline := time.Now().Add(drainTimeout + 5*time.Second)
+	for {
+		if _, err := os.Stat(stateFile); os.IsNotExist(err) {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("it did not stop within %s", drainTimeout)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 func fetchStats(port int, clientToken string) (Stats, error) {

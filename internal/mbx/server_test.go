@@ -227,6 +227,30 @@ func TestAnswersARefusedWriteWith403(t *testing.T) {
 	}
 }
 
+func TestStopsOnlyWhenTheActionAsksWithTheClientToken(t *testing.T) {
+	srv, _, server := newTestServer(t)
+	if status, _, _ := do(t, http.MethodPost, srv.URL+ShutdownPath, nil, map[string]string{"Authorization": "Bearer wrong"}); status != http.StatusUnauthorized {
+		t.Fatalf("wrong token: status %d, want 401", status)
+	}
+	select {
+	case <-server.Stopped():
+		t.Fatal("stopped for a request without the client token")
+	default:
+	}
+	if status, _, _ := do(t, http.MethodPost, srv.URL+ShutdownPath, nil, nil); status != http.StatusAccepted {
+		t.Fatalf("status %d, want 202", status)
+	}
+	select {
+	case <-server.Stopped():
+	default:
+		t.Fatal("not stopped")
+	}
+	// Asking twice is harmless.
+	if status, _, _ := do(t, http.MethodPost, srv.URL+ShutdownPath, nil, nil); status != http.StatusAccepted {
+		t.Fatalf("second request: status %d, want 202", status)
+	}
+}
+
 func TestServesStats(t *testing.T) {
 	srv, _, _ := newTestServer(t)
 	status, _, body := do(t, http.MethodGet, srv.URL+StatsPath, nil, nil)

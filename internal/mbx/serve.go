@@ -23,6 +23,9 @@ import (
 // Flag runs this binary as the helper (internal, started by the action).
 const Flag = "--mbx-serve"
 
+// drainTimeout bounds how long a stopping helper waits for requests in flight.
+const drainTimeout = 30 * time.Second
+
 // The helper's settings, from the action that starts it. The job's runtime
 // token and the client token come on stdin instead: /proc/<pid>/environ stays
 // readable by any process of the runner's user for the helper's whole
@@ -60,6 +63,8 @@ func Serve(ctx context.Context, stdin io.Reader) error {
 		_ = ln.Close()
 		return err
 	}
+	// Gone once the helper has stopped, requests in flight included.
+	defer func() { _ = os.Remove(stateFile) }()
 	log.Info("mbx helper listening", "addr", ln.Addr().String(), "cache", resultsURL)
 
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGTERM, os.Interrupt)
@@ -71,10 +76,12 @@ func Serve(ctx context.Context, stdin io.Reader) error {
 	case err := <-errCh:
 		return err
 	case <-ctx.Done():
+	case <-server.Stopped():
 	}
 	stats, _ := json.Marshal(server.Stats())
 	log.Info("mbx helper stopping", "stats", string(stats))
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// Requests in flight, such as an upload, finish before the helper exits.
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), drainTimeout)
 	defer cancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err

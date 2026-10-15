@@ -3,7 +3,6 @@
 package mbx
 
 import (
-	"os"
 	"os/exec"
 	"syscall"
 )
@@ -32,11 +31,10 @@ func startDetached(newCmd func() *exec.Cmd) (int, error) {
 	return 0, err
 }
 
-// stopHelper ends the helper.
-func stopHelper(pid int) error {
-	proc, err := os.FindProcess(pid)
-	if err != nil {
-		return nil
-	}
-	return proc.Kill()
+// stopHelper is the fallback for a helper that does not answer. Windows
+// offers no cheap way to check that pid is still the helper rather than a
+// process that reused its ID, so the helper is left to the runner, which ends
+// the job's processes.
+func stopHelper(int) error {
+	return nil
 }

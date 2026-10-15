@@ -25,7 +25,7 @@ jobs:
       # The run's own objects: an earlier run's would make the uploads hits.
       MBX_REMOTE_NAMESPACE: ${{ github.run_id }}-${{ matrix.leg }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/use-dist
       - uses: ./
         with:
@@ -44,7 +44,7 @@ jobs:
     env:
       MBX_REMOTE_NAMESPACE: ${{ github.run_id }}-linux
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/use-dist
       - uses: ./
         with:

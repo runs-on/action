@@ -411,7 +411,7 @@ jobs:
       - uses: runs-on/action@v2
         with:
           mbx: true
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: jdx/mr-boxington-action@v1
         with:
           backend: remote # keeps the remote this action configured

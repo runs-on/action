@@ -23,8 +23,11 @@ import (
 // Flag runs this binary as the helper (internal, started by the action).
 const Flag = "--mbx-serve"
 
-// drainTimeout bounds how long a stopping helper waits for requests in flight.
-const drainTimeout = 30 * time.Second
+// drainTimeout bounds how long a stopping helper waits for requests in
+// flight. It covers the longest request the cache client allows: a manifest
+// update makes a lookup, then an upload's create call, blob transfer and
+// finalize call. It only costs time while a request is actually in flight.
+var drainTimeout = magiccache.TransferTimeout + 3*magiccache.CallTimeout
 
 // The helper's settings, from the action that starts it. The job's runtime
 // token and the client token come on stdin instead: /proc/<pid>/environ stays
@@ -63,8 +66,14 @@ func Serve(ctx context.Context, stdin io.Reader) error {
 		_ = ln.Close()
 		return err
 	}
-	// Gone once the helper has stopped, requests in flight included.
-	defer func() { _ = os.Remove(stateFile) }()
+	// Gone once the helper has stopped, requests in flight included. A helper
+	// that gave up on a request leaves it, which the post step reports.
+	drained := false
+	defer func() {
+		if drained {
+			_ = os.Remove(stateFile)
+		}
+	}()
 	log.Info("mbx helper listening", "addr", ln.Addr().String(), "cache", resultsURL)
 
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGTERM, os.Interrupt)
@@ -74,6 +83,7 @@ func Serve(ctx context.Context, stdin io.Reader) error {
 	go func() { errCh <- srv.Serve(ln) }()
 	select {
 	case err := <-errCh:
+		drained = true
 		return err
 	case <-ctx.Done():
 	case <-server.Stopped():
@@ -84,8 +94,9 @@ func Serve(ctx context.Context, stdin io.Reader) error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), drainTimeout)
 	defer cancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		return err
+		return fmt.Errorf("requests still in flight after %s: %w", drainTimeout, err)
 	}
+	drained = true
 	return nil
 }
 

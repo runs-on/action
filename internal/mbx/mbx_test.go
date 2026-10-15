@@ -218,3 +218,58 @@ func TestConfigureStartsTheHelperAndPostStopsIt(t *testing.T) {
 		t.Errorf("the helper's state file is still there: %v", err)
 	}
 }
+
+func TestStopReportsAnUploadTheHelperGaveUpOn(t *testing.T) {
+	cacheSrv, _ := newFakeCacheService(t)
+	stateFile := filepath.Join(t.TempDir(), stateFileName)
+	t.Setenv(envStateFile, stateFile)
+	t.Setenv(envResultsURL, cacheSrv.URL)
+	saved := drainTimeout
+	drainTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { drainTimeout = saved })
+
+	const clientToken = "client-token"
+	served := make(chan error, 1)
+	go func() {
+		served <- Serve(context.Background(), strings.NewReader(testRuntimeToken+"\n"+clientToken+"\n"))
+	}()
+	var state State
+	for deadline := time.Now().Add(5 * time.Second); ; {
+		var err error
+		if state, err = readState(stateFile); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the helper did not publish its state")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	// An upload that outlasts the drain.
+	body, upload := io.Pipe()
+	t.Cleanup(func() { _ = upload.Close() })
+	req, _ := http.NewRequest(http.MethodPut, fmt.Sprintf("http://127.0.0.1:%d/v1/blobs/blake3/%s/10", state.Port, hash('c')), body)
+	req.ContentLength = 10
+	req.Header.Set("Authorization", "Bearer "+clientToken)
+	req.Header.Set(namespaceHeader, "123456")
+	go func() {
+		if resp, err := http.DefaultClient.Do(req); err == nil {
+			_ = resp.Body.Close()
+		}
+	}()
+	_, _ = upload.Write([]byte("hello"))
+	time.Sleep(200 * time.Millisecond)
+
+	err := stop(state, stateFile, clientToken)
+	if err == nil || !strings.Contains(err.Error(), "still in flight") {
+		t.Errorf("stop: %v, want the upload in flight reported", err)
+	}
+	select {
+	case err := <-served:
+		if err == nil {
+			t.Error("Serve returned nil after giving up on an upload")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the helper did not stop")
+	}
+}

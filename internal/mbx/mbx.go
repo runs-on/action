@@ -196,7 +196,7 @@ func Post(action *githubactions.Action) {
 		}
 	}
 	if err := stop(state, stateFile, os.Getenv("STATE_"+stateToken)); err != nil {
-		action.Warningf("mbx: could not stop the helper (PID %d): %v", state.PID, err)
+		action.Warningf("mbx: stopping the helper (PID %d): %v", state.PID, err)
 	}
 	_ = os.Remove(stateFile)
 }
@@ -226,7 +226,7 @@ func stop(state State, stateFile, clientToken string) error {
 			return nil
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("it did not stop within %s", drainTimeout)
+			return fmt.Errorf("requests were still in flight after %s, so an upload may not have been stored", drainTimeout)
 		}
 		time.Sleep(100 * time.Millisecond)
 	}

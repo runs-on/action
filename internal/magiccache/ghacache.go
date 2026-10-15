@@ -36,7 +36,7 @@ func NewCacheClient(resultsURL, token string) *CacheClient {
 	return &CacheClient{
 		baseURL: strings.TrimSuffix(resultsURL, "/") + "/",
 		token:   token,
-		http:    &http.Client{Transport: transport, Timeout: 5 * time.Minute},
+		http:    &http.Client{Transport: transport, Timeout: TransferTimeout},
 	}
 }
 
@@ -60,13 +60,15 @@ func IsForbidden(err error) bool {
 		twErr.Code == "permission_denied" || twErr.Code == "unauthenticated")
 }
 
-// callTimeout bounds one Twirp call: a cache that accepts connections but
-// stops answering must not hold up the go command for the HTTP client's
-// five-minute limit, which is sized for large blob transfers.
-const callTimeout = 15 * time.Second
+// TransferTimeout bounds one blob transfer, sized for large blobs.
+const TransferTimeout = 5 * time.Minute
+
+// CallTimeout bounds one Twirp call: a cache that accepts connections but
+// stops answering must not hold up the go command for TransferTimeout.
+const CallTimeout = 15 * time.Second
 
 func (c *CacheClient) call(ctx context.Context, method string, req, resp any) error {
-	ctx, cancel := context.WithTimeout(ctx, callTimeout)
+	ctx, cancel := context.WithTimeout(ctx, CallTimeout)
 	defer cancel()
 	body, err := json.Marshal(req)
 	if err != nil {

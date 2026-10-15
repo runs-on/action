@@ -63,6 +63,9 @@ jobs:
   magic-cache:
     needs: build
     uses: ./.github/workflows/test-magic-cache.yml
+  mbx:
+    needs: build
+    uses: ./.github/workflows/test-mbx.yml
   metrics:
     needs: build
     permissions:

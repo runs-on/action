@@ -15,6 +15,7 @@ import (
 	"github.com/runs-on/action/internal/gitproxy"
 	"github.com/runs-on/action/internal/gocacheprog"
 	"github.com/runs-on/action/internal/magiccache"
+	"github.com/runs-on/action/internal/mbx"
 	"github.com/runs-on/action/internal/monitoring"
 	"github.com/runs-on/action/internal/sccache"
 	"github.com/runs-on/action/internal/stickydisk"
@@ -127,6 +128,10 @@ func handleMainExecution(action *githubactions.Action, ctx context.Context) {
 		gocacheprog.Configure(action, cfg.GoCacheProg, cfg.HasMagicCache(), cfg.ActionsRuntimeToken)
 	}
 
+	if cfg.HasMbx() {
+		mbx.Configure(action, cfg.Mbx, cfg.HasMagicCache(), cfg.ActionsRuntimeToken)
+	}
+
 	// Configure sticky disk cache mounts (or restore-only mode) if requested
 	if cfg.ConfiguresStickyDisk() {
 		if err := stickydisk.Configure(action, stickydisk.Options{
@@ -192,6 +197,10 @@ func handlePostExecution(action *githubactions.Action, ctx context.Context) {
 		gocacheprog.SaveJobList(action, cfg.GoCacheProg)
 	}
 
+	if cfg.HasMbx() {
+		mbx.Post(action)
+	}
+
 	// Run cache mode post-job hooks (e.g. stop the Buildx builder) before the sticky
 	// disk is unmounted and snapshotted, then display usage
 	if cfg.HasStickyDiskCache() {
@@ -212,7 +221,16 @@ func main() {
 	goCacheProgFlag := flag.Bool(strings.TrimLeft(gocacheprog.Flag, "-"), false, "Serve the go command's build cache (internal, started by the go command through GOCACHEPROG)")
 	goCachePrefetchFlag := flag.Bool(strings.TrimLeft(gocacheprog.PrefetchFlag, "-"), false, "Download the build cache entries the job's previous run used (internal, started by the action)")
 	shareTestResultsFlag := flag.Bool(strings.TrimLeft(gocacheprog.ShareTestResultsFlag, "-"), false, "With --gocacheprog or --gocacheprog-prefetch, share test results between jobs too (internal)")
+	mbxServeFlag := flag.Bool(strings.TrimLeft(mbx.Flag, "-"), false, "Serve mbx's remote cache from Magic Cache (internal, started by the action)")
 	flag.Parse()
+
+	if *mbxServeFlag {
+		if err := mbx.Serve(ctx, os.Stdin); err != nil {
+			fmt.Fprintf(os.Stderr, "mbx helper: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	if *goCacheProgFlag {
 		if err := gocacheprog.Run(os.Stdin, os.Stdout, *shareTestResultsFlag); err != nil {

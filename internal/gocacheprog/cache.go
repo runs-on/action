@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/runs-on/action/internal/magiccache"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -92,7 +93,7 @@ type Options struct {
 type Cache struct {
 	opts   Options
 	disk   *diskStore
-	remote *ghaClient
+	remote *magiccache.CacheClient
 	// remoteDown stops remote lookups and uploads for this go command after a
 	// failure: a cache that times out or rejects the job's token would
 	// otherwise cost every lookup of the build a doomed request.
@@ -143,7 +144,7 @@ func New(opts Options) (*Cache, error) {
 	c := &Cache{opts: opts, disk: disk, used: map[[actionIDSize]byte]struct{}{}}
 	c.ctx, c.cancel = context.WithCancel(context.Background())
 	if opts.ResultsURL != "" && opts.Token != "" {
-		c.remote = newGHAClient(opts.ResultsURL, opts.Token)
+		c.remote = magiccache.NewCacheClient(opts.ResultsURL, opts.Token)
 		c.uploads = make(chan upload, uploadQueueSize)
 		for range opts.Concurrency {
 			go c.uploadLoop()
@@ -213,7 +214,7 @@ func (c *Cache) fetch(actionID []byte) bool {
 		if !c.remoteUp() {
 			return false, nil
 		}
-		body, ok, err := c.remote.open(c.ctx, c.version(actionID), c.key(actionID))
+		body, _, ok, err := c.remote.Open(c.ctx, c.version(actionID), c.key(actionID))
 		if err != nil {
 			c.remoteDown.Store(true)
 			return false, nil
@@ -277,7 +278,7 @@ func (c *Cache) Put(actionID, outputID, body []byte) (string, error) {
 func (c *Cache) uploadLoop() {
 	for u := range c.uploads {
 		if c.remoteUp() {
-			if err := c.uploadEntry(u); err != nil && !errors.Is(err, errEntryExists) {
+			if err := c.uploadEntry(u); err != nil && !errors.Is(err, magiccache.ErrEntryExists) {
 				c.remoteDown.Store(true)
 			}
 		}
@@ -304,7 +305,7 @@ func (c *Cache) uploadEntry(u upload) error {
 	header := binary.BigEndian.AppendUint64(bytes.Clone(magic), uint64(u.stored.UnixNano()))
 	header = append(header, u.outputID...)
 	body := io.MultiReader(bytes.NewReader(header), f)
-	return c.remote.upload(c.ctx, c.version(u.actionID), c.key(u.actionID), body, int64(len(header))+info.Size())
+	return c.remote.Upload(c.ctx, c.version(u.actionID), c.key(u.actionID), body, int64(len(header))+info.Size())
 }
 
 // Close implements Handler: it waits for pending uploads, within CloseTimeout.

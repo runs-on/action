@@ -1,0 +1,57 @@
+name: Test / mbx
+
+on:
+  workflow_call:
+
+jobs:
+  # Each leg starts the helper, builds a workspace with mbx and publishes it
+  # through Magic Cache.
+  mbx:
+    name: mbx (${{ matrix.leg }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - leg: linux
+            image: ubuntu24-full-x64
+          - leg: container
+            image: ubuntu24-full-x64
+            container: rust:1
+          - leg: windows
+            image: windows25-full-x64
+    runs-on: runs-on=${{ github.run_id }}/env=bootstrap/cpu=2/family=m7/image=${{ matrix.image }}/extras=s3-cache
+    container: ${{ matrix.container }}
+    env:
+      # The run's own objects: an earlier run's would make the uploads hits.
+      MBX_REMOTE_NAMESPACE: ${{ github.run_id }}-${{ matrix.leg }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/use-dist
+      - uses: ./
+        with:
+          mbx: true
+      - uses: jdx/mr-boxington-action@v1.7.2
+        with:
+          backend: remote
+      - uses: ./.github/actions/mbx-check
+
+  # Magic Cache answers a runner's own uploads straight from S3. Only another
+  # job goes through its lookup index and reads objects it did not write.
+  another-job:
+    name: mbx (another job)
+    needs: mbx
+    runs-on: runs-on=${{ github.run_id }}/env=bootstrap/cpu=2/family=m7/image=ubuntu24-full-x64/extras=s3-cache
+    env:
+      MBX_REMOTE_NAMESPACE: ${{ github.run_id }}-linux
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/use-dist
+      - uses: ./
+        with:
+          mbx: true
+      - uses: jdx/mr-boxington-action@v1.7.2
+        with:
+          backend: remote
+      - uses: ./.github/actions/mbx-check
+        with:
+          uploads: 'false'

@@ -21,6 +21,27 @@ func TestHasSccacheOnRunsOn(t *testing.T) {
 	}
 }
 
+func TestHasMbx(t *testing.T) {
+	t.Setenv("RUNS_ON_RUNNER_NAME", "linux-runner")
+	for _, tc := range []struct {
+		input string
+		want  bool
+	}{{"true", true}, {"", false}, {"false", false}} {
+		t.Setenv("INPUT_MBX", tc.input)
+		cfg, err := NewConfigFromInputs(githubactions.New())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := cfg.HasMbx(); got != tc.want {
+			t.Errorf("mbx %q: HasMbx() = %t, want %t", tc.input, got, tc.want)
+		}
+	}
+	t.Setenv("RUNS_ON_RUNNER_NAME", "")
+	if (&Config{Mbx: "true"}).HasMbx() {
+		t.Error("mbx was enabled outside RunsOn")
+	}
+}
+
 func TestStickyCacheInputs(t *testing.T) {
 	t.Setenv("INPUT_STICKY_CACHE", " go \n\n buildkit \n custom,path=vendor/cache ")
 	t.Setenv("INPUT_STICKY_WAIT_TIMEOUT", "90s")

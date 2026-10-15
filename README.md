@@ -399,6 +399,29 @@ Compiled packages are shared between jobs; test results are not. Within a job, t
 
 To share test results too, set `gocacheprog: with-tests`. A job then reports `(cached)` for a test that passed in another job with the same inputs: the package, its dependencies, and the files and environment variables the test read through the standard library. Go does not see a database, the network or a file read by a child process, so keep the default for tests that depend on those, or run them with `go test -count=1`. Jobs that use `true` never read the results that `with-tests` jobs share. What a passing test printed is stored with its result, so with `with-tests` it is readable by any job that can read the cache, including pull requests from forks: do not use it for tests that print secrets.
 
+### `mbx`
+
+Gives [mbx](https://github.com/jdx/mr-boxington) (Mr. Boxington) a remote cache in Magic Cache. The action starts a small helper in the job that serves [mbx's remote cache protocol](https://github.com/jdx/mr-boxington/blob/main/docs/protocol-compatibility.md#remote-cache-protocol) on `127.0.0.1` and keeps every object as a GitHub Actions cache entry, so GitHub's branch scoping applies, along with the stack's cache isolation: a pull request reads its base branch's objects and never writes them. Later steps get `MBX_REMOTE_URL`, `MBX_REMOTE_TOKEN` and, unless the job sets one, `MBX_REMOTE_NAMESPACE` (the repository's ID). There is nothing to deploy: the helper ends with the job.
+
+```yaml
+jobs:
+  build:
+    runs-on: runs-on=${{ github.run_id }}/runner=4cpu-linux-x64/extras=s3-cache
+    steps:
+      - uses: runs-on/action@v2
+        with:
+          mbx: true
+      - uses: actions/checkout@v7
+      - uses: jdx/mr-boxington-action@v1
+        with:
+          backend: remote # keeps the remote this action configured
+      - run: mbx build --workspace --locked
+```
+
+Requires Magic Cache (`extras=s3-cache`). Without it, the action warns and mbx keeps its local cache. Container jobs work too: the helper runs in the job container, where mbx reaches it.
+
+mbx decides what it publishes: only pushes to protected branches write to the remote, and every other job, pull requests included, only reads. Objects are content-addressed and stored once. mbx's action manifests, which drive its prefetch, are updated with conditional writes; two jobs that update the same manifest at once can lose one of the updates, which only costs prefetch coverage. The post step prints the helper's hits, misses and transfers, and its errors go to `$RUNNER_TEMP/runs-on-mbx.log`.
+
 ### `sticky_cache`
 
 Available for Linux and Windows runners on jobs with a sticky-disk label. Use `sticky=<size>` for the default snapshot lineage or `sticky=<name>:<size>` for a named lineage; the optional name must come first. Volume settings follow the size, for example `sticky=go-cache:20gb:gp3:750mbs:6000iops`. The `apt`, `buildkit`, and `git` cache modes are Linux only.

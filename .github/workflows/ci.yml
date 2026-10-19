@@ -49,22 +49,16 @@ jobs:
           if-no-files-found: error
           overwrite: true
 
-  # A pull request: main builds, then two pushes to the pull request.
+  # The configuration cache, kept by setup-gradle, across two jobs.
   cold:
     needs: build
     uses: ./.github/workflows/bench-gradle.yml
     with:
       phase: cold
-      variants: '["setup-gradle", "setup-gradle-magic"]'
-  pr1:
+      variants: '["cc-setup-gradle", "cc-setup-gradle-magic", "cc-setup-gradle-magic-varying"]'
+  warm:
     needs: cold
     uses: ./.github/workflows/bench-gradle.yml
     with:
-      phase: pr1
-      variants: '["setup-gradle", "setup-gradle-magic"]'
-  pr2:
-    needs: pr1
-    uses: ./.github/workflows/bench-gradle.yml
-    with:
-      phase: pr2
-      variants: '["setup-gradle", "setup-gradle-magic"]'
+      phase: warm
+      variants: '["cc-setup-gradle", "cc-setup-gradle-magic", "cc-setup-gradle-magic-varying"]'

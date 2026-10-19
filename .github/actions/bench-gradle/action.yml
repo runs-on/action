@@ -30,13 +30,30 @@ runs:
       uses: ./
       with:
         gradle_build_cache: "true"
+    # cc-* variants also keep the configuration cache, which setup-gradle
+    # saves only with an encryption key. Every job of a run derives the same.
+    - if: startsWith(inputs.variant, 'cc-')
+      shell: bash
+      env:
+        RUN_ID: ${{ github.run_id }}
+      run: echo "BENCH_CC_KEY=$(printf 'bench-%s' "${RUN_ID}" | sha256sum | cut -c1-32 | xxd -r -p | base64)" >> "${GITHUB_ENV}"
     # As on pull requests, setup-gradle only reads in the pr phases: the
     # main branch's cache.
-    - if: inputs.variant == 'setup-gradle' || inputs.variant == 'setup-gradle-magic'
+    - if: inputs.variant == 'setup-gradle' || inputs.variant == 'setup-gradle-magic' || startsWith(inputs.variant, 'cc-')
       uses: gradle/actions/setup-gradle@v6.4.0
       with:
         cache-read-only: ${{ startsWith(inputs.phase, 'pr') }}
+        cache-encryption-key: ${{ env.BENCH_CC_KEY }}
         add-job-summary: never
+    # Stands in for an init script that names a per-job cache URL, such as an
+    # agent-side cache's registered path: its content changes every job.
+    - if: endsWith(inputs.variant, '-varying')
+      shell: bash
+      env:
+        PHASE: ${{ inputs.phase }}
+      run: |
+        mkdir -p ~/.gradle/init.d
+        echo "// ${GITHUB_RUN_ID}-${PHASE}-${RANDOM}" > ~/.gradle/init.d/zz-runs-on-bench.gradle
     # Dependencies, wrapper and transforms from setup-gradle, task outputs
     # only from Magic Cache.
     - if: inputs.variant == 'magic-setup-gradle'
@@ -86,6 +103,7 @@ runs:
         echo "BUILD_STATUS=${status}" >> "${GITHUB_ENV}"
         echo "BUILD_TASKS=$(grep -E 'actionable tasks' build.log | tail -1)" >> "${GITHUB_ENV}"
         echo "BUILD_FROM_CACHE=$(grep -c ' FROM-CACHE$' build.log)" >> "${GITHUB_ENV}"
+        echo "BUILD_CC=$(grep -o -m1 -E 'Reusing configuration cache|Calculating task graph[^.]*' build.log)" >> "${GITHUB_ENV}"
         # Failed tasks run again in every setup; the job goes on so the warm
         # and edit phases run.
         grep -E "^> Task .* FAILED" build.log || true
@@ -99,11 +117,11 @@ runs:
         VARIANT: ${{ inputs.variant }}
         PHASE: ${{ inputs.phase }}
       run: |
-        row="| ${VARIANT} | ${PHASE} | ${WRAPPER_SECONDS:-?} | ${BUILD_SECONDS:-?} | ${BUILD_STATUS:-?} | ${BUILD_TASKS:-?} | ${BUILD_FROM_CACHE:-?} | ${BUILD_PROFILE:-} |"
+        row="| ${VARIANT} | ${PHASE} | ${WRAPPER_SECONDS:-?} | ${BUILD_SECONDS:-?} | ${BUILD_STATUS:-?} | ${BUILD_TASKS:-?} | ${BUILD_FROM_CACHE:-?} | ${BUILD_PROFILE:-} | ${BUILD_CC:-} |"
         echo "BENCH ${row}"
         {
-          echo "| variant | phase | wrapper s | build s | exit | tasks | FROM-CACHE | profile |"
-          echo "| --- | --- | --- | --- | --- | --- | --- | --- |"
+          echo "| variant | phase | wrapper s | build s | exit | tasks | FROM-CACHE | profile | configuration cache |"
+          echo "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"
           echo "${row}"
         } >> "${GITHUB_STEP_SUMMARY}"
         du -sh ~/.gradle/caches ~/.gradle/wrapper 2>/dev/null || true

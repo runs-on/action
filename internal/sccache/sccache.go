@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/runs-on/action/internal/magiccache"
 	"github.com/sethvargo/go-githubactions"
 )
 
@@ -41,15 +42,18 @@ func Configure(action *githubactions.Action, mode string, magicCache bool, runti
 	case modeMagicCache:
 		configureMagicCache(action, magicCache, runtimeToken)
 	case modeS3:
-		configureS3(action)
+		configureS3(action, magicCache)
 	default:
 		action.Warningf("sccache is %q, want %q or %q; sccache is not configured.", mode, modeMagicCache, modeS3)
 	}
 }
 
-// configureS3 points sccache directly at the RunsOn S3 cache bucket.
-func configureS3(action *githubactions.Action) {
-	action.Warningf("sccache: s3 bypasses Magic Cache's branch isolation. Use sccache: true with a WebDAV-enabled RunsOn agent for scoped caching.")
+// configureS3 points sccache directly at the RunsOn S3 cache bucket. Where
+// the agent serves sccache's WebDAV endpoint, it recommends sccache: true.
+func configureS3(action *githubactions.Action, magicCache bool) {
+	if magicCache && servesWebDAV(magiccache.URL()) {
+		action.Warningf("sccache: s3 writes straight to the S3 cache bucket, where every branch of the repository reads and writes the same entries, outside the stack's cache isolation. This runner's agent supports sccache: true, which stores the cache through Magic Cache with GitHub's branch scoping.")
+	}
 	// Get required environment variables for RunsOn S3 cache
 	bucket := os.Getenv("RUNS_ON_S3_BUCKET_CACHE")
 	region := os.Getenv("RUNS_ON_AWS_REGION")

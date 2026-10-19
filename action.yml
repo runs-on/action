@@ -27,7 +27,7 @@ inputs:
     required: false
     default: 'nvme0n1p1'
   sccache:
-    description: 'Set to "true" to cache compilations with sccache through Magic Cache: the action starts the sccache server with Magic Cache as its storage, and later steps get RUSTC_WRAPPER=sccache. Install sccache (0.10.0 or later) before this action. Requires Magic Cache (extras=s3-cache), and RunsOn v3.5.0 or later for sccache to write to it. Set to "s3" to have sccache write straight to the RunsOn S3 cache bucket instead; nothing may start the sccache server before this action then. On RunsOn v3.5.0 and later, "s3" warns and recommends "true". Empty or "false" disables it.'
+    description: 'Set to "true" to configure sccache with the RunsOn agent’s scoped WebDAV cache. Requires Magic Cache and a WebDAV-enabled agent. Install sccache before compiling; the action does not start or stop its server. Set to "s3" for direct S3 caching. Empty or "false" disables it.'
     required: false
     default: ''
   gocacheprog:

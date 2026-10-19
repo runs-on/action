@@ -4,9 +4,7 @@ on:
   workflow_call:
 
 jobs:
-  # sccache: true. Each leg installs sccache, lets the action start the
-  # sccache server with Magic Cache as its storage, uploads a crate and builds
-  # it again from Magic Cache.
+  # The action configures WebDAV; the first compiler starts its own daemon.
   magic-cache:
     name: Magic Cache (${{ matrix.leg }})
     strategy:
@@ -25,20 +23,18 @@ jobs:
     env:
       CARGO_INCREMENTAL: "0"
       # The job's own sccache namespace in Magic Cache.
-      SCCACHE_GHA_VERSION: ${{ github.run_id }}-${{ matrix.leg }}
+      SCCACHE_WEBDAV_KEY_PREFIX: ${{ github.run_id }}-${{ matrix.leg }}
     steps:
       - uses: actions/checkout@v6
       - if: ${{ !matrix.container }}
         uses: dtolnay/rust-toolchain@stable
-      # The action starts the sccache server, so sccache comes first. This
-      # installer does not export the job's runtime token.
-      - uses: taiki-e/install-action@v2.87.28
-        with:
-          tool: sccache@0.18.0
       - uses: ./.github/actions/use-dist
       - uses: ./
         with:
           sccache: true
+      - uses: taiki-e/install-action@v2.87.28
+        with:
+          tool: sccache@0.18.0
       - uses: ./.github/actions/sccache-check
 
   # Magic Cache answers a runner's own uploads straight from S3. Only another
@@ -49,17 +45,17 @@ jobs:
     runs-on: runs-on=${{ github.run_id }}/env=bootstrap/cpu=2/family=m7/image=ubuntu24-full-x64/extras=s3-cache
     env:
       CARGO_INCREMENTAL: "0"
-      SCCACHE_GHA_VERSION: ${{ github.run_id }}-linux
+      SCCACHE_WEBDAV_KEY_PREFIX: ${{ github.run_id }}-linux
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
-      - uses: taiki-e/install-action@v2.87.28
-        with:
-          tool: sccache@0.18.0
       - uses: ./.github/actions/use-dist
       - uses: ./
         with:
           sccache: true
+      - uses: taiki-e/install-action@v2.87.28
+        with:
+          tool: sccache@0.18.0
       - uses: ./.github/actions/sccache-check
         with:
           uploads: 'false'

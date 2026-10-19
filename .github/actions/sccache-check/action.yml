@@ -1,5 +1,5 @@
 name: Check sccache
-description: Builds a small crate through the sccache server runs-on/action started, and checks what went to and came from Magic Cache.
+description: Builds a small crate through the agent’s WebDAV cache, and checks what went to and came from Magic Cache.
 
 inputs:
   uploads:
@@ -10,7 +10,7 @@ runs:
   using: composite
   steps:
     # GitHub gives the job's runtime token to actions only. runs-on/action
-    # hands it to the sccache server it starts and must not export it.
+    # registers it with the agent and must not export it.
     - name: The runtime token is not in the steps' environment
       shell: bash
       run: |
@@ -20,33 +20,6 @@ runs:
         fi
         if [[ "${RUSTC_WRAPPER:-}" != sccache ]]; then
           echo "::error::RUSTC_WRAPPER is '${RUSTC_WRAPPER:-}', want sccache"
-          exit 1
-        fi
-    # The server holds the token, and not the action's inputs, which include
-    # a GitHub token. A job container's first process does not reap the
-    # sccache processes that started the server, and a zombie has no
-    # environment to read.
-    - name: The sccache server holds the token, not the action's inputs
-      if: runner.os == 'Linux'
-      shell: bash
-      run: |
-        servers=0
-        for proc in /proc/[0-9]*; do
-          [[ "$(cat "${proc}/comm" 2>/dev/null)" == sccache ]] || continue
-          env=$(tr '\0' '\n' < "${proc}/environ" 2>/dev/null) || continue
-          [[ -n "${env}" ]] || continue
-          servers=$((servers + 1))
-          if ! grep -q '^ACTIONS_RUNTIME_TOKEN=.' <<<"${env}"; then
-            echo "::error::the sccache server has no runtime token"
-            exit 1
-          fi
-          if grep -q '^INPUT_' <<<"${env}"; then
-            echo "::error::the sccache server has the action's inputs"
-            exit 1
-          fi
-        done
-        if [[ "${servers}" != 1 ]]; then
-          echo "::error::${servers} sccache processes are running, want the server alone"
           exit 1
         fi
     - name: Create a crate
@@ -99,7 +72,7 @@ runs:
           echo "::error::the C object did not come from Magic Cache"
           exit 1
         fi
-    # Each job has its own sccache namespace (SCCACHE_GHA_VERSION), so the
+    # Each job has its own sccache namespace (SCCACHE_WEBDAV_KEY_PREFIX), so the
     # first build of a run compiles and uploads every crate.
     - name: Build and upload
       if: inputs.uploads == 'true'
@@ -113,8 +86,8 @@ runs:
         # Only the JSON stats count the writes.
         json=$(sccache --show-stats --stats-format=json)
         count() { grep -oE "\"$1\":[0-9]+" <<<"${json}" | cut -d: -f2; }
-        if ! grep -q '^Cache location *ghac' stats.txt; then
-          echo "::error::sccache does not store its cache through the GitHub Actions cache backend"
+        if ! grep -q '^Cache location *webdav' stats.txt; then
+          echo "::error::sccache does not store its cache through the WebDAV backend"
           exit 1
         fi
         if [[ "$(count cache_write_errors)" != 0 ]]; then

@@ -321,7 +321,9 @@ Available on RunsOn Linux and Windows runners.
 
 Configures [`sccache`](https://github.com/mozilla/sccache) so that you can cache the compilation of C/C++ code, Rust, as well as NVIDIA's CUDA.
 
-`sccache: true` stores sccache's cache through Magic Cache, with [sccache's GitHub Actions cache backend](https://github.com/mozilla/sccache/blob/main/docs/GHA.md). Entries live in the stack's S3 cache bucket, with GitHub's branch scoping: a pull request reads its base branch's entries and writes only its own. The stack's cache isolation, when enabled, covers them.
+`sccache: true` points sccache's [WebDAV backend](https://github.com/mozilla/sccache/blob/main/docs/Webdav.md) at the RunsOn agent. The agent stores entries in the stack's S3 cache bucket with GitHub's branch scopes. A pull request reads its base branch's entries and writes only its own. Cache isolation, when enabled, also applies to these entries.
+
+This spike requires an agent built from the matching WebDAV branch. Released agents without this endpoint produce a warning and leave sccache unconfigured. It has been tested with sccache 0.18.0.
 
 ```yaml
 jobs:
@@ -331,26 +333,24 @@ jobs:
       CARGO_INCREMENTAL: "0"
     steps:
       - uses: actions/checkout@v7
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: sccache
-      - uses: runs-on/action@v2
+      - uses: runs-on/action@dist/auto/sccache-webdav-spike
         with:
           sccache: true
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: sccache@0.18.0
       - run: cargo build --release --locked
 ```
 
-The backend needs the job's runtime token, which GitHub gives to actions, not to `run` steps. So the action starts the sccache server itself, with the token in the server's environment only, and the server stays up for the whole job (`SCCACHE_IDLE_TIMEOUT=0`). Later steps get `RUSTC_WRAPPER=sccache`, and every sccache client of the job uses that server: Cargo through `RUSTC_WRAPPER`, and C and C++ builds through a compiler launcher, for example `cmake -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache`.
+The action registers the job's runtime token with the agent, then exports `SCCACHE_WEBDAV_ENDPOINT`, a masked `SCCACHE_WEBDAV_TOKEN`, and `RUSTC_WRAPPER=sccache`. Only the agent keeps the GitHub runtime token. The local credential expires with that token and works only for this agent's sccache endpoint.
 
-* Requires Magic Cache (`extras=s3-cache`), RunsOn v3.5.0 or later, and sccache 0.10.0 or later. Earlier RunsOn versions refuse sccache's writes: the action then warns, and sccache only reads from Magic Cache. Earlier sccache versions lack the cache API that Magic Cache serves, so the server does not start, and the action warns.
-* Install sccache before this action. The sccache server reads where to store its cache, the token included, once, when it starts. Only an action step has the token, so this action starts the server, and sccache must be on the `PATH` by then. Without sccache, Magic Cache or the runtime token, the action warns and does not configure sccache. `mozilla-actions/sccache-action` works too, but it exports the job's runtime token to the environment of every later step; `taiki-e/install-action` does not.
-* The server reads sccache's own settings, such as `SCCACHE_DIRECT` or `SCCACHE_LOG`, when it starts: set them for the job, or in an earlier step. Its errors go to `$RUNNER_TEMP/runs-on-sccache.log`, unless `SCCACHE_ERROR_LOG` names another file.
-* sccache keys its cache by its own version, so upgrading sccache starts from an empty cache. `SCCACHE_GHA_VERSION` adds a namespace of your own.
-* For Rust, disable incremental compilation as shown above.
+Install sccache before compiling. Its first client starts the compiler daemon in the job or container. The action never starts or stops it. It can exit and restart from a later step without a new action invocation. Configure the action before starting the daemon; restart an existing daemon yourself after changing its configuration.
+
+Use `SCCACHE_WEBDAV_KEY_PREFIX` for an additional namespace. Remove competing backend settings such as `SCCACHE_BUCKET`, which sccache prefers to WebDAV. For Rust, disable incremental compilation. C and C++ builds can use `cmake -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache`.
 
 #### `sccache: s3`
 
-`sccache: s3` auto-configures the [S3 cache backend for sccache](https://github.com/mozilla/sccache/blob/main/docs/S3.md) instead: sccache writes straight to the RunsOn S3 cache bucket, with the runner's instance role. On RunsOn v3.5.0 and later, it also warns and recommends `sccache: true`.
+`sccache: s3` auto-configures the [S3 cache backend for sccache](https://github.com/mozilla/sccache/blob/main/docs/S3.md) instead: sccache writes straight to the RunsOn S3 cache bucket, with the runner's instance role. It warns that direct S3 caching bypasses branch isolation.
 
 ```yaml
 jobs:

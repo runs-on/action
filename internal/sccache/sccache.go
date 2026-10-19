@@ -5,7 +5,6 @@ import (
 	"path"
 	"regexp"
 	"runtime"
-	"strconv"
 	"strings"
 
 	"github.com/sethvargo/go-githubactions"
@@ -48,14 +47,9 @@ func Configure(action *githubactions.Action, mode string, magicCache bool, runti
 	}
 }
 
-// configureS3 points sccache's S3 backend at the RunsOn S3 cache bucket. The
-// sccache server, started by its first client, uses the runner's instance
-// role. On a stack whose Magic Cache accepts sccache's writes, it recommends
-// sccache: true.
+// configureS3 points sccache directly at the RunsOn S3 cache bucket.
 func configureS3(action *githubactions.Action) {
-	if version := os.Getenv("RUNS_ON_VERSION"); atLeast(version, magicCacheSccache) {
-		action.Warningf("sccache: s3 writes straight to the S3 cache bucket, where every branch of the repository reads and writes the same entries, outside the stack's cache isolation. This stack runs RunsOn %s, which supports sccache: true: sccache then stores its cache through Magic Cache, with GitHub's branch scoping. Install sccache before this action to use it.", version)
-	}
+	action.Warningf("sccache: s3 bypasses Magic Cache's branch isolation. Use sccache: true with a WebDAV-enabled RunsOn agent for scoped caching.")
 	// Get required environment variables for RunsOn S3 cache
 	bucket := os.Getenv("RUNS_ON_S3_BUCKET_CACHE")
 	region := os.Getenv("RUNS_ON_AWS_REGION")
@@ -92,31 +86,6 @@ func configureS3(action *githubactions.Action) {
 	}
 
 	action.Infof("sccache S3 backend configured successfully!")
-}
-
-// magicCacheSccache is the first RunsOn release whose Magic Cache accepts
-// sccache's writes.
-var magicCacheSccache = [3]int{3, 5, 0}
-
-// atLeast reports whether a RunsOn version, such as v3.5.0 or v3.5.0-rc.2, is
-// want or later. Prereleases count as their release: Magic Cache accepts
-// sccache's writes since v3.5.0-rc.1. A version it cannot read is not.
-func atLeast(version string, want [3]int) bool {
-	core, _, _ := strings.Cut(strings.TrimPrefix(version, "v"), "-")
-	parts := strings.Split(core, ".")
-	if len(parts) != len(want) {
-		return false
-	}
-	for i, part := range parts {
-		n, err := strconv.Atoi(part)
-		if err != nil {
-			return false
-		}
-		if n != want[i] {
-			return n > want[i]
-		}
-	}
-	return true
 }
 
 // DefaultKeyPrefix builds the repository-scoped default prefix, for example

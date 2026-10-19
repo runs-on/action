@@ -1,0 +1,53 @@
+name: Test / gradle_build_cache
+
+on:
+  workflow_call:
+
+jobs:
+  # Each leg builds a one-module project through the remote build cache,
+  # empties Gradle's local build cache, and builds it again.
+  gradle:
+    name: gradle_build_cache (${{ matrix.leg }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - leg: linux
+            image: ubuntu24-full-x64
+          - leg: gradle-7.6
+            image: ubuntu24-full-x64
+            gradle: 7.6.4
+          - leg: container
+            image: ubuntu24-full-x64
+            container: eclipse-temurin:21-jdk
+          - leg: windows
+            image: windows25-full-x64
+    runs-on: runs-on=${{ github.run_id }}/env=bootstrap/cpu=2/family=m7/image=${{ matrix.image }}/extras=s3-cache
+    container: ${{ matrix.container }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/use-dist
+      - uses: ./
+        with:
+          gradle_build_cache: true
+      - uses: ./.github/actions/gradle-build-cache-check
+        with:
+          project: ${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.leg }}
+          gradle: ${{ matrix.gradle || '9.1.0' }}
+
+  # What a cache is for: a later job, on another runner, builds from what the
+  # linux leg uploaded.
+  another-job:
+    name: another job (linux)
+    needs: gradle
+    runs-on: runs-on=${{ github.run_id }}/env=bootstrap/cpu=2/family=m7/image=ubuntu24-full-x64/extras=s3-cache
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/use-dist
+      - uses: ./
+        with:
+          gradle_build_cache: true
+      - uses: ./.github/actions/gradle-build-cache-check
+        with:
+          project: ${{ github.run_id }}-${{ github.run_attempt }}-linux
+          uploads: 'false'

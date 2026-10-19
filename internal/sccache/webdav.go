@@ -14,23 +14,13 @@ import (
 // with the agent. The first compiler invocation starts sccache in the job's
 // own environment; the action does not require or manage a sccache process.
 func configureMagicCache(action *githubactions.Action, magicCache bool, runtimeToken string) {
-	if !magicCache {
-		action.Warningf("sccache: true needs Magic Cache; sccache is not configured.")
-		return
-	}
-	if runtimeToken == "" {
-		action.Warningf("sccache: true needs the job's ACTIONS_RUNTIME_TOKEN; sccache is not configured.")
-		return
-	}
-	tools, err := magiccache.Register(runtimeToken)
-	if err != nil {
-		action.Warningf("sccache: true could not register with the agent (%v); sccache is not configured.", err)
+	tools, ok := magiccache.RegisterFor(action, "sccache: true", "sccache is not configured", magicCache, runtimeToken)
+	if !ok {
 		return
 	}
 	if set := competingBackends(); len(set) > 0 {
 		action.Warningf("These settings make sccache use another storage than the agent's WebDAV cache: %s. Unset them for sccache: true to take effect.", strings.Join(set, ", "))
 	}
-	action.AddMask(tools.ID)
 	action.SetEnv("SCCACHE_GHA_ENABLED", "false")
 	action.SetEnv("SCCACHE_WEBDAV_ENDPOINT", tools.URL+"/sccache")
 	action.SetEnv("RUSTC_WRAPPER", "sccache")

@@ -1,0 +1,27 @@
+name: Tool caches served
+description: >
+  Tells whether the runner's RunsOn agent serves the tool caches (Bazel,
+  sccache, gocacheprog). It refuses a registration without a token with 401,
+  where agents before RunsOn v3.5.1 do not know the route. The bootstrap stack
+  runs the latest RunsOn release, so the suites check whichever it has.
+
+outputs:
+  served:
+    description: '"true" when the agent serves the tool caches, "false" otherwise.'
+    value: ${{ steps.probe.outputs.served }}
+
+runs:
+  using: composite
+  steps:
+    - id: probe
+      shell: bash
+      run: |
+        set -euo pipefail
+        cache_url="${RUNS_ON_MAGIC_CACHE_URL:-${ACTIONS_RESULTS_URL}}"
+        status=$(curl -s -o /dev/null -w '%{http_code}' -X POST "${cache_url%/}/tools")
+        echo "POST ${cache_url%/}/tools without a token: ${status}"
+        case "${status}" in
+          401) echo "served=true" >> "${GITHUB_OUTPUT}" ;;
+          404|405) echo "served=false" >> "${GITHUB_OUTPUT}" ;;
+          *) echo "::error::unexpected answer ${status}"; exit 1 ;;
+        esac

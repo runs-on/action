@@ -9,20 +9,35 @@ inputs:
 runs:
   using: composite
   steps:
+    - id: tools
+      uses: ./.github/actions/tool-caches-served
+    # An agent before RunsOn v3.5.1: runs-on/action warns and leaves sccache
+    # alone.
+    - name: Without the tool caches, sccache is left alone
+      if: steps.tools.outputs.served != 'true'
+      shell: bash
+      run: |
+        if [[ -n "${RUSTC_WRAPPER:-}" || -n "${SCCACHE_WEBDAV_ENDPOINT:-}" ]]; then
+          echo "::error::sccache is configured on an agent without the tool caches"
+          exit 1
+        fi
     # GitHub gives the job's runtime token to actions only. runs-on/action
     # registers it with the agent and must not export it.
     - name: The runtime token is not in the steps' environment
       shell: bash
+      env:
+        SERVED: ${{ steps.tools.outputs.served }}
       run: |
         if [[ -n "${ACTIONS_RUNTIME_TOKEN:-}" ]]; then
           echo "::error::the job's runtime token is in the environment of its run steps"
           exit 1
         fi
-        if [[ "${RUSTC_WRAPPER:-}" != sccache ]]; then
+        if [[ "${SERVED}" == true && "${RUSTC_WRAPPER:-}" != sccache ]]; then
           echo "::error::RUSTC_WRAPPER is '${RUSTC_WRAPPER:-}', want sccache"
           exit 1
         fi
     - name: Create a crate
+      if: steps.tools.outputs.served == 'true'
       shell: bash
       run: |
         mkdir -p "${RUNNER_TEMP}/sccache-check/src"
@@ -53,7 +68,7 @@ runs:
     # object is stored while the crate builds; a later job finds it in Magic
     # Cache.
     - name: Compile C through sccache
-      if: runner.os == 'Linux'
+      if: steps.tools.outputs.served == 'true' && (runner.os == 'Linux')
       shell: bash
       env:
         UPLOADS: ${{ inputs.uploads }}
@@ -75,7 +90,7 @@ runs:
     # Each job has its own sccache namespace (SCCACHE_WEBDAV_KEY_PREFIX), so the
     # first build of a run compiles and uploads every crate.
     - name: Build and upload
-      if: inputs.uploads == 'true'
+      if: steps.tools.outputs.served == 'true' && (inputs.uploads == 'true')
       shell: bash
       env:
         ATTEMPT: ${{ github.run_attempt }}
@@ -101,6 +116,7 @@ runs:
         fi
         cargo clean
     - name: Build from Magic Cache
+      if: steps.tools.outputs.served == 'true'
       shell: bash
       run: |
         cd "${RUNNER_TEMP}/sccache-check"

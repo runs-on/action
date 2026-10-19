@@ -29,26 +29,12 @@ runs:
         echo "${sum}  ${RUNNER_TEMP}/bazelisk/${bin}" | sha256sum -c -
         chmod +x "${RUNNER_TEMP}/bazelisk/${bin}"
         echo "${RUNNER_TEMP}/bazelisk" >> "${GITHUB_PATH}"
-    # An agent that serves the Bazel cache refuses a registration without a
-    # token; an older one has no such route. The bootstrap stack runs the
-    # latest RunsOn release, so this suite checks whichever it has.
-    - name: Does the agent serve the Bazel cache?
-      id: agent
-      shell: bash
-      run: |
-        set -euo pipefail
-        cache_url="${RUNS_ON_MAGIC_CACHE_URL:-${ACTIONS_RESULTS_URL}}"
-        status=$(curl -s -o /dev/null -w '%{http_code}' -X POST "${cache_url%/}/bazel")
-        echo "POST ${cache_url%/}/bazel without a token: ${status}"
-        case "${status}" in
-          401) echo "serves=true" >> "${GITHUB_OUTPUT}" ;;
-          404) echo "serves=false" >> "${GITHUB_OUTPUT}" ;;
-          *) echo "::error::unexpected answer ${status}"; exit 1 ;;
-        esac
+    - id: agent
+      uses: ./.github/actions/tool-caches-served
     - name: The system rc points Bazel at the agent only when it serves the cache
       shell: bash
       env:
-        SERVES: ${{ steps.agent.outputs.serves }}
+        SERVES: ${{ steps.agent.outputs.served }}
       run: |
         set -euo pipefail
         rc=/etc/bazel.bazelrc
@@ -56,7 +42,7 @@ runs:
           rc=/c/ProgramData/bazel.bazelrc
         fi
         configured=false
-        if grep -q '^common --remote_cache=http://.*/bazel/[0-9a-f]\{32\}$' "${rc}" 2>/dev/null; then
+        if grep -q '^common --remote_cache=http://.*/tools/[0-9a-f]\{32\}/bazel$' "${rc}" 2>/dev/null; then
           configured=true
         fi
         if [[ "${configured}" != "${SERVES}" ]]; then
@@ -91,7 +77,7 @@ runs:
       shell: bash
       env:
         USE_BAZEL_VERSION: ${{ inputs.bazel }}
-        SERVES: ${{ steps.agent.outputs.serves }}
+        SERVES: ${{ steps.agent.outputs.served }}
         ATTEMPT: ${{ github.run_attempt }}
       run: |
         set -euo pipefail
@@ -117,7 +103,7 @@ runs:
       shell: bash
       env:
         USE_BAZEL_VERSION: ${{ inputs.bazel }}
-        SERVES: ${{ steps.agent.outputs.serves }}
+        SERVES: ${{ steps.agent.outputs.served }}
       run: |
         set -euo pipefail
         cd "${RUNNER_TEMP}/bazel-remote-cache"

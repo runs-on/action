@@ -22,6 +22,16 @@ func TestConfigureExportsGOCACHEPROGOnlyWithMagicCacheAndAToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	const id = "0123456789abcdef0123456789abcdef"
+	agent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/tools" || r.Header.Get("Authorization") != "Bearer job-token" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		_, _ = w.Write([]byte(`{"path":"/tools/` + id + `"}`))
+	}))
+	defer agent.Close()
+	t.Setenv("RUNS_ON_MAGIC_CACHE_URL", agent.URL+"/")
 	started := startPrefetch
 	defer func() { startPrefetch = started }()
 	for _, tc := range []struct {
@@ -73,17 +83,24 @@ func TestConfigureExportsGOCACHEPROGOnlyWithMagicCacheAndAToken(t *testing.T) {
 			if strings.Contains(log.String(), "job-token") || strings.Contains(string(exported), "job-token") {
 				t.Errorf("the runtime token reached the log or the next steps' environment")
 			}
-			// The helper, started from a run step, reads the token Configure
-			// kept for it, in a file only the runner's user reads.
+			// The helper, started from a run step, reads the endpoint Configure
+			// kept for it, in a file only the runner's user reads: its path
+			// stands for the job's token.
 			wantStored := ""
 			if len(tc.want) > 0 {
-				wantStored = tc.token
+				wantStored = agent.URL + "/tools/" + id + "/gocacheprog"
+				if !strings.Contains(log.String(), "::add-mask::"+id) {
+					t.Errorf("the path ID is not masked in the job's logs")
+				}
 			}
-			if got := OptionsFromEnv(false).Token; got != wantStored {
-				t.Errorf("the helper's token is %q, want %q: the job's only when GOCACHEPROG is exported", got, wantStored)
+			if got := OptionsFromEnv(false).Endpoint; got != wantStored {
+				t.Errorf("the helper's endpoint is %q, want %q: the job's only when GOCACHEPROG is exported", got, wantStored)
 			}
-			if info, err := os.Stat(filepath.Join(os.Getenv("RUNNER_TEMP"), tokenFile)); err == nil && runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
-				t.Errorf("the token file has mode %v, want 0600", info.Mode().Perm())
+			if strings.Contains(string(exported), id) {
+				t.Errorf("the path ID reached the next steps' environment")
+			}
+			if info, err := os.Stat(filepath.Join(os.Getenv("RUNNER_TEMP"), endpointFile)); err == nil && runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
+				t.Errorf("the endpoint file has mode %v, want 0600", info.Mode().Perm())
 			}
 		})
 	}
@@ -133,35 +150,12 @@ func TestListKeyIsTheJobAcrossRuns(t *testing.T) {
 	}
 }
 
-func TestOptionsFromEnvUseTheMagicCacheURL(t *testing.T) {
-	for _, tc := range []struct {
-		name, magicCacheURL, resultsURL, want string
-	}{
-		{name: "a runner that points the results URL at Magic Cache", resultsURL: "http://10.0.0.1:6871/", want: "http://10.0.0.1:6871/"},
-		{name: "a custom runner's run step", magicCacheURL: "http://10.0.0.1:6871/", want: "http://10.0.0.1:6871/"},
-		{name: "a custom runner's action, if it sees another results URL", magicCacheURL: "http://10.0.0.1:6871/", resultsURL: "https://results.example.com/", want: "http://10.0.0.1:6871/"},
-		{name: "no cache service"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Setenv("RUNS_ON_MAGIC_CACHE_URL", tc.magicCacheURL)
-			t.Setenv("ACTIONS_RESULTS_URL", tc.resultsURL)
-			if got := OptionsFromEnv(false).ResultsURL; got != tc.want {
-				t.Errorf("cache service URL is %q, want %q", got, tc.want)
-			}
-		})
-	}
-}
-
 // A cache that accepts the list and then stops answering must not hold up
 // the action's post step.
 func TestSaveListGivesUpOnACacheThatStopsAnswering(t *testing.T) {
 	var srv *httptest.Server
 	stopped := make(chan struct{})
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost {
-			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "signedUploadUrl": srv.URL + "/blob"})
-			return
-		}
 		<-stopped
 	}))
 	defer srv.Close()
@@ -170,7 +164,7 @@ func TestSaveListGivesUpOnACacheThatStopsAnswering(t *testing.T) {
 	listUploadTimeout = 200 * time.Millisecond
 	defer func() { listUploadTimeout = timeout }()
 
-	opts := Options{Dir: t.TempDir(), ResultsURL: srv.URL, Token: "test-token", Namespace: "test"}
+	opts := Options{Dir: t.TempDir(), Endpoint: srv.URL + "/tools/test/gocacheprog", Namespace: "test"}
 	if err := os.WriteFile(filepath.Join(opts.Dir, usedFile), bytes.Repeat([]byte{1}, actionIDSize), 0o644); err != nil {
 		t.Fatal(err)
 	}

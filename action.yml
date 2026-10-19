@@ -27,11 +27,11 @@ inputs:
     required: false
     default: 'nvme0n1p1'
   sccache:
-    description: 'Set to "true" to configure sccache with the RunsOn agent’s scoped WebDAV cache. Requires Magic Cache and a WebDAV-enabled agent. Install sccache before compiling; the action does not start or stop its server. Set to "s3" for direct S3 caching. Empty or "false" disables it.'
+    description: 'Set to "true" to store sccache''s cache through Magic Cache, with GitHub''s branch scoping: later steps get RUSTC_WRAPPER=sccache and SCCACHE_WEBDAV_ENDPOINT, the RunsOn agent''s WebDAV cache for the job (tested with sccache 0.18). Install sccache before compiling. Requires Magic Cache and RunsOn v3.5.1 or later; otherwise the action warns and leaves sccache alone. Set to "s3" to have sccache write straight to the RunsOn S3 cache bucket. Empty or "false" disables it.'
     required: false
     default: ''
   gocacheprog:
-    description: 'Set to "true" to share the go command''s build cache (Go 1.24+) through Magic Cache: later steps get GOCACHEPROG, and the job prefetches what its previous run used. Test results are not shared between jobs; set to "with-tests" to share them too. Requires Magic Cache; otherwise the action warns and Go keeps its local build cache.'
+    description: 'Set to "true" to share the go command''s build cache (Go 1.24+) through Magic Cache, with GitHub''s branch scoping: later steps get GOCACHEPROG, and the job prefetches what its previous run used. Test results are not shared between jobs; set to "with-tests" to share them too. Requires Magic Cache and RunsOn v3.5.1 or later; otherwise the action warns and Go keeps its local build cache.'
     required: false
     default: 'false'
   bazel_remote_cache:

@@ -13,21 +13,21 @@ import (
 )
 
 func TestConfigureWritesTheRegisteredCacheIntoTheSystemRC(t *testing.T) {
-	const cachePath = "/bazel/0123456789abcdef0123456789abcdef"
+	const id = "0123456789abcdef0123456789abcdef"
 	agent := func(status int) *httptest.Server {
 		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			switch {
 			case status != http.StatusOK:
 				w.WriteHeader(status)
-			case r.Method != http.MethodPost || r.URL.Path != registerPath || r.Header.Get("Authorization") != "Bearer job-token":
+			case r.Method != http.MethodPost || r.URL.Path != "/tools" || r.Header.Get("Authorization") != "Bearer job-token":
 				w.WriteHeader(http.StatusUnauthorized)
 			default:
-				_, _ = w.Write([]byte(`{"path":"` + cachePath + `"}`))
+				_, _ = w.Write([]byte(`{"path":"/tools/` + id + `"}`))
 			}
 		}))
 	}
 	block := func(server *httptest.Server) string {
-		return blockStart + "\ncommon --remote_cache=" + server.URL + cachePath + "\n" + blockEnd + "\n"
+		return blockStart + "\ncommon --remote_cache=" + server.URL + "/tools/" + id + "/bazel\n" + blockEnd + "\n"
 	}
 
 	for _, tc := range []struct {
@@ -100,8 +100,8 @@ func TestConfigureWritesTheRegisteredCacheIntoTheSystemRC(t *testing.T) {
 			if warned != (tc.wantWarned != "") || !strings.Contains(log.String(), tc.wantWarned) {
 				t.Errorf("log %q, want a warning containing %q", log.String(), tc.wantWarned)
 			}
-			if tc.want != nil && !strings.Contains(log.String(), "::add-mask::"+server.URL+cachePath) {
-				t.Errorf("the cache URL is not masked in the job's logs: %q", log.String())
+			if tc.want != nil && !strings.Contains(log.String(), "::add-mask::"+id) {
+				t.Errorf("the cache path is not masked in the job's logs: %q", log.String())
 			}
 			if strings.Contains(string(got), "job-token") || strings.Contains(log.String(), "job-token") {
 				t.Error("the runtime token reached the system rc or the log")

@@ -226,7 +226,7 @@ func main() {
 
 	if *goCachePrefetchFlag {
 		opts := gocacheprog.OptionsFromEnv(*shareTestResultsFlag)
-		if err := gocacheprog.Prefetch(opts, gocacheprog.ListKey(opts.Token)); err != nil {
+		if err := gocacheprog.Prefetch(opts, gocacheprog.ListKey(os.Getenv("ACTIONS_RUNTIME_TOKEN"))); err != nil {
 			fmt.Fprintf(os.Stderr, "gocacheprog prefetch: %v\n", err)
 			os.Exit(1)
 		}

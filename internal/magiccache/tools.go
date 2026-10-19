@@ -9,6 +9,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/sethvargo/go-githubactions"
 )
 
 // ToolsPath is where the agent registers a job's runtime token for the tool
@@ -95,4 +97,30 @@ func ServesTools() bool {
 	}
 	_ = resp.Body.Close()
 	return resp.StatusCode == http.StatusUnauthorized
+}
+
+// RegisterFor registers the job for a tool cache, or warns why it cannot.
+// input names the action input, and fallback says what the job does instead,
+// for example "Bazel builds without the remote cache". The ID is masked in
+// the job's logs: it stands for the job's runtime token.
+func RegisterFor(action *githubactions.Action, input, fallback string, magicCache bool, runtimeToken string) (Tools, bool) {
+	if !magicCache {
+		action.Warningf("%s needs Magic Cache (extras=s3-cache, or a Fleet runner with Magic Cache); %s.", input, fallback)
+		return Tools{}, false
+	}
+	if runtimeToken == "" {
+		action.Warningf("%s needs the job's ACTIONS_RUNTIME_TOKEN, which this step did not receive; %s.", input, fallback)
+		return Tools{}, false
+	}
+	tools, err := Register(runtimeToken)
+	if errors.Is(err, ErrToolsNotServed) {
+		action.Warningf("%s needs RunsOn v3.5.1 or later, whose agent serves the tool caches; %s.", input, fallback)
+		return Tools{}, false
+	}
+	if err != nil {
+		action.Warningf("%s could not register the job with the RunsOn agent (%v); %s.", input, err, fallback)
+		return Tools{}, false
+	}
+	action.AddMask(tools.ID)
+	return tools, true
 }

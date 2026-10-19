@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/runs-on/action/internal/magiccache"
 	"github.com/sethvargo/go-githubactions"
 )
 
@@ -25,23 +26,21 @@ const (
 )
 
 // Configure exports GOCACHEPROG for the job's next steps: this binary, run
-// with Flag, serves the go command's build cache (Go 1.24+) through Magic
-// Cache. The helper needs the job's runtime token, which only actions
-// receive: Configure keeps it in a file for the helper instead of exporting
-// it. Without Magic Cache or a token, the go command keeps its local build
-// cache. It also starts, in the background, the download of the entries the
-// job's previous run used.
+// with Flag, serves the go command's build cache (Go 1.24+) through the RunsOn
+// agent's gocacheprog cache. The job's runtime token, which only actions
+// receive, is registered with the agent, whose answer is a cache path that
+// stands for it: Configure keeps that endpoint in a file for the helper
+// instead of exporting it. Without it, the go command keeps its local build
+// cache. Configure also starts, in the background, the download of the
+// entries the job's previous run used.
 func Configure(action *githubactions.Action, mode string, magicCache bool, runtimeToken string) {
 	if mode != modeBuilds && mode != modeWithTests {
 		action.Warningf("gocacheprog is %q, want %q or %q; the go command keeps its local build cache.", mode, modeBuilds, modeWithTests)
 		return
 	}
-	if !magicCache {
-		action.Warningf("gocacheprog needs Magic Cache (extras=s3-cache, or a Fleet runner with Magic Cache); the go command keeps its local build cache.")
-		return
-	}
-	if runtimeToken == "" {
-		action.Warningf("gocacheprog needs the job's ACTIONS_RUNTIME_TOKEN, which this step did not receive; the go command keeps its local build cache.")
+	const fallback = "the go command keeps its local build cache"
+	tools, ok := magiccache.RegisterFor(action, "gocacheprog", fallback, magicCache, runtimeToken)
+	if !ok {
 		return
 	}
 	self, err := os.Executable()
@@ -58,8 +57,8 @@ func Configure(action *githubactions.Action, mode string, magicCache bool, runti
 	if mode == modeWithTests {
 		command += " " + ShareTestResultsFlag
 	}
-	if err := StoreToken(runtimeToken); err != nil {
-		action.Warningf("gocacheprog could not keep the job's token for its helper (%v); the go command keeps its local build cache.", err)
+	if err := StoreEndpoint(tools.URL + "/gocacheprog"); err != nil {
+		action.Warningf("gocacheprog could not keep the cache endpoint for its helper (%v); %s.", err, fallback)
 		return
 	}
 	action.SetEnv("GOCACHEPROG", command)
@@ -99,7 +98,7 @@ var startPrefetch = func(self string, shareTestResults bool) error {
 // go commands used.
 func SaveJobList(action *githubactions.Action, mode string) {
 	opts := OptionsFromEnv(mode == modeWithTests)
-	saved, err := SaveList(opts, ListKey(opts.Token))
+	saved, err := SaveList(opts, ListKey(os.Getenv("ACTIONS_RUNTIME_TOKEN")))
 	if err != nil {
 		action.Warningf("gocacheprog could not save what this job used (%v); its next run prefetches what an earlier run used.", err)
 	} else if saved > 0 {

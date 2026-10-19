@@ -14,22 +14,22 @@ import (
 )
 
 func TestWebDAVRegistration(t *testing.T) {
-	credential := strings.Repeat("a", 64)
+	id := strings.Repeat("a", 32)
 	for _, tc := range []struct {
 		name    string
 		status  int
 		body    string
 		success bool
 	}{
-		{"available", 200, fmt.Sprintf(`{"token":%q}`, credential), true},
+		{"available", 200, fmt.Sprintf(`{"path":"/tools/%s"}`, id), true},
 		{"old agent", 404, "", false},
 		{"broker refusal", 403, "do-not-log-response-body", false},
 		{"redirect", 307, "", false},
-		{"malformed", 200, `{"token":"bad\ncredential"}`, false},
+		{"malformed", 200, `{"path":"/tools/bad\nid"}`, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.Method != "POST" || r.URL.Path != "/sccache" || r.Header.Get("Authorization") != "Bearer runtime-secret" {
+				if r.Method != "POST" || r.URL.Path != "/tools" || r.Header.Get("Authorization") != "Bearer runtime-secret" {
 					t.Error("invalid registration request")
 				}
 				w.Header().Set("Location", "/unexpected-redirect")
@@ -60,7 +60,7 @@ func TestWebDAVRegistration(t *testing.T) {
 				key, _, _ := strings.Cut(lines[i], "<<")
 				exports[key] = lines[i+1]
 			}
-			want := map[string]string{"SCCACHE_GHA_ENABLED": "false", "SCCACHE_WEBDAV_ENDPOINT": server.URL + "/sccache", "SCCACHE_WEBDAV_TOKEN": credential, "RUSTC_WRAPPER": "sccache"}
+			want := map[string]string{"SCCACHE_GHA_ENABLED": "false", "SCCACHE_WEBDAV_ENDPOINT": server.URL + "/tools/" + id + "/sccache", "RUSTC_WRAPPER": "sccache"}
 			if len(exports) != len(want) {
 				t.Fatalf("unexpected exports: %d", len(exports))
 			}
@@ -69,8 +69,8 @@ func TestWebDAVRegistration(t *testing.T) {
 					t.Errorf("incorrect %s", key)
 				}
 			}
-			if !strings.Contains(log.String(), "::add-mask::"+credential) {
-				t.Error("credential not masked")
+			if !strings.Contains(log.String(), "::add-mask::"+id) {
+				t.Error("the path ID is not masked")
 			}
 		})
 	}
@@ -80,7 +80,7 @@ func TestWebDAVRegistration(t *testing.T) {
 // of them would silently win over the agent's cache.
 func TestWebDAVWarnsAboutSettingsSccachePrefers(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = fmt.Fprintf(w, `{"token":%q}`, strings.Repeat("b", 64))
+		_, _ = fmt.Fprintf(w, `{"path":"/tools/%s"}`, strings.Repeat("b", 32))
 	}))
 	defer server.Close()
 	competing := []string{"SCCACHE_BUCKET", "SCCACHE_REDIS", "SCCACHE_REDIS_ENDPOINT", "SCCACHE_REDIS_CLUSTER_ENDPOINTS", "SCCACHE_MEMCACHED", "SCCACHE_MEMCACHED_ENDPOINT", "SCCACHE_GCS_BUCKET", "SCCACHE_GHA_VERSION", "SCCACHE_AZURE_BLOB_CONTAINER", "SCCACHE_GHA_ENABLED"}

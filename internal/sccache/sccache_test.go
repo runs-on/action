@@ -133,7 +133,7 @@ func TestDefaultKeyPrefixSpellsThePlatformConsistently(t *testing.T) {
 }
 
 // sccache: s3 recommends sccache: true only where it works: on an agent that
-// serves sccache's WebDAV endpoint.
+// serves the tool caches.
 func TestS3RecommendsMagicCacheWhereTheAgentServesIt(t *testing.T) {
 	t.Setenv("RUNS_ON_S3_BUCKET_CACHE", "test-cache-bucket")
 	t.Setenv("RUNS_ON_AWS_REGION", "us-east-1")
@@ -143,13 +143,13 @@ func TestS3RecommendsMagicCacheWhereTheAgentServesIt(t *testing.T) {
 		status     int
 		recommend  bool
 	}{
-		{name: "an agent with the WebDAV endpoint", magicCache: true, status: http.StatusUnauthorized, recommend: true},
+		{name: "an agent with the tool caches", magicCache: true, status: http.StatusUnauthorized, recommend: true},
 		{name: "an earlier agent", magicCache: true, status: http.StatusNotFound},
 		{name: "no Magic Cache", status: http.StatusUnauthorized},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			agent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.URL.Path != "/sccache/" || r.Header.Get("Authorization") != "" {
+				if r.Method != http.MethodPost || r.URL.Path != "/tools" || r.Header.Get("Authorization") != "" {
 					t.Errorf("unexpected probe %s %s", r.Method, r.URL.Path)
 				}
 				w.WriteHeader(tc.status)

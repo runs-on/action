@@ -31,8 +31,13 @@ const (
 const healthBody = "runs-on gradle build cache"
 
 // namespace versions the remote entries: a format change starts from an
-// empty cache.
-const namespace = "runs-on-gradle-v1"
+// empty cache. The benchmark gives each of its runs its own.
+var namespace = func() string {
+	if ns := os.Getenv("RUNS_ON_GRADLE_BENCH_NAMESPACE"); ns != "" {
+		return ns
+	}
+	return "runs-on-gradle-v1"
+}()
 
 // maxEntrySize keeps outsized entries out of the cache. Gradle takes 413 as
 // an entry the cache does not store, not as an error.

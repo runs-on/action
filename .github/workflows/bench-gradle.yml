@@ -1,0 +1,32 @@
+name: Bench / Gradle
+
+on:
+  workflow_call:
+    inputs:
+      phase:
+        type: string
+        required: true
+
+jobs:
+  # One job id for every phase: setup-gradle keys its cache by job id and
+  # matrix, so a warm job restores what the cold job of its leg saved. ns
+  # starts each run of the benchmark from empty caches.
+  nia:
+    name: ${{ inputs.phase }} ${{ matrix.variant }} ${{ matrix.rep }}
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [none, setup-gradle, sticky, magic, magic-setup-gradle]
+        rep: [1, 2]
+        ns: ["${{ github.run_id }}"]
+    runs-on: runs-on=${{ github.run_id }}/env=bootstrap/family=c7a.4xlarge/image=ubuntu24-full-x64/extras=s3-cache/spot=false${{ matrix.variant == 'sticky' && format('/sticky=nia-{0}-{1}:60gb', github.run_id, matrix.rep) || '' }}
+    timeout-minutes: 60
+    env:
+      RUNS_ON_GRADLE_BENCH_NAMESPACE: bench-${{ github.run_id }}-${{ matrix.variant }}-${{ matrix.rep }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/use-dist
+      - uses: ./.github/actions/bench-gradle
+        with:
+          variant: ${{ matrix.variant }}
+          phase: ${{ inputs.phase }}

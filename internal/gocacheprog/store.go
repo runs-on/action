@@ -45,16 +45,17 @@ func (c *storeClient) open(ctx context.Context, key string) (io.ReadCloser, bool
 	if err != nil {
 		return nil, false, err
 	}
-	switch resp.StatusCode {
-	case http.StatusOK:
+	if resp.StatusCode == http.StatusOK {
 		return resp.Body, true, nil
-	case http.StatusNotFound:
-		_ = resp.Body.Close()
-		return nil, false, nil
-	default:
-		_ = resp.Body.Close()
-		return nil, false, fmt.Errorf("read %s: HTTP %d", key, resp.StatusCode)
 	}
+	// Reading the short error body lets the connection serve the next
+	// request: a cold build misses thousands of times.
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+	_ = resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, false, nil
+	}
+	return nil, false, fmt.Errorf("read %s: HTTP %d", key, resp.StatusCode)
 }
 
 // put stores size bytes read from body as the entry key, replacing any.

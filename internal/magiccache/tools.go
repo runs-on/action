@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -155,5 +156,7 @@ func RegisterFor(action *githubactions.Action, input, fallback string, magicCach
 	}
 	action.AddMask(tools.ID)
 	action.SetEnv(ToolsURLEnv, tools.URL)
+	// This step's own children, such as gocacheprog's prefetch, see it too.
+	_ = os.Setenv(ToolsURLEnv, tools.URL)
 	return tools, true
 }

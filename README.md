@@ -417,7 +417,7 @@ jobs:
       - run: go build ./... && go test ./...
 ```
 
-Requires Magic Cache (`extras=s3-cache`) and RunsOn v3.6.0 or later, whose agent stores the entries (see [tool caches](#tool-caches)). Otherwise, the action warns and the go command keeps its local build cache. Container jobs work too: the runner mounts the action, and so the helper, into the job container. The helper reads the job's cache endpoint from a file in `RUNNER_TEMP` that only the runner's user can read; the runtime token reaches no run step.
+Requires Magic Cache (`extras=s3-cache`) and RunsOn v3.6.0 or later, whose agent stores the entries (see [tool caches](#tool-caches)). Otherwise, the action warns and the go command keeps its local build cache. Container jobs work too: the runner mounts the action, and so the helper, into the job container. The helper finds the job's tool caches in `RUNS_ON_TOOLS_URL`; the runtime token reaches no run step.
 
 Compiled packages are shared between jobs; test results are not. Within a job, tests whose inputs did not change are still reported as `(cached)`, but a new job runs its tests again, because a test can depend on things Go does not track, such as a database or the network.
 

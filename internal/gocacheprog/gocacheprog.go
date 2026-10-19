@@ -27,11 +27,10 @@ const (
 
 // Configure exports GOCACHEPROG for the job's next steps: this binary, run
 // with Flag, serves the go command's build cache (Go 1.24+) through the RunsOn
-// agent's gocacheprog cache. The job's runtime token, which only actions
+// agent's key/value cache. The job's runtime token, which only actions
 // receive, is registered with the agent, whose answer is a cache path that
-// stands for it: Configure keeps that endpoint in a file for the helper
-// instead of exporting it. Without it, the go command keeps its local build
-// cache. Configure also starts, in the background, the download of the
+// stands for it: the helper finds it in RUNS_ON_TOOLS_URL. Without it, the go
+// command keeps its local build cache. Configure also starts, in the background, the download of the
 // entries the job's previous run used.
 func Configure(action *githubactions.Action, mode string, magicCache bool, runtimeToken string) {
 	if mode != modeBuilds && mode != modeWithTests {
@@ -39,8 +38,7 @@ func Configure(action *githubactions.Action, mode string, magicCache bool, runti
 		return
 	}
 	const fallback = "the go command keeps its local build cache"
-	tools, ok := magiccache.RegisterFor(action, "gocacheprog", fallback, magicCache, runtimeToken)
-	if !ok {
+	if _, ok := magiccache.RegisterFor(action, "gocacheprog", fallback, magicCache, runtimeToken); !ok {
 		return
 	}
 	self, err := os.Executable()
@@ -56,10 +54,6 @@ func Configure(action *githubactions.Action, mode string, magicCache bool, runti
 	command := helper + " " + Flag
 	if mode == modeWithTests {
 		command += " " + ShareTestResultsFlag
-	}
-	if err := StoreEndpoint(tools.URL + "/kv/gocacheprog"); err != nil {
-		action.Warningf("gocacheprog could not keep the cache endpoint for its helper (%v); %s.", err, fallback)
-		return
 	}
 	action.SetEnv("GOCACHEPROG", command)
 	action.Infof("Set GOCACHEPROG=%s: the go command's build cache uses Magic Cache in the next steps.", command)

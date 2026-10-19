@@ -6,16 +6,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/runs-on/action/internal/magiccache"
 )
 
 // namespace versions the remote entry format: a change starts from an empty
 // cache.
 const namespace = "v1"
-
-// endpointFile holds the job's gocacheprog cache endpoint for the helper. Its
-// path is the job's credential. The file sits next to the local layer, not in
-// it, so emptying the layer keeps it.
-const endpointFile = "runs-on-gocacheprog-endpoint"
 
 // jobTemp is the directory the runner empties for each job, so the local
 // layer, and with it the test results that are only kept there, never
@@ -27,24 +24,17 @@ func jobTemp() string {
 	return os.TempDir()
 }
 
-// StoreEndpoint keeps the job's cache endpoint where the helper finds it, in
-// a file only the runner's user reads. The prefetch this step starts reads it
-// too, before RUNS_ON_TOOLS_URL reaches the job's environment.
-func StoreEndpoint(endpoint string) error {
-	path := filepath.Join(jobTemp(), endpointFile)
-	if err := os.WriteFile(path, []byte(endpoint), 0o600); err != nil {
-		return err
-	}
-	return os.Chmod(path, 0o600)
-}
-
 // OptionsFromEnv describes the job's cache from what its steps see: the
-// endpoint the action stored. Without it, the cache stays on local disk.
+// gocacheprog namespace of the tool caches the action registered, in
+// RUNS_ON_TOOLS_URL. Without it, the cache stays on local disk.
 func OptionsFromEnv(shareTestResults bool) Options {
-	stored, _ := os.ReadFile(filepath.Join(jobTemp(), endpointFile))
+	endpoint := ""
+	if base := strings.TrimSpace(os.Getenv(magiccache.ToolsURLEnv)); base != "" {
+		endpoint = strings.TrimSuffix(base, "/") + "/kv/gocacheprog"
+	}
 	return Options{
 		Dir:              filepath.Join(jobTemp(), "runs-on-gocacheprog"),
-		Endpoint:         strings.TrimSpace(string(stored)),
+		Endpoint:         endpoint,
 		Namespace:        namespace,
 		ShareTestResults: shareTestResults,
 	}

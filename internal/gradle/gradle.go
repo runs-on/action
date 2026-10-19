@@ -93,7 +93,7 @@ func Configure(action *githubactions.Action, mode string, magicCache bool, runti
 		action.Warningf("gradle_build_cache could not write %s (%v); Gradle builds without the remote cache.", script, err)
 		return
 	}
-	action.Infof("Wrote %s: Gradle builds in the next steps use the remote build cache on port %d, stored through Magic Cache, unless they configure their own.", script, listening)
+	action.Infof("Wrote %s: Gradle builds in the next steps that have the build cache on use the remote build cache on port %d, stored through Magic Cache, unless they configure their own.", script, listening)
 }
 
 // ensureServer returns the port of the job's server, which it starts unless
@@ -192,13 +192,16 @@ func initScriptPath() string {
 	return filepath.Join(home, "init.d", "runs-on-build-cache.gradle")
 }
 
-// initScript turns the build cache on and makes the server the build's
-// remote cache, unless the build configures an enabled remote cache of its
-// own. Included builds run it too, and Gradle ignores their configuration in
-// favor of the root build's, except for builds that provide plugins.
+// initScript makes the server the build's remote cache, unless the build
+// configures an enabled remote cache of its own. Included builds run it too,
+// and Gradle ignores their configuration in favor of the root build's, except
+// for builds that provide plugins. It leaves the build cache off where the
+// build has it off: turning it on here would also override --no-build-cache.
 const initScript = `// Written by runs-on/action (gradle_build_cache) for this job: a remote
 // build cache stored through RunsOn Magic Cache.
-gradle.startParameter.buildCacheEnabled = true
+if (!gradle.startParameter.buildCacheEnabled) {
+    logger.lifecycle("runs-on/action: the build cache is off for this build, so it does not use Magic Cache. Turn it on with org.gradle.caching=true in gradle.properties, or --build-cache.")
+}
 gradle.settingsEvaluated { settings ->
     def remote = settings.buildCache.remote
     if (remote != null && remote.enabled) {

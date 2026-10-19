@@ -401,7 +401,7 @@ To share test results too, set `gocacheprog: with-tests`. A job then reports `(c
 
 ### `gradle_build_cache`
 
-Gives Gradle a [remote build cache](https://docs.gradle.org/current/userguide/build_cache.html) stored through Magic Cache, with GitHub's branch scoping: a pull request reads its base branch's entries and writes only its own. The action serves Gradle's HTTP build cache protocol on the runner's loopback interface, and writes an init script into Gradle's user home (`~/.gradle/init.d`, or `$GRADLE_USER_HOME/init.d`) that turns the build cache on and points every build of the job at it. Gradle then takes the outputs of cacheable tasks, compilations and tests among them, from whatever job ran them first with the same inputs.
+Gives Gradle a [remote build cache](https://docs.gradle.org/current/userguide/build_cache.html) stored through Magic Cache, with GitHub's branch scoping: a pull request reads its base branch's entries and writes only its own. The action serves Gradle's HTTP build cache protocol on the runner's loopback interface, and writes an init script into Gradle's user home (`~/.gradle/init.d`, or `$GRADLE_USER_HOME/init.d`) that points every build of the job at it. Builds that have the build cache on, with `org.gradle.caching=true` in `gradle.properties` or `--build-cache`, then take the outputs of cacheable tasks, compilations and tests among them, from whatever job ran them first with the same inputs. A build that has it off says so in its output.
 
 ```yaml
 jobs:
@@ -412,7 +412,7 @@ jobs:
         with:
           gradle_build_cache: true
       - uses: actions/checkout@v5
-      - run: ./gradlew build
+      - run: ./gradlew build --build-cache
 ```
 
 Requires Magic Cache (`extras=s3-cache`). Without it, the action warns and Gradle builds without the remote cache. Gradle 7.6 to 9 are tested. A build that configures its own enabled remote cache, for example Develocity's, keeps it, and Gradle says so in its output; a disabled one is replaced.

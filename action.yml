@@ -35,7 +35,7 @@ inputs:
     required: false
     default: 'false'
   gradle_build_cache:
-    description: 'Set to "true" to give Gradle a remote build cache stored through Magic Cache: the action serves Gradle''s HTTP build cache on the runner''s loopback interface and writes an init script into Gradle''s user home that turns the build cache on and points builds at it, unless a build configures its own remote cache. Entries Gradle stores are uploaded in the background, and the post step waits for them. Requires Magic Cache; otherwise the action warns and Gradle builds without the remote cache.'
+    description: 'Set to "true" to give Gradle a remote build cache stored through Magic Cache: the action serves Gradle''s HTTP build cache on the runner''s loopback interface and writes an init script into Gradle''s user home that points builds at it, unless a build configures its own remote cache. Builds use it when they have the build cache on (org.gradle.caching=true or --build-cache). Entries Gradle stores are uploaded in the background, and the post step waits for them. Requires Magic Cache; otherwise the action warns and Gradle builds without the remote cache.'
     required: false
     default: 'false'
   sticky_cache:

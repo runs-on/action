@@ -21,8 +21,7 @@ runs:
         cache-disabled: true
         add-job-summary: never
     # One class holds the project's identity, so the first build of a run
-    # always has something to compile and upload. The project does not turn
-    # the build cache on: the action's init script does.
+    # always has something to compile and upload.
     - name: Create a project
       shell: bash
       env:
@@ -34,6 +33,7 @@ runs:
         mkdir -p "${dir}/src/main/java/check" "${dir}/src/test/java/check"
         cd "${dir}"
         echo "rootProject.name = 'check'" > settings.gradle
+        echo "org.gradle.caching=true" > gradle.properties
         cat > build.gradle <<'EOT'
         plugins { id 'java' }
         repositories { mavenCentral() }

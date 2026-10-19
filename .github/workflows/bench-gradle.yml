@@ -6,6 +6,9 @@ on:
       phase:
         type: string
         required: true
+      variants:
+        type: string
+        default: '["none", "setup-gradle", "sticky", "magic", "magic-setup-gradle"]'
 
 jobs:
   # One job id for every phase: setup-gradle keys its cache by job id and
@@ -16,7 +19,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        variant: [none, setup-gradle, sticky, magic, magic-setup-gradle]
+        variant: ${{ fromJSON(inputs.variants) }}
         rep: [1, 2]
         ns: ["${{ github.run_id }}"]
     runs-on: runs-on=${{ github.run_id }}/env=bootstrap/family=c7a.4xlarge/image=ubuntu24-full-x64/extras=s3-cache/spot=false${{ matrix.variant == 'sticky' && format('/sticky=nia-{0}-{1}:60gb', github.run_id, matrix.rep) || '' }}

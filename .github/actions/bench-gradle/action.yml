@@ -2,10 +2,10 @@ name: Bench Gradle
 description: Builds android/nowinandroid with one Gradle caching setup, and reports the build time and Gradle's task counts.
 inputs:
   variant:
-    description: none, setup-gradle, sticky, magic or magic-setup-gradle
+    description: none, setup-gradle, sticky, magic, magic-setup-gradle or setup-gradle-magic
     required: true
   phase:
-    description: cold, warm (same commit, fresh runner) or edit (a leaf module changed)
+    description: cold, warm (same commit, fresh runner), edit (a leaf module changed), pr1 (a core module's ABI changed) or pr2 (pr1 and a leaf change)
     required: true
 runs:
   using: composite
@@ -26,14 +26,16 @@ runs:
         echo "JAVA_HOME=${JAVA_HOME_21_X64}" >> "${GITHUB_ENV}"
         nproc; free -g; df -h / | tail -1
         echo "ANDROID_HOME=${ANDROID_HOME}"; ls "${ANDROID_HOME}/platforms" "${ANDROID_HOME}/build-tools"
-    - if: startsWith(inputs.variant, 'magic')
+    - if: contains(inputs.variant, 'magic')
       uses: ./
       with:
         gradle_build_cache: "true"
-    - if: inputs.variant == 'setup-gradle'
+    # As on pull requests, setup-gradle only reads in the pr phases: the
+    # main branch's cache.
+    - if: inputs.variant == 'setup-gradle' || inputs.variant == 'setup-gradle-magic'
       uses: gradle/actions/setup-gradle@v6.4.0
       with:
-        cache-read-only: false
+        cache-read-only: ${{ startsWith(inputs.phase, 'pr') }}
         add-job-summary: never
     # Dependencies, wrapper and transforms from setup-gradle, task outputs
     # only from Magic Cache.
@@ -47,8 +49,13 @@ runs:
       uses: ./
       with:
         sticky_cache: gradle
-    # A change in a leaf module that keeps its ABI, as most pull requests do.
-    - if: inputs.phase == 'edit'
+    # A change in a core module's ABI: its dependents compile again.
+    - if: startsWith(inputs.phase, 'pr')
+      shell: bash
+      run: |
+        echo 'fun runsOnBenchCore(): Int = 1' >> nia/core/model/src/main/kotlin/com/google/samples/apps/nowinandroid/core/model/data/NewsResource.kt
+    # A change in a leaf module that keeps its ABI.
+    - if: inputs.phase == 'edit' || inputs.phase == 'pr2'
       shell: bash
       run: |
         echo 'private fun runsOnBenchEdit(): Int = 42' >> nia/feature/foryou/impl/src/main/kotlin/com/google/samples/apps/nowinandroid/feature/foryou/impl/ForYouViewModel.kt

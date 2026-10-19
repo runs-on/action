@@ -49,24 +49,22 @@ jobs:
           if-no-files-found: error
           overwrite: true
 
+  # A pull request: main builds, then two pushes to the pull request.
   cold:
     needs: build
     uses: ./.github/workflows/bench-gradle.yml
     with:
       phase: cold
-  # A sticky disk's snapshot is selectable a while after its job ends.
-  wait-for-snapshot:
+      variants: '["setup-gradle", "setup-gradle-magic"]'
+  pr1:
     needs: cold
-    runs-on: ubuntu-slim
-    steps:
-      - run: sleep 150
-  warm:
-    needs: wait-for-snapshot
     uses: ./.github/workflows/bench-gradle.yml
     with:
-      phase: warm
-  edit:
-    needs: wait-for-snapshot
+      phase: pr1
+      variants: '["setup-gradle", "setup-gradle-magic"]'
+  pr2:
+    needs: pr1
     uses: ./.github/workflows/bench-gradle.yml
     with:
-      phase: edit
+      phase: pr2
+      variants: '["setup-gradle", "setup-gradle-magic"]'

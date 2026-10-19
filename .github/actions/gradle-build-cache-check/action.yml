@@ -15,6 +15,12 @@ inputs:
 runs:
   using: composite
   steps:
+    # RunsOn's Windows image has no JDK.
+    - if: runner.os == 'Windows'
+      uses: actions/setup-java@v5
+      with:
+        distribution: temurin
+        java-version: '21'
     - if: inputs.gradle != 'none'
       uses: gradle/actions/setup-gradle@v6.4.0
       with:

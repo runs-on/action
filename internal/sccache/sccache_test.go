@@ -2,6 +2,8 @@ package sccache
 
 import (
 	"bytes"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -21,9 +23,7 @@ func TestConfigureSccacheExportsResolvedPrefix(t *testing.T) {
 	envFile := filepath.Join(t.TempDir(), "env")
 	t.Setenv("GITHUB_ENV", envFile)
 	var log bytes.Buffer
-	if err := ConfigureSccache(githubactions.New(githubactions.WithWriter(&log)), "s3"); err != nil {
-		t.Fatal(err)
-	}
+	Configure(githubactions.New(githubactions.WithWriter(&log)), "s3", false, "")
 	data, err := os.ReadFile(envFile)
 	if err != nil {
 		t.Fatal(err)
@@ -129,5 +129,44 @@ func TestDefaultKeyPrefixSpellsThePlatformConsistently(t *testing.T) {
 	t.Setenv("RUNNER_ARCH", "")
 	if got := DefaultKeyPrefix(); got != withEnv && runtime.GOOS == "linux" && runtime.GOARCH == "amd64" {
 		t.Fatalf("DefaultKeyPrefix() = %q without platform env, want %q", got, withEnv)
+	}
+}
+
+// sccache: s3 recommends sccache: true only where it works: on an agent that
+// serves sccache's WebDAV endpoint.
+func TestS3RecommendsMagicCacheWhereTheAgentServesIt(t *testing.T) {
+	t.Setenv("RUNS_ON_S3_BUCKET_CACHE", "test-cache-bucket")
+	t.Setenv("RUNS_ON_AWS_REGION", "us-east-1")
+	for _, tc := range []struct {
+		name       string
+		magicCache bool
+		status     int
+		recommend  bool
+	}{
+		{name: "an agent with the WebDAV endpoint", magicCache: true, status: http.StatusUnauthorized, recommend: true},
+		{name: "an earlier agent", magicCache: true, status: http.StatusNotFound},
+		{name: "no Magic Cache", status: http.StatusUnauthorized},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			agent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/sccache/" || r.Header.Get("Authorization") != "" {
+					t.Errorf("unexpected probe %s %s", r.Method, r.URL.Path)
+				}
+				w.WriteHeader(tc.status)
+			}))
+			defer agent.Close()
+			t.Setenv("RUNS_ON_MAGIC_CACHE_URL", agent.URL+"/")
+			t.Setenv("GITHUB_ENV", filepath.Join(t.TempDir(), "env"))
+			var log bytes.Buffer
+
+			Configure(githubactions.New(githubactions.WithWriter(&log)), "s3", tc.magicCache, "")
+
+			if got := strings.Contains(log.String(), "supports sccache: true"); got != tc.recommend {
+				t.Errorf("recommends sccache: true: %v, want %v; log:\n%s", got, tc.recommend, log.String())
+			}
+			if exported, _ := os.ReadFile(os.Getenv("GITHUB_ENV")); !strings.Contains(string(exported), "SCCACHE_BUCKET") {
+				t.Errorf("sccache: s3 no longer exports SCCACHE_BUCKET: %q", exported)
+			}
+		})
 	}
 }

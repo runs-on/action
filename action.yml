@@ -27,7 +27,7 @@ inputs:
     required: false
     default: 'nvme0n1p1'
   sccache:
-    description: 'Enable sccache. Can take either "s3" (RunsOn S3 cache bucket) or be empty (disabled). You still need to setup sccache in your workflow, for instance with mozilla-actions/sccache-action.'
+    description: 'Set to "true" to configure sccache with the RunsOn agent’s scoped WebDAV cache. Requires Magic Cache and a WebDAV-enabled agent. Install sccache before compiling; the action does not start or stop its server. Set to "s3" for direct S3 caching. Empty or "false" disables it.'
     required: false
     default: ''
   gocacheprog:

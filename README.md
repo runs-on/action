@@ -321,9 +321,9 @@ Available on RunsOn Linux and Windows runners.
 
 Configures [`sccache`](https://github.com/mozilla/sccache) so that you can cache the compilation of C/C++ code, Rust, as well as NVIDIA's CUDA.
 
-The only parameter it can take for now is `s3`, which will auto-configure the [S3 cache backend for sccache](https://github.com/mozilla/sccache/blob/main/docs/S3.md), using the RunsOn S3 cache bucket that comes for free (with crazy speed and unlimited storage) with your RunsOn installation.
+`sccache: true` points sccache's [WebDAV backend](https://github.com/mozilla/sccache/blob/main/docs/Webdav.md) at the RunsOn agent. The agent stores entries in the stack's S3 cache bucket with GitHub's branch scopes. A pull request reads its base branch's entries and writes only its own. Cache isolation, when enabled, also applies to these entries.
 
-Example:
+This spike requires an agent built from the matching WebDAV branch. Released agents without this endpoint produce a warning and leave sccache unconfigured. It has been tested with sccache 0.18.0.
 
 ```yaml
 jobs:
@@ -332,20 +332,44 @@ jobs:
     env:
       CARGO_INCREMENTAL: "0"
     steps:
-      - uses: runs-on/action@v2
-        with:
-          sccache: s3
-      - uses: mozilla-actions/sccache-action@v0.0.11
       - uses: actions/checkout@v7
+      - uses: runs-on/action@dist/auto/sccache-webdav-spike
+        with:
+          sccache: true
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: sccache@0.18.0
       - run: cargo build --release --locked
 ```
 
-For Rust, disable incremental compilation as shown above. Run this action before the installer or any command that starts the sccache server: a running server keeps its startup configuration. This action exports settings; the separate installer supplies the executable.
+The action registers the job's runtime token with the agent, then exports `SCCACHE_WEBDAV_ENDPOINT`, a masked `SCCACHE_WEBDAV_TOKEN`, and `RUSTC_WRAPPER=sccache`. Only the agent keeps the GitHub runtime token. The local credential expires with that token and works only for this agent's sccache endpoint.
 
-Possible values:
+Install sccache before compiling. Its first client starts the compiler daemon in the job or container. The action never starts or stops it. It can exit and restart from a later step without a new action invocation. Configure the action before starting the daemon; restart an existing daemon yourself after changing its configuration.
 
-* `s3` - Use RunsOn S3 cache bucket for sccache backend
-* Empty string - Disable sccache configuration (default)
+Use `SCCACHE_WEBDAV_KEY_PREFIX` for an additional namespace. sccache ranks WebDAV below its S3, Redis, Memcached, GCS, GitHub Actions cache and Azure storages, so a setting for one of them, such as a `SCCACHE_BUCKET` left from `sccache: s3`, wins over the agent's cache: the action warns when it finds one. For Rust, disable incremental compilation. C and C++ builds can use `cmake -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache`.
+
+#### `sccache: s3`
+
+`sccache: s3` auto-configures the [S3 cache backend for sccache](https://github.com/mozilla/sccache/blob/main/docs/S3.md) instead: sccache writes straight to the RunsOn S3 cache bucket, with the runner's instance role. On an agent that serves sccache's WebDAV endpoint, it warns and recommends `sccache: true`, since direct S3 caching bypasses branch scoping and cache isolation.
+
+```yaml
+jobs:
+  build:
+    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/extras=s3-cache
+    env:
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: sccache
+      - uses: runs-on/action@v2
+        with:
+          sccache: s3
+      - run: cargo build --release --locked
+```
+
+For Rust, disable incremental compilation as shown above. This mode needs no secret, so the action only exports settings, and the first sccache client of a later step, such as Cargo through `RUSTC_WRAPPER`, starts the server, which reads them then. The installer can therefore run before or after this action, but nothing may start the sccache server before it: a running server keeps its startup configuration.
 
 What this does under the hood is the equivalent of:
 
@@ -365,7 +389,7 @@ cache/sccache/<repository id>/<runner os>-<runner arch>/v1
 
 The repository id is used rather than the `owner/name` slug so that renaming or transferring a repository does not invalidate its cache; the action falls back to the slug (as two key components, `<owner>/<name>`) when `GITHUB_REPOSITORY_ID` is not exposed. The trailing `v1` is a layout version, so a future change to the key layout can be rolled out without reusing existing objects.
 
-This is operational isolation, not a security boundary: repositories sharing a RunsOn stack still share the bucket and the runner IAM role. It provides per-repository cache ownership, growth and cost attribution, targeted invalidation, and freedom to change one repository's cache layout without touching the others.
+This is operational isolation, not a security boundary: repositories sharing a RunsOn stack still share the bucket and the runner IAM role, every branch of a repository reads and writes the same entries, and the stack's cache isolation does not cover them. It provides per-repository cache ownership, growth and cost attribution, targeted invalidation, and freedom to change one repository's cache layout without touching the others.
 
 Previously every repository on a stack shared the flat `cache/sccache` prefix. Moving to the scoped layout starts one cold cache per repository and platform. Objects written under the old prefix are left to the stack's cache lifecycle rule, which expires everything under `cache/` after `S3CacheExpirationInDays` (10 by default).
 

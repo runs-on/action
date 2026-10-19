@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/runs-on/action/internal/magiccache"
 	"github.com/sethvargo/go-githubactions"
 )
 
@@ -28,26 +29,43 @@ const (
 // component, so a surprising repository or platform value cannot reshape the key.
 var unsafeScopeChars = regexp.MustCompile(`[^a-z0-9._-]+`)
 
-// ConfigureSccache configures sccache with the appropriate backend.
-// Currently only supports "s3" backend for RunsOn S3 cache bucket.
-func ConfigureSccache(action *githubactions.Action, backend string) error {
-	if backend != "s3" {
-		action.Warningf("Unsupported sccache backend: %s. Only 's3' is currently supported.", backend)
-		return nil
-	}
+// The values of the sccache input.
+const (
+	modeMagicCache = "true"
+	modeS3         = "s3"
+)
 
+// Configure sets sccache up for the job's next steps. "true" stores its cache
+// through Magic Cache, "s3" straight in the RunsOn S3 cache bucket.
+func Configure(action *githubactions.Action, mode string, magicCache bool, runtimeToken string) {
+	switch mode {
+	case modeMagicCache:
+		configureMagicCache(action, magicCache, runtimeToken)
+	case modeS3:
+		configureS3(action, magicCache)
+	default:
+		action.Warningf("sccache is %q, want %q or %q; sccache is not configured.", mode, modeMagicCache, modeS3)
+	}
+}
+
+// configureS3 points sccache directly at the RunsOn S3 cache bucket. Where
+// the agent serves sccache's WebDAV endpoint, it recommends sccache: true.
+func configureS3(action *githubactions.Action, magicCache bool) {
+	if magicCache && servesWebDAV(magiccache.URL()) {
+		action.Warningf("sccache: s3 writes straight to the S3 cache bucket, where every branch of the repository reads and writes the same entries, outside the stack's cache isolation. This runner's agent supports sccache: true, which stores the cache through Magic Cache with GitHub's branch scoping.")
+	}
 	// Get required environment variables for RunsOn S3 cache
 	bucket := os.Getenv("RUNS_ON_S3_BUCKET_CACHE")
 	region := os.Getenv("RUNS_ON_AWS_REGION")
 
 	if bucket == "" {
 		action.Errorf("RUNS_ON_S3_BUCKET_CACHE environment variable is not set. sccache S3 backend requires this.")
-		return nil
+		return
 	}
 
 	if region == "" {
 		action.Errorf("RUNS_ON_AWS_REGION environment variable is not set. sccache S3 backend requires this.")
-		return nil
+		return
 	}
 
 	prefix := DefaultKeyPrefix()
@@ -72,7 +90,6 @@ func ConfigureSccache(action *githubactions.Action, backend string) error {
 	}
 
 	action.Infof("sccache S3 backend configured successfully!")
-	return nil
 }
 
 // DefaultKeyPrefix builds the repository-scoped default prefix, for example

@@ -3,10 +3,22 @@ package magiccache
 import (
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 
 	"github.com/sethvargo/go-githubactions"
 )
+
+// URL is the address of Magic Cache's GitHub Actions cache service, as the
+// job's steps see it. Custom runners name it RUNS_ON_MAGIC_CACHE_URL, and it
+// comes first: whatever reads the cache must use the same service as what
+// writes it. The others point ACTIONS_RESULTS_URL at Magic Cache.
+func URL() string {
+	if magicCacheURL := os.Getenv("RUNS_ON_MAGIC_CACHE_URL"); magicCacheURL != "" {
+		return magicCacheURL
+	}
+	return os.Getenv("ACTIONS_RESULTS_URL")
+}
 
 // UpdateZctionsConfig sends the original GitHub backend URLs and runtime token
 // to the local RunsOn cache service. The token is intentionally never logged.

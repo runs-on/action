@@ -185,15 +185,13 @@ func TestGoCommandSharesBuildsButNotTestResults(t *testing.T) {
 		if shareTests {
 			prog += " --share-test-results"
 		}
-		// As in a job: the action kept the cache endpoint in a file for the
-		// helper, and run steps do not have the runtime token.
+		// As in a job: run steps have the registered tool caches in
+		// RUNS_ON_TOOLS_URL, and not the runtime token.
 		if err := os.MkdirAll(home, 0o755); err != nil {
 			t.Fatal(err)
 		}
 		t.Setenv("RUNNER_TEMP", home)
-		if err := gocacheprog.StoreEndpoint(cacheEndpoint); err != nil {
-			t.Fatal(err)
-		}
+		t.Setenv("RUNS_ON_TOOLS_URL", strings.TrimSuffix(cacheEndpoint, "/kv/gocacheprog"))
 		stepEnv := slices.DeleteFunc(os.Environ(), func(kv string) bool { return strings.HasPrefix(kv, "ACTIONS_RUNTIME_TOKEN=") })
 		cmd := exec.Command(goBin, args...)
 		cmd.Dir = module
@@ -225,9 +223,7 @@ func TestGoCommandSharesBuildsButNotTestResults(t *testing.T) {
 		if err := os.MkdirAll(filepath.Join(tmp, job), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if err := gocacheprog.StoreEndpoint(endpoint(srv, testID)); err != nil {
-			t.Fatal(err)
-		}
+		t.Setenv("RUNS_ON_TOOLS_URL", strings.TrimSuffix(endpoint(srv, testID), "/kv/gocacheprog"))
 		return gocacheprog.OptionsFromEnv(false)
 	}
 	startJob := func(job string) {

@@ -8,7 +8,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -55,6 +54,7 @@ func TestConfigureExportsGOCACHEPROGOnlyWithMagicCacheAndAToken(t *testing.T) {
 			t.Setenv("GITHUB_ENV", envFile)
 			t.Setenv("RUNNER_TEMP", t.TempDir())
 			t.Setenv("ACTIONS_RUNTIME_TOKEN", "")
+			t.Setenv("RUNS_ON_TOOLS_URL", "")
 			var log bytes.Buffer
 			var prefetches []bool
 			startPrefetch = func(_ string, shareTestResults bool) error {
@@ -83,9 +83,8 @@ func TestConfigureExportsGOCACHEPROGOnlyWithMagicCacheAndAToken(t *testing.T) {
 			if strings.Contains(log.String(), "job-token") || strings.Contains(string(exported), "job-token") {
 				t.Errorf("the runtime token reached the log or the next steps' environment")
 			}
-			// The helper, started from a run step, reads the endpoint Configure
-			// kept for it, in a file only the runner's user reads: its path
-			// stands for the job's token.
+			// The helper, started from a run step, finds the job's tool caches
+			// in RUNS_ON_TOOLS_URL: its path stands for the job's token.
 			wantStored := ""
 			if len(tc.want) > 0 {
 				wantStored = agent.URL + "/tools/" + id + "/kv/gocacheprog"
@@ -100,9 +99,6 @@ func TestConfigureExportsGOCACHEPROGOnlyWithMagicCacheAndAToken(t *testing.T) {
 			// configure themselves; never the token.
 			if len(tc.want) > 0 && !strings.Contains(string(exported), "RUNS_ON_TOOLS_URL") {
 				t.Errorf("exported env %q lacks RUNS_ON_TOOLS_URL", exported)
-			}
-			if info, err := os.Stat(filepath.Join(os.Getenv("RUNNER_TEMP"), endpointFile)); err == nil && runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
-				t.Errorf("the endpoint file has mode %v, want 0600", info.Mode().Perm())
 			}
 		})
 	}

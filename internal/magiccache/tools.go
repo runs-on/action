@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sethvargo/go-githubactions"
@@ -99,6 +100,31 @@ func ServesTools() bool {
 	return resp.StatusCode == http.StatusUnauthorized
 }
 
+// registrations keeps, per agent and runtime token, the outcome of this process's
+// registration: the tool inputs of one action step share it, so an agent
+// that stops answering costs one timeout, not one per tool.
+var registrations = struct {
+	sync.Mutex
+	byToken map[string]registration
+}{byToken: map[string]registration{}}
+
+type registration struct {
+	tools Tools
+	err   error
+}
+
+func registerOnce(runtimeToken string) (Tools, error) {
+	key := URL() + "\x00" + runtimeToken
+	registrations.Lock()
+	defer registrations.Unlock()
+	if done, ok := registrations.byToken[key]; ok {
+		return done.tools, done.err
+	}
+	tools, err := Register(runtimeToken)
+	registrations.byToken[key] = registration{tools, err}
+	return tools, err
+}
+
 // RegisterFor registers the job for a tool cache, or warns why it cannot.
 // input names the action input, and fallback says what the job does instead,
 // for example "Bazel builds without the remote cache". The ID is masked in
@@ -112,9 +138,9 @@ func RegisterFor(action *githubactions.Action, input, fallback string, magicCach
 		action.Warningf("%s needs the job's ACTIONS_RUNTIME_TOKEN, which this step did not receive; %s.", input, fallback)
 		return Tools{}, false
 	}
-	tools, err := Register(runtimeToken)
+	tools, err := registerOnce(runtimeToken)
 	if errors.Is(err, ErrToolsNotServed) {
-		action.Warningf("%s needs RunsOn v3.5.1 or later, whose agent serves the tool caches; %s.", input, fallback)
+		action.Warningf("%s needs RunsOn v3.6.0 or later, whose agent serves the tool caches; %s.", input, fallback)
 		return Tools{}, false
 	}
 	if err != nil {

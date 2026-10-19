@@ -323,7 +323,7 @@ Configures [`sccache`](https://github.com/mozilla/sccache) so that you can cache
 
 `sccache: true` points sccache's [WebDAV backend](https://github.com/mozilla/sccache/blob/main/docs/Webdav.md) at the RunsOn agent. The agent stores entries in the stack's S3 cache bucket with GitHub's branch scopes. A pull request reads its base branch's entries and writes only its own. Cache isolation, when enabled, also applies to these entries.
 
-Requires Magic Cache (`extras=s3-cache`) and RunsOn v3.5.1 or later; otherwise the action warns and leaves sccache unconfigured. sccache has had a WebDAV storage since 0.4.0; this is tested with 0.18.0.
+Requires Magic Cache (`extras=s3-cache`) and RunsOn v3.6.0 or later; otherwise the action warns and leaves sccache unconfigured. sccache has had a WebDAV storage since 0.4.0; this is tested with 0.18.0.
 
 ```yaml
 jobs:
@@ -417,7 +417,7 @@ jobs:
       - run: go build ./... && go test ./...
 ```
 
-Requires Magic Cache (`extras=s3-cache`) and RunsOn v3.5.1 or later, whose agent stores the entries (see [tool caches](#tool-caches)). Otherwise, the action warns and the go command keeps its local build cache. Container jobs work too: the runner mounts the action, and so the helper, into the job container. The helper reads the job's cache endpoint from a file in `RUNNER_TEMP` that only the runner's user can read; the runtime token reaches no run step.
+Requires Magic Cache (`extras=s3-cache`) and RunsOn v3.6.0 or later, whose agent stores the entries (see [tool caches](#tool-caches)). Otherwise, the action warns and the go command keeps its local build cache. Container jobs work too: the runner mounts the action, and so the helper, into the job container. The helper reads the job's cache endpoint from a file in `RUNNER_TEMP` that only the runner's user can read; the runtime token reaches no run step.
 
 Compiled packages are shared between jobs; test results are not. Within a job, tests whose inputs did not change are still reported as `(cached)`, but a new job runs its tests again, because a test can depend on things Go does not track, such as a database or the network.
 
@@ -439,13 +439,13 @@ jobs:
       - run: bazel test //... --remote_download_minimal
 ```
 
-Requires Magic Cache (`extras=s3-cache`) and RunsOn v3.5.1 or later. Otherwise, the action warns and Bazel builds without the remote cache. `--remote_download_minimal` skips downloading outputs that later actions do not need, which matters most on warm builds.
+Requires Magic Cache (`extras=s3-cache`) and RunsOn v3.6.0 or later. Otherwise, the action warns and Bazel builds without the remote cache. `--remote_download_minimal` skips downloading outputs that later actions do not need, which matters most on warm builds.
 
 Bazel's HTTP cache client sends no credentials, so the action registers the job's runtime token with the RunsOn agent (see [tool caches](#tool-caches)). The rc gets `common --remote_cache=http://<runner IP>:6871/tools/<id>/bazel`, in `/etc/bazel.bazelrc` (with `sudo`), or `%ProgramData%\bazel.bazelrc` on Windows. In a container job, the action writes the container's system rc, which needs root or passwordless `sudo` in the container; without either, it warns.
 
 ### Tool caches
 
-`sccache: true`, `gocacheprog` and `bazel_remote_cache` store their entries through the RunsOn agent's tool caches (RunsOn v3.5.1 or later), in the stack's S3 cache bucket with GitHub's branch scoping, under the stack's cache isolation when it is enabled. None of these tools sends a GitHub token, so the action sends the job's runtime token to the agent once (`POST /tools`), and the agent answers with a path, `/tools/<id>`, that stands for it: the same token always gets the same path, nothing without the token can compute it, and it works on this runner only, until the token expires. The action masks `<id>` in the job's logs. Each tool gets its own base under that path: `/bazel`, `/sccache` and `/gocacheprog`. On an older agent, the action warns and leaves the tools alone.
+`sccache: true`, `gocacheprog` and `bazel_remote_cache` store their entries through the RunsOn agent's tool caches (RunsOn v3.6.0 or later), in the stack's S3 cache bucket with GitHub's branch scoping, under the stack's cache isolation when it is enabled. None of these tools sends a GitHub token, so the action sends the job's runtime token to the agent once (`POST /tools`), and the agent answers with a path, `/tools/<id>`, that stands for it: the same token always gets the same path, nothing without the token can compute it, and it works on this runner only, until the token expires. The action masks `<id>` in the job's logs. Each tool gets its own base under that path: `/bazel`, `/sccache` and `/gocacheprog`. On an older agent, the action warns and leaves the tools alone.
 
 ### `sticky_cache`
 

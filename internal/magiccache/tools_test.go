@@ -2,10 +2,13 @@ package magiccache
 
 import (
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/sethvargo/go-githubactions"
 )
 
 // The agent's registration contract: POST /tools with the runtime token
@@ -73,5 +76,26 @@ func TestServesTools(t *testing.T) {
 			t.Errorf("ServesTools on an agent answering %d = %v, want %v", status, got, want)
 		}
 		agent.Close()
+	}
+}
+
+// The tool inputs of one action step share its registration: an agent that
+// stops answering costs one timeout, not one per tool.
+func TestRegisterForRegistersOncePerAgentAndToken(t *testing.T) {
+	var posts int
+	agent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		posts++
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer agent.Close()
+	t.Setenv("RUNS_ON_MAGIC_CACHE_URL", agent.URL+"/")
+	action := githubactions.New(githubactions.WithWriter(io.Discard))
+	for _, input := range []string{"bazel_remote_cache", "sccache: true", "gocacheprog"} {
+		if _, ok := RegisterFor(action, input, "no cache", true, "shared-token"); ok {
+			t.Fatalf("%s registered with an agent that refuses", input)
+		}
+	}
+	if posts != 1 {
+		t.Errorf("the agent got %d registrations, want 1", posts)
 	}
 }

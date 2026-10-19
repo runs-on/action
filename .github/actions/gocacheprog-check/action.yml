@@ -17,7 +17,7 @@ runs:
   steps:
     - id: tools
       uses: ./.github/actions/tool-caches-served
-    # An agent before RunsOn v3.5.1: runs-on/action warns and the go command
+    # An agent before RunsOn v3.6.0: runs-on/action warns and the go command
     # keeps its local build cache.
     - name: Without the tool caches, GOCACHEPROG is not set
       if: steps.tools.outputs.served != 'true'

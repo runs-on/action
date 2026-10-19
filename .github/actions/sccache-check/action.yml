@@ -11,7 +11,7 @@ runs:
   steps:
     - id: tools
       uses: ./.github/actions/tool-caches-served
-    # An agent before RunsOn v3.5.1: runs-on/action warns and leaves sccache
+    # An agent before RunsOn v3.6.0: runs-on/action warns and leaves sccache
     # alone.
     - name: Without the tool caches, sccache is left alone
       if: steps.tools.outputs.served != 'true'

@@ -2,7 +2,7 @@ name: Tool caches served
 description: >
   Tells whether the runner's RunsOn agent serves the tool caches (Bazel,
   sccache, gocacheprog). It refuses a registration without a token with 401,
-  where agents before RunsOn v3.5.1 do not know the route. The bootstrap stack
+  where agents before RunsOn v3.6.0 do not know the route. The bootstrap stack
   runs the latest RunsOn release, so the suites check whichever it has.
 
 outputs:

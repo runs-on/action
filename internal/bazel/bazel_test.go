@@ -51,7 +51,7 @@ func TestConfigureWritesTheRegisteredCacheIntoTheSystemRC(t *testing.T) {
 			existing: "build --jobs=8\n" + blockStart + "\ncommon --remote_cache=http://10.0.0.9:6871/bazel/old\n" + blockEnd + "\n",
 			want:     func(s *httptest.Server) string { return "build --jobs=8\n" + block(s) },
 		},
-		{name: "agent without the Bazel cache", status: http.StatusNotFound, existing: "build --jobs=8\n", wantWarned: "v3.5.1"},
+		{name: "agent without the Bazel cache", status: http.StatusNotFound, existing: "build --jobs=8\n", wantWarned: "v3.6.0"},
 		{name: "agent refuses the token", status: http.StatusUnauthorized, wantWarned: "401"},
 		{name: "no Magic Cache", noMagic: true, wantWarned: "needs Magic Cache"},
 		{name: "no runtime token", token: "-", wantWarned: "ACTIONS_RUNTIME_TOKEN"},

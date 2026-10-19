@@ -51,7 +51,10 @@ func (c *storeClient) open(ctx context.Context, key string) (io.ReadCloser, bool
 	// Reading the short error body lets the connection serve the next
 	// request: a cold build misses thousands of times. A body that fails to
 	// arrive is an error, which stops remote lookups, not a miss.
+	// Its deadline is the lookup's, not the transfer's.
+	stall := time.AfterFunc(callTimeout, func() { _ = resp.Body.Close() })
 	_, drainErr := io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+	stall.Stop()
 	_ = resp.Body.Close()
 	if drainErr != nil {
 		return nil, false, fmt.Errorf("read %s: %w", key, drainErr)

@@ -1,0 +1,114 @@
+name: Check gradle_build_cache
+description: Builds a one-module Gradle project through the remote build cache runs-on/action points it at, the RunsOn agent's key/value tool cache, and checks what came from it.
+
+inputs:
+  project:
+    description: Identifies the project's content. The job that uploads it and the job that reads it pass the same value.
+    required: true
+  gradle:
+    description: Gradle version to install, or "none" to use the gradle the job already has.
+    default: 9.1.0
+  uploads:
+    description: '"true" in the job that builds and uploads, "false" in a later job that only reads.'
+    default: 'true'
+
+runs:
+  using: composite
+  steps:
+    - id: tools
+      uses: ./.github/actions/tool-caches-served
+    # GitHub gives the job's runtime token to actions only. runs-on/action
+    # registers it with the agent and must not export it.
+    - name: The runtime token is not in the steps' environment
+      shell: bash
+      run: |
+        if [[ -n "${ACTIONS_RUNTIME_TOKEN:-}" ]]; then
+          echo "::error::the job's runtime token is in the environment of its run steps"
+          exit 1
+        fi
+    # An agent before RunsOn v3.6.0: runs-on/action warns and writes no init
+    # script, so Gradle builds without a remote cache.
+    - name: Without the tool caches, Gradle has no remote cache
+      if: steps.tools.outputs.served != 'true'
+      shell: bash
+      run: |
+        script="${GRADLE_USER_HOME:-${HOME}/.gradle}/init.d/runs-on-build-cache.gradle"
+        if [[ -e "${script}" ]]; then
+          echo "::error::runs-on/action wrote ${script} on an agent without the tool caches"
+          exit 1
+        fi
+    # RunsOn's Windows image has no JDK.
+    - if: runner.os == 'Windows'
+      uses: actions/setup-java@v5
+      with:
+        distribution: temurin
+        java-version: '21'
+    - if: inputs.gradle != 'none'
+      uses: gradle/actions/setup-gradle@v6.4.0
+      with:
+        gradle-version: ${{ inputs.gradle }}
+        cache-disabled: true
+        add-job-summary: never
+    # One class holds the project's identity, so the first build of a run
+    # always has something to compile and upload.
+    - name: Create a project
+      shell: bash
+      env:
+        PROJECT: ${{ inputs.project }}
+      run: |
+        set -euo pipefail
+        dir="${RUNNER_TEMP}/gradle-build-cache"
+        rm -rf "${dir}"
+        mkdir -p "${dir}/src/main/java/check" "${dir}/src/test/java/check"
+        cd "${dir}"
+        echo "rootProject.name = 'check'" > settings.gradle
+        echo "org.gradle.caching=true" > gradle.properties
+        cat > build.gradle <<'EOT'
+        plugins { id 'java' }
+        repositories { mavenCentral() }
+        dependencies {
+            testImplementation 'junit:junit:4.13.2'
+        }
+        EOT
+        printf 'package check;\npublic class Run { public static final String ID = "%s"; }\n' "${PROJECT}" > src/main/java/check/Run.java
+        printf 'package check;\npublic class RunTest { @org.junit.Test public void id() { org.junit.Assert.assertFalse(Run.ID.isEmpty()); } }\n' > src/test/java/check/RunTest.java
+    # The second build starts from an empty local build cache, so its entries
+    # come from the agent.
+    - name: Build twice
+      if: inputs.uploads == 'true' && steps.tools.outputs.served == 'true'
+      shell: bash
+      env:
+        ATTEMPT: ${{ github.run_attempt }}
+      run: |
+        set -euo pipefail
+        cd "${RUNNER_TEMP}/gradle-build-cache"
+        gradle build --console=plain 2>&1 | tee first.log
+        # A re-run finds what the first attempt uploaded.
+        if [[ "${ATTEMPT}" == "1" ]] && grep -q "FROM-CACHE" first.log; then
+          echo "::error::the first build of a new project came from the cache"
+          exit 1
+        fi
+        rm -rf build "${GRADLE_USER_HOME:-${HOME}/.gradle}/caches/build-cache-1"
+        gradle build --console=plain 2>&1 | tee second.log
+        if [[ "$(grep -c ' FROM-CACHE$' second.log)" != 3 ]]; then
+          echo "::error::the second build did not take its 3 cacheable tasks from the agent"
+          exit 1
+        fi
+    - name: Build what another job uploaded
+      if: inputs.uploads != 'true' && steps.tools.outputs.served == 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        cd "${RUNNER_TEMP}/gradle-build-cache"
+        gradle build --console=plain 2>&1 | tee build.log
+        if [[ "$(grep -c ' FROM-CACHE$' build.log)" != 3 ]]; then
+          echo "::error::the build did not take its 3 cacheable tasks from what another job uploaded"
+          exit 1
+        fi
+    - name: Build without a remote cache
+      if: steps.tools.outputs.served != 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        cd "${RUNNER_TEMP}/gradle-build-cache"
+        gradle build --console=plain

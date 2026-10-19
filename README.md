@@ -443,9 +443,32 @@ Requires Magic Cache (`extras=s3-cache`) and RunsOn v3.6.0 or later. Otherwise, 
 
 Bazel's HTTP cache client sends no credentials, so the action registers the job's runtime token with the RunsOn agent (see [tool caches](#tool-caches)). The rc gets `common --remote_cache=http://<runner IP>:6871/tools/<id>/bazel`, in `/etc/bazel.bazelrc` (with `sudo`), or `%ProgramData%\bazel.bazelrc` on Windows. In a container job, the action writes the container's system rc, which needs root or passwordless `sudo` in the container; without either, it warns.
 
+### `gradle_build_cache`
+
+Gives Gradle a [remote build cache](https://docs.gradle.org/current/userguide/build_cache.html) in the RunsOn agent's key/value tool cache (see [tool caches](#tool-caches)), with GitHub's branch scoping: a pull request reads its base branch's entries and writes only its own. The action writes an init script into Gradle's user home (`~/.gradle/init.d`, or `$GRADLE_USER_HOME/init.d`) that points every build of the job at `$RUNS_ON_TOOLS_URL/kv/gradle/`. Builds that have the build cache on, with `org.gradle.caching=true` in `gradle.properties` or `--build-cache`, then take the outputs of cacheable tasks, compilations and tests among them, from whatever job ran them first with the same inputs. A build that has it off says so in its output.
+
+```yaml
+jobs:
+  build:
+    runs-on: runs-on=${{ github.run_id }}/runner=16cpu-linux-x64/extras=s3-cache
+    steps:
+      - uses: runs-on/action@v2
+        with:
+          gradle_build_cache: true
+      - uses: actions/checkout@v5
+      - uses: gradle/actions/setup-gradle@v6 # the distribution and dependencies
+      - run: ./gradlew build --build-cache
+```
+
+The build cache holds task outputs, not Gradle's distribution, dependencies or compiled build scripts, which most of a warm build's time goes to without a cache of its own: keep `gradle/actions/setup-gradle` for those. It only saves on the default branch by default, so on a pull request, a push to the pull request rebuilds what earlier pushes changed; `gradle_build_cache` saves those outputs in the pull request's scope.
+
+Requires Magic Cache (`extras=s3-cache`) and RunsOn v3.6.0 or later. Otherwise, the action warns and Gradle builds without the remote cache. Gradle 7.6 to 9 are tested. A build that configures its own enabled remote cache, for example Develocity's, keeps it, and Gradle says so in its output; a disabled one is replaced. The post step removes the init script.
+
+The init script holds the job's cache URL, which changes from one job to the next, so a [configuration cache](https://docs.gradle.org/current/userguide/configuration_cache.html) restored from another job, as `setup-gradle` does when given a `cache-encryption-key`, is not reused.
+
 ### Tool caches
 
-`sccache: true`, `gocacheprog` and `bazel_remote_cache` store their entries through the RunsOn agent's tool caches (RunsOn v3.6.0 or later), in the stack's S3 cache bucket with GitHub's branch scoping, under the stack's cache isolation when it is enabled. None of these tools sends a GitHub token, so the action sends the job's runtime token to the agent once (`POST /tools`), and the agent answers with a path, `/tools/<id>`, that stands for it: the same token always gets the same path, nothing without the token can compute it, and it works on this runner only, until the token expires. The action masks `<id>` in the job's logs. Each protocol has its own base under that path: `/bazel` (Bazel's HTTP cache), `/sccache` (sccache's WebDAV storage) and `/kv/<namespace>`, a plain key/value cache that `gocacheprog` uses with the `gocacheprog` namespace. On an older agent, the action warns and leaves the tools alone.
+`sccache: true`, `gocacheprog`, `gradle_build_cache` and `bazel_remote_cache` store their entries through the RunsOn agent's tool caches (RunsOn v3.6.0 or later), in the stack's S3 cache bucket with GitHub's branch scoping, under the stack's cache isolation when it is enabled. None of these tools sends a GitHub token, so the action sends the job's runtime token to the agent once (`POST /tools`), and the agent answers with a path, `/tools/<id>`, that stands for it: the same token always gets the same path, nothing without the token can compute it, and it works on this runner only, until the token expires. The action masks `<id>` in the job's logs. Each protocol has its own base under that path: `/bazel` (Bazel's HTTP cache), `/sccache` (sccache's WebDAV storage) and `/kv/<namespace>`, a plain key/value cache that `gocacheprog` and `gradle_build_cache` use with the `gocacheprog` and `gradle` namespaces. On an older agent, the action warns and leaves the tools alone.
 
 Later steps get the registered base URL as `RUNS_ON_TOOLS_URL`, so they can point other clients that store entries over plain HTTP at the key/value cache, in a namespace of their own (1 to 64 lowercase letters, digits, `-`, `_` or `.`): `GET` and `HEAD` on `$RUNS_ON_TOOLS_URL/kv/<namespace>/<key>` answer the entry or `404`, and `PUT` replaces it. For example, ccache's HTTP storage:
 

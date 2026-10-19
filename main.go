@@ -15,6 +15,7 @@ import (
 	"github.com/runs-on/action/internal/env"
 	"github.com/runs-on/action/internal/gitproxy"
 	"github.com/runs-on/action/internal/gocacheprog"
+	"github.com/runs-on/action/internal/gradle"
 	"github.com/runs-on/action/internal/magiccache"
 	"github.com/runs-on/action/internal/monitoring"
 	"github.com/runs-on/action/internal/sccache"
@@ -125,6 +126,10 @@ func handleMainExecution(action *githubactions.Action, ctx context.Context) {
 		gocacheprog.Configure(action, cfg.GoCacheProg, cfg.HasMagicCache(), cfg.ActionsRuntimeToken)
 	}
 
+	if cfg.HasGradleBuildCache() {
+		gradle.Configure(action, cfg.GradleBuildCache, cfg.HasMagicCache(), cfg.ActionsRuntimeToken)
+	}
+
 	if cfg.HasBazelRemoteCache() {
 		bazel.Configure(action, cfg.BazelRemoteCache, cfg.HasMagicCache(), cfg.ActionsRuntimeToken)
 	}
@@ -192,6 +197,10 @@ func handlePostExecution(action *githubactions.Action, ctx context.Context) {
 
 	if cfg.HasGoCacheProg() {
 		gocacheprog.SaveJobList(action, cfg.GoCacheProg)
+	}
+
+	if cfg.HasGradleBuildCache() {
+		gradle.Finish()
 	}
 
 	// Run cache mode post-job hooks (e.g. stop the Buildx builder) before the sticky

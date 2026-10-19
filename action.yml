@@ -34,6 +34,10 @@ inputs:
     description: 'Set to "true" to share the go command''s build cache (Go 1.24+) through Magic Cache, with GitHub''s branch scoping: later steps get GOCACHEPROG, and the job prefetches what its previous run used. Test results are not shared between jobs; set to "with-tests" to share them too. Requires Magic Cache and RunsOn v3.6.0 or later; otherwise the action warns and Go keeps its local build cache.'
     required: false
     default: 'false'
+  gradle_build_cache:
+    description: 'Set to "true" to give Gradle a remote build cache in the RunsOn agent''s tool caches (RunsOn v3.6.0 or later): the action writes an init script into Gradle''s user home that points builds at it, unless a build configures an enabled remote cache of its own. Builds use it when they have the build cache on (org.gradle.caching=true or --build-cache). Requires Magic Cache; otherwise the action warns and Gradle builds without the remote cache.'
+    required: false
+    default: 'false'
   bazel_remote_cache:
     description: 'Set to "true" to give Bazel (6.3+) a remote cache stored through Magic Cache, with GitHub''s branch scoping: the action writes --remote_cache into Bazel''s system rc (/etc/bazel.bazelrc, %ProgramData%\bazel.bazelrc on Windows), so a project''s own --remote_cache still wins. Requires Magic Cache and RunsOn v3.6.0 or later; otherwise the action warns and Bazel builds without the remote cache.'
     required: false

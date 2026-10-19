@@ -63,6 +63,9 @@ jobs:
   gocacheprog:
     needs: build
     uses: ./.github/workflows/test-gocacheprog.yml
+  gradle-build-cache:
+    needs: build
+    uses: ./.github/workflows/test-gradle-build-cache.yml
   magic-cache:
     needs: build
     uses: ./.github/workflows/test-magic-cache.yml

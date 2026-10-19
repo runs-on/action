@@ -17,9 +17,11 @@ jobs:
           - leg: gradle-7.6
             image: ubuntu24-full-x64
             gradle: 7.6.4
+          # Gradle's own image: the job uses its gradle as is.
           - leg: container
             image: ubuntu24-full-x64
-            container: eclipse-temurin:21-jdk
+            container: gradle:9.1.0-jdk21
+            gradle: none
           - leg: windows
             image: windows25-full-x64
     runs-on: runs-on=${{ github.run_id }}/env=bootstrap/cpu=2/family=m7/image=${{ matrix.image }}/extras=s3-cache

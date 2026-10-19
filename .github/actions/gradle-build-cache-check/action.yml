@@ -6,7 +6,7 @@ inputs:
     description: Identifies the project's content. The job that uploads it and the job that reads it pass the same value.
     required: true
   gradle:
-    description: Gradle version.
+    description: Gradle version to install, or "none" to use the gradle the job already has.
     default: 9.1.0
   uploads:
     description: '"true" in the job that builds and uploads, "false" in a later job that only reads.'
@@ -15,7 +15,8 @@ inputs:
 runs:
   using: composite
   steps:
-    - uses: gradle/actions/setup-gradle@v6.4.0
+    - if: inputs.gradle != 'none'
+      uses: gradle/actions/setup-gradle@v6.4.0
       with:
         gradle-version: ${{ inputs.gradle }}
         cache-disabled: true

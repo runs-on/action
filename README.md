@@ -412,8 +412,11 @@ jobs:
         with:
           gradle_build_cache: true
       - uses: actions/checkout@v5
+      - uses: gradle/actions/setup-gradle@v6 # the distribution and dependencies
       - run: ./gradlew build --build-cache
 ```
+
+The build cache holds task outputs, not Gradle's distribution, dependencies or compiled build scripts, which most of a warm build's time goes to without a cache of its own: keep `gradle/actions/setup-gradle` for those. On RunsOn its cache goes through Magic Cache too. It only saves on the default branch by default, so on a pull request, a push to the pull request rebuilds what earlier pushes changed; `gradle_build_cache` saves those outputs in the pull request's scope.
 
 Requires Magic Cache (`extras=s3-cache`). Without it, the action warns and Gradle builds without the remote cache. Gradle 7.6 to 9 are tested. A build that configures its own enabled remote cache, for example Develocity's, keeps it, and Gradle says so in its output; a disabled one is replaced.
 

@@ -399,6 +399,26 @@ Compiled packages are shared between jobs; test results are not. Within a job, t
 
 To share test results too, set `gocacheprog: with-tests`. A job then reports `(cached)` for a test that passed in another job with the same inputs: the package, its dependencies, and the files and environment variables the test read through the standard library. Go does not see a database, the network or a file read by a child process, so keep the default for tests that depend on those, or run them with `go test -count=1`. Jobs that use `true` never read the results that `with-tests` jobs share. What a passing test printed is stored with its result, so with `with-tests` it is readable by any job that can read the cache, including pull requests from forks: do not use it for tests that print secrets.
 
+### `gradle_build_cache`
+
+Gives Gradle a [remote build cache](https://docs.gradle.org/current/userguide/build_cache.html) stored through Magic Cache, with GitHub's branch scoping: a pull request reads its base branch's entries and writes only its own. The action serves Gradle's HTTP build cache protocol on the runner's loopback interface, and writes an init script into Gradle's user home (`~/.gradle/init.d`, or `$GRADLE_USER_HOME/init.d`) that turns the build cache on and points every build of the job at it. Gradle then takes the outputs of cacheable tasks, compilations and tests among them, from whatever job ran them first with the same inputs.
+
+```yaml
+jobs:
+  build:
+    runs-on: runs-on=${{ github.run_id }}/runner=16cpu-linux-x64/extras=s3-cache
+    steps:
+      - uses: runs-on/action@v2
+        with:
+          gradle_build_cache: true
+      - uses: actions/checkout@v5
+      - run: ./gradlew build
+```
+
+Requires Magic Cache (`extras=s3-cache`). Without it, the action warns and Gradle builds without the remote cache. Gradle 7.6 to 9 are tested. A build that configures its own enabled remote cache, for example Develocity's, keeps it, and Gradle says so in its output; a disabled one is replaced.
+
+What Gradle stores lands on the runner's disk first and is uploaded in the background, so tasks never wait on an upload. The action's post step waits up to 5 minutes for the uploads that are left, then reports what Gradle loaded and stored. The init script names a fixed port, so it is the same from one job to the next and does not invalidate a configuration cache that the job restores.
+
 ### `sticky_cache`
 
 Available for Linux and Windows runners on jobs with a sticky-disk label. Use `sticky=<size>` for the default snapshot lineage or `sticky=<name>:<size>` for a named lineage; the optional name must come first. Volume settings follow the size, for example `sticky=go-cache:20gb:gp3:750mbs:6000iops`. The `apt`, `buildkit`, and `git` cache modes are Linux only.

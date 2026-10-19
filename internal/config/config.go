@@ -20,6 +20,7 @@ type Config struct {
 	DiskDevice          string
 	Sccache             string
 	GoCacheProg         string
+	GradleBuildCache    string
 	StickyCache         []string
 	StickyWaitTimeout   time.Duration
 	StickySave          bool
@@ -69,6 +70,7 @@ func NewConfigFromInputs(action *githubactions.Action) (*Config, error) {
 
 	cfg.Sccache = action.GetInput("sccache")
 	cfg.GoCacheProg = action.GetInput("gocacheprog")
+	cfg.GradleBuildCache = action.GetInput("gradle_build_cache")
 
 	stickyCacheInput := action.GetInput("sticky_cache")
 	if stickyCacheInput != "" {
@@ -114,6 +116,7 @@ func NewConfigFromInputs(action *githubactions.Action) (*Config, error) {
 	action.Infof("Input 'disk_device': %s", cfg.DiskDevice)
 	action.Infof("Input 'sccache': %s", cfg.Sccache)
 	action.Infof("Input 'gocacheprog': %s", cfg.GoCacheProg)
+	action.Infof("Input 'gradle_build_cache': %s", cfg.GradleBuildCache)
 	action.Infof("Input 'sticky_cache': %v", cfg.StickyCache)
 	action.Infof("Input 'sticky_wait_timeout': %s", cfg.StickyWaitTimeout)
 	action.Infof("Input 'sticky_save': %t", cfg.StickySave)
@@ -147,6 +150,10 @@ func (c *Config) HasMetrics() bool {
 
 func (c *Config) HasGoCacheProg() bool {
 	return c.IsUsingRunsOn() && c.GoCacheProg != "" && c.GoCacheProg != "false"
+}
+
+func (c *Config) HasGradleBuildCache() bool {
+	return c.IsUsingRunsOn() && c.GradleBuildCache != "" && c.GradleBuildCache != "false"
 }
 
 // HasMagicCache reports whether the runner serves the GitHub Actions cache

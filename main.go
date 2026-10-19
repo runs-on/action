@@ -14,6 +14,7 @@ import (
 	"github.com/runs-on/action/internal/env"
 	"github.com/runs-on/action/internal/gitproxy"
 	"github.com/runs-on/action/internal/gocacheprog"
+	"github.com/runs-on/action/internal/gradle"
 	"github.com/runs-on/action/internal/magiccache"
 	"github.com/runs-on/action/internal/monitoring"
 	"github.com/runs-on/action/internal/sccache"
@@ -127,6 +128,10 @@ func handleMainExecution(action *githubactions.Action, ctx context.Context) {
 		gocacheprog.Configure(action, cfg.GoCacheProg, cfg.HasMagicCache(), cfg.ActionsRuntimeToken)
 	}
 
+	if cfg.HasGradleBuildCache() {
+		gradle.Configure(action, cfg.GradleBuildCache, cfg.HasMagicCache(), cfg.ActionsRuntimeToken)
+	}
+
 	// Configure sticky disk cache mounts (or restore-only mode) if requested
 	if cfg.ConfiguresStickyDisk() {
 		if err := stickydisk.Configure(action, stickydisk.Options{
@@ -192,6 +197,10 @@ func handlePostExecution(action *githubactions.Action, ctx context.Context) {
 		gocacheprog.SaveJobList(action, cfg.GoCacheProg)
 	}
 
+	if cfg.HasGradleBuildCache() {
+		gradle.Finish(action)
+	}
+
 	// Run cache mode post-job hooks (e.g. stop the Buildx builder) before the sticky
 	// disk is unmounted and snapshotted, then display usage
 	if cfg.HasStickyDiskCache() {
@@ -211,6 +220,7 @@ func main() {
 	gitProxyFlag := flag.Bool("git-proxy-serve", false, "Run the local git mirror proxy (internal, spawned by the git cache mode)")
 	goCacheProgFlag := flag.Bool(strings.TrimLeft(gocacheprog.Flag, "-"), false, "Serve the go command's build cache (internal, started by the go command through GOCACHEPROG)")
 	goCachePrefetchFlag := flag.Bool(strings.TrimLeft(gocacheprog.PrefetchFlag, "-"), false, "Download the build cache entries the job's previous run used (internal, started by the action)")
+	gradleServeFlag := flag.Bool(strings.TrimLeft(gradle.ServeFlag, "-"), false, "Serve Gradle's build cache (internal, started by the action)")
 	shareTestResultsFlag := flag.Bool(strings.TrimLeft(gocacheprog.ShareTestResultsFlag, "-"), false, "With --gocacheprog or --gocacheprog-prefetch, share test results between jobs too (internal)")
 	flag.Parse()
 
@@ -226,6 +236,14 @@ func main() {
 		opts := gocacheprog.OptionsFromEnv(*shareTestResultsFlag)
 		if err := gocacheprog.Prefetch(opts, gocacheprog.ListKey(opts.Token)); err != nil {
 			fmt.Fprintf(os.Stderr, "gocacheprog prefetch: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	if *gradleServeFlag {
+		if err := gradle.Serve(os.Stdin); err != nil {
+			fmt.Fprintf(os.Stderr, "gradle build cache: %v\n", err)
 			os.Exit(1)
 		}
 		return

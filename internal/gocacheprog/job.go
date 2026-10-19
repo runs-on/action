@@ -15,6 +15,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/runs-on/action/internal/magiccache"
 )
 
 // A job keeps these files next to its local entries: the journal of the
@@ -85,7 +87,7 @@ func Prefetch(opts Options, listKey string) error {
 		return nil
 	}
 	var list []byte
-	body, ok, err := c.remote.open(c.ctx, listVersion(opts), listKey, listKey+"-")
+	body, ok, err := c.remote.Open(c.ctx, listVersion(opts), listKey, listKey+"-")
 	if err == nil && ok {
 		list, err = io.ReadAll(body)
 		_ = body.Close()
@@ -159,10 +161,10 @@ func SaveList(opts Options, listKey string) (int, error) {
 		return 0, nil
 	}
 	key := listKey + "-" + strconv.FormatInt(time.Now().UnixNano(), 36)
-	client := newGHAClient(opts.ResultsURL, opts.Token)
+	client := magiccache.NewClient(opts.ResultsURL, opts.Token)
 	ctx, cancel := context.WithTimeout(context.Background(), listUploadTimeout)
 	defer cancel()
-	if err := client.upload(ctx, listVersion(opts), key, bytes.NewReader(list), int64(len(list))); err != nil {
+	if err := client.Upload(ctx, listVersion(opts), key, bytes.NewReader(list), int64(len(list))); err != nil {
 		return 0, err
 	}
 	// A second runs-on/action step in the job has nothing more to save.

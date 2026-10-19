@@ -34,6 +34,10 @@ inputs:
     description: 'Set to "true" to share the go command''s build cache (Go 1.24+) through Magic Cache: later steps get GOCACHEPROG, and the job prefetches what its previous run used. Test results are not shared between jobs; set to "with-tests" to share them too. Requires Magic Cache; otherwise the action warns and Go keeps its local build cache.'
     required: false
     default: 'false'
+  gradle_build_cache:
+    description: 'Set to "true" to give Gradle a remote build cache stored through Magic Cache: the action serves Gradle''s HTTP build cache on the runner''s loopback interface and writes an init script into Gradle''s user home that turns the build cache on and points builds at it, unless a build configures its own remote cache. Entries Gradle stores are uploaded in the background, and the post step waits for them. Requires Magic Cache; otherwise the action warns and Gradle builds without the remote cache.'
+    required: false
+    default: 'false'
   sticky_cache:
     description: 'Newline-separated sticky-disk cache records. Each line is a mode followed by comma-separated key=value options, for example buildkit or custom,path=vendor/cache. Custom paths must be directories. Supported modes: go, node, yarn, pnpm, ruby, rust, python, uv, poetry, apt, buildkit, git, git-full, gradle, maven, playwright, tool-cache, custom. Requires a sticky=<size> or sticky=<name>:<size> label; an incomplete agent contract or readiness timeout fails the action, while an explicit unavailable marker warns and continues cold. Linux and Windows (apt, buildkit, git and git-full modes are Linux only). Run after actions/checkout for workspace-relative caches; git and git-full must run before checkout and cannot share an invocation with workspace-relative caches; buildkit must run before docker/setup-buildx-action; tool-cache must run before setup-* actions.'
     required: false

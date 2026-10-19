@@ -346,11 +346,11 @@ The action registers the job's runtime token with the agent, then exports `SCCAC
 
 Install sccache before compiling. Its first client starts the compiler daemon in the job or container. The action never starts or stops it. It can exit and restart from a later step without a new action invocation. Configure the action before starting the daemon; restart an existing daemon yourself after changing its configuration.
 
-Use `SCCACHE_WEBDAV_KEY_PREFIX` for an additional namespace. Remove competing backend settings such as `SCCACHE_BUCKET`, which sccache prefers to WebDAV. For Rust, disable incremental compilation. C and C++ builds can use `cmake -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache`.
+Use `SCCACHE_WEBDAV_KEY_PREFIX` for an additional namespace. sccache ranks WebDAV below its S3, Redis, Memcached, GCS, GitHub Actions cache and Azure storages, so a setting for one of them, such as a `SCCACHE_BUCKET` left from `sccache: s3`, wins over the agent's cache: the action warns when it finds one. For Rust, disable incremental compilation. C and C++ builds can use `cmake -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache`.
 
 #### `sccache: s3`
 
-`sccache: s3` auto-configures the [S3 cache backend for sccache](https://github.com/mozilla/sccache/blob/main/docs/S3.md) instead: sccache writes straight to the RunsOn S3 cache bucket, with the runner's instance role. It warns that direct S3 caching bypasses branch isolation.
+`sccache: s3` auto-configures the [S3 cache backend for sccache](https://github.com/mozilla/sccache/blob/main/docs/S3.md) instead: sccache writes straight to the RunsOn S3 cache bucket, with the runner's instance role. On an agent that serves sccache's WebDAV endpoint, it warns and recommends `sccache: true`, since direct S3 caching bypasses branch scoping and cache isolation.
 
 ```yaml
 jobs:

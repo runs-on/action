@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/runs-on/action/internal/bazel"
 	"github.com/runs-on/action/internal/config"
 	"github.com/runs-on/action/internal/costs"
 	"github.com/runs-on/action/internal/env"
@@ -125,6 +126,10 @@ func handleMainExecution(action *githubactions.Action, ctx context.Context) {
 
 	if cfg.HasGoCacheProg() {
 		gocacheprog.Configure(action, cfg.GoCacheProg, cfg.HasMagicCache(), cfg.ActionsRuntimeToken)
+	}
+
+	if cfg.HasBazelRemoteCache() {
+		bazel.Configure(action, cfg.BazelRemoteCache, cfg.HasMagicCache(), cfg.ActionsRuntimeToken)
 	}
 
 	// Configure sticky disk cache mounts (or restore-only mode) if requested

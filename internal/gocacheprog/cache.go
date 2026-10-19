@@ -72,11 +72,12 @@ var errCorruptEntry = errors.New("remote entry does not match its output ID")
 
 // Options configures a Cache.
 type Options struct {
-	Dir        string
-	ResultsURL string
-	Token      string
-	// Namespace prefixes remote keys and versions, so a format change starts
-	// from an empty cache.
+	Dir string
+	// Endpoint is the agent's gocacheprog cache for the job: its path holds
+	// the job's credential.
+	Endpoint string
+	// Namespace prefixes remote keys, so a format change starts from an
+	// empty cache.
 	Namespace string
 	// ShareTestResults also shares test records. Without it they stay on
 	// local disk, and the ones other jobs shared are ignored.
@@ -92,7 +93,7 @@ type Options struct {
 type Cache struct {
 	opts   Options
 	disk   *diskStore
-	remote *ghaClient
+	remote *storeClient
 	// remoteDown stops remote lookups and uploads for this go command after a
 	// failure: a cache that times out or rejects the job's token would
 	// otherwise cost every lookup of the build a doomed request.
@@ -127,8 +128,7 @@ type upload struct {
 // the cache falls this far behind, more outputs are only kept locally.
 const uploadQueueSize = 65536
 
-// New opens the cache. Without a results URL or token it only uses local
-// disk.
+// New opens the cache. Without an endpoint it only uses local disk.
 func New(opts Options) (*Cache, error) {
 	disk, err := newDiskStore(opts.Dir)
 	if err != nil {
@@ -142,8 +142,8 @@ func New(opts Options) (*Cache, error) {
 	}
 	c := &Cache{opts: opts, disk: disk, used: map[[actionIDSize]byte]struct{}{}}
 	c.ctx, c.cancel = context.WithCancel(context.Background())
-	if opts.ResultsURL != "" && opts.Token != "" {
-		c.remote = newGHAClient(opts.ResultsURL, opts.Token)
+	if opts.Endpoint != "" {
+		c.remote = newStoreClient(opts.Endpoint)
 		c.uploads = make(chan upload, uploadQueueSize)
 		for range opts.Concurrency {
 			go c.uploadLoop()
@@ -156,16 +156,7 @@ func New(opts Options) (*Cache, error) {
 }
 
 func (c *Cache) key(actionID []byte) string {
-	return c.opts.Namespace + "-" + hex.EncodeToString(actionID)
-}
-
-// version shards entries across 16 cache versions by the first hex digit of
-// their action ID. Each version is one directory in Magic Cache, whose lookup
-// index covers a directory only while it holds fewer than 50,000 entries, and
-// only once 8 lookups asked for it: 16 directories hold 800,000 entries and
-// cost a cold build 128 listed lookups.
-func (c *Cache) version(actionID []byte) string {
-	return c.opts.Namespace + "-" + hex.EncodeToString(actionID[:1])[:1]
+	return c.opts.Namespace + "/" + hex.EncodeToString(actionID)
 }
 
 func (c *Cache) remoteUp() bool {
@@ -213,7 +204,7 @@ func (c *Cache) fetch(actionID []byte) bool {
 		if !c.remoteUp() {
 			return false, nil
 		}
-		body, ok, err := c.remote.open(c.ctx, c.version(actionID), c.key(actionID))
+		body, ok, err := c.remote.open(c.ctx, c.key(actionID))
 		if err != nil {
 			c.remoteDown.Store(true)
 			return false, nil
@@ -271,13 +262,12 @@ func (c *Cache) Put(actionID, outputID, body []byte) (string, error) {
 	return path, nil
 }
 
-// uploadLoop uploads entries in the background. An entry another job already
-// saved costs this one entry; a failing cache stops this go command's
-// uploads.
+// uploadLoop uploads entries in the background. A failing cache stops this
+// go command's uploads.
 func (c *Cache) uploadLoop() {
 	for u := range c.uploads {
 		if c.remoteUp() {
-			if err := c.uploadEntry(u); err != nil && !errors.Is(err, errEntryExists) {
+			if err := c.uploadEntry(u); err != nil {
 				c.remoteDown.Store(true)
 			}
 		}
@@ -304,7 +294,7 @@ func (c *Cache) uploadEntry(u upload) error {
 	header := binary.BigEndian.AppendUint64(bytes.Clone(magic), uint64(u.stored.UnixNano()))
 	header = append(header, u.outputID...)
 	body := io.MultiReader(bytes.NewReader(header), f)
-	return c.remote.upload(c.ctx, c.version(u.actionID), c.key(u.actionID), body, int64(len(header))+info.Size())
+	return c.remote.put(c.ctx, c.key(u.actionID), body, int64(len(header))+info.Size())
 }
 
 // Close implements Handler: it waits for pending uploads, within CloseTimeout.

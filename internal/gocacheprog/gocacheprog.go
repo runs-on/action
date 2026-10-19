@@ -57,7 +57,7 @@ func Configure(action *githubactions.Action, mode string, magicCache bool, runti
 	if mode == modeWithTests {
 		command += " " + ShareTestResultsFlag
 	}
-	if err := StoreEndpoint(tools.URL + "/gocacheprog"); err != nil {
+	if err := StoreEndpoint(tools.URL + "/kv/gocacheprog"); err != nil {
 		action.Warningf("gocacheprog could not keep the cache endpoint for its helper (%v); %s.", err, fallback)
 		return
 	}

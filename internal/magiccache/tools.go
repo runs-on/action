@@ -15,17 +15,22 @@ import (
 )
 
 // ToolsPath is where the agent registers a job's runtime token for the tool
-// caches it serves (Bazel, sccache, gocacheprog), and the base of the path it
-// answers with.
+// caches it serves, and the base of the path it answers with.
 const ToolsPath = "/tools"
+
+// ToolsURLEnv names the job variable that holds the registered base URL, for
+// clients a step configures itself, such as <URL>/kv/<namespace>/ for a
+// plain HTTP cache.
+const ToolsURLEnv = "RUNS_ON_TOOLS_URL"
 
 // ErrToolsNotServed is the registration's error on agents that do not serve
 // the tool caches.
 var ErrToolsNotServed = errors.New("this RunsOn agent does not serve the tool caches; upgrade it")
 
-// Tools is a job's registration: the base URL of its tool caches, each tool
-// under its own path (URL + "/sccache"), and the ID in it, which stands for
-// the job's runtime token and is therefore masked like a secret.
+// Tools is a job's registration: the base URL of its tool caches, each
+// protocol under its own path (URL + "/bazel", "/sccache" or
+// "/kv/<namespace>"), and the ID in it, which stands for the job's runtime
+// token and is therefore masked like a secret.
 type Tools struct {
 	URL string
 	ID  string
@@ -128,7 +133,8 @@ func registerOnce(runtimeToken string) (Tools, error) {
 // RegisterFor registers the job for a tool cache, or warns why it cannot.
 // input names the action input, and fallback says what the job does instead,
 // for example "Bazel builds without the remote cache". The ID is masked in
-// the job's logs: it stands for the job's runtime token.
+// the job's logs: it stands for the job's runtime token. Later steps get the
+// base URL as RUNS_ON_TOOLS_URL.
 func RegisterFor(action *githubactions.Action, input, fallback string, magicCache bool, runtimeToken string) (Tools, bool) {
 	if !magicCache {
 		action.Warningf("%s needs Magic Cache (extras=s3-cache, or a Fleet runner with Magic Cache); %s.", input, fallback)
@@ -148,5 +154,6 @@ func RegisterFor(action *githubactions.Action, input, fallback string, magicCach
 		return Tools{}, false
 	}
 	action.AddMask(tools.ID)
+	action.SetEnv(ToolsURLEnv, tools.URL)
 	return tools, true
 }

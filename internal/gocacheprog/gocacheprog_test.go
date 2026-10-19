@@ -88,7 +88,7 @@ func TestConfigureExportsGOCACHEPROGOnlyWithMagicCacheAndAToken(t *testing.T) {
 			// stands for the job's token.
 			wantStored := ""
 			if len(tc.want) > 0 {
-				wantStored = agent.URL + "/tools/" + id + "/gocacheprog"
+				wantStored = agent.URL + "/tools/" + id + "/kv/gocacheprog"
 				if !strings.Contains(log.String(), "::add-mask::"+id) {
 					t.Errorf("the path ID is not masked in the job's logs")
 				}
@@ -96,8 +96,10 @@ func TestConfigureExportsGOCACHEPROGOnlyWithMagicCacheAndAToken(t *testing.T) {
 			if got := OptionsFromEnv(false).Endpoint; got != wantStored {
 				t.Errorf("the helper's endpoint is %q, want %q: the job's only when GOCACHEPROG is exported", got, wantStored)
 			}
-			if strings.Contains(string(exported), id) {
-				t.Errorf("the path ID reached the next steps' environment")
+			// Later steps get the registered base URL, for clients they
+			// configure themselves; never the token.
+			if len(tc.want) > 0 && !strings.Contains(string(exported), "RUNS_ON_TOOLS_URL") {
+				t.Errorf("exported env %q lacks RUNS_ON_TOOLS_URL", exported)
 			}
 			if info, err := os.Stat(filepath.Join(os.Getenv("RUNNER_TEMP"), endpointFile)); err == nil && runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 				t.Errorf("the endpoint file has mode %v, want 0600", info.Mode().Perm())
@@ -164,7 +166,7 @@ func TestSaveListGivesUpOnACacheThatStopsAnswering(t *testing.T) {
 	listUploadTimeout = 200 * time.Millisecond
 	defer func() { listUploadTimeout = timeout }()
 
-	opts := Options{Dir: t.TempDir(), Endpoint: srv.URL + "/tools/test/gocacheprog", Namespace: "test"}
+	opts := Options{Dir: t.TempDir(), Endpoint: srv.URL + "/tools/test/kv/gocacheprog", Namespace: "test"}
 	if err := os.WriteFile(filepath.Join(opts.Dir, usedFile), bytes.Repeat([]byte{1}, actionIDSize), 0o644); err != nil {
 		t.Fatal(err)
 	}

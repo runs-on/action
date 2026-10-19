@@ -28,8 +28,8 @@ func jobTemp() string {
 }
 
 // StoreEndpoint keeps the job's cache endpoint where the helper finds it, in
-// a file only the runner's user reads. Exported, its credential would be in
-// the environment of every later step and of everything those start.
+// a file only the runner's user reads. The prefetch this step starts reads it
+// too, before RUNS_ON_TOOLS_URL reaches the job's environment.
 func StoreEndpoint(endpoint string) error {
 	path := filepath.Join(jobTemp(), endpointFile)
 	if err := os.WriteFile(path, []byte(endpoint), 0o600); err != nil {

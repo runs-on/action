@@ -60,7 +60,7 @@ func TestWebDAVRegistration(t *testing.T) {
 				key, _, _ := strings.Cut(lines[i], "<<")
 				exports[key] = lines[i+1]
 			}
-			want := map[string]string{"SCCACHE_GHA_ENABLED": "false", "SCCACHE_WEBDAV_ENDPOINT": server.URL + "/tools/" + id + "/sccache", "RUSTC_WRAPPER": "sccache"}
+			want := map[string]string{"SCCACHE_GHA_ENABLED": "false", "SCCACHE_WEBDAV_ENDPOINT": server.URL + "/tools/" + id + "/sccache", "RUSTC_WRAPPER": "sccache", "RUNS_ON_TOOLS_URL": server.URL + "/tools/" + id}
 			if len(exports) != len(want) {
 				t.Fatalf("unexpected exports: %d", len(exports))
 			}

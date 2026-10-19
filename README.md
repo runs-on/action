@@ -445,7 +445,19 @@ Bazel's HTTP cache client sends no credentials, so the action registers the job'
 
 ### Tool caches
 
-`sccache: true`, `gocacheprog` and `bazel_remote_cache` store their entries through the RunsOn agent's tool caches (RunsOn v3.6.0 or later), in the stack's S3 cache bucket with GitHub's branch scoping, under the stack's cache isolation when it is enabled. None of these tools sends a GitHub token, so the action sends the job's runtime token to the agent once (`POST /tools`), and the agent answers with a path, `/tools/<id>`, that stands for it: the same token always gets the same path, nothing without the token can compute it, and it works on this runner only, until the token expires. The action masks `<id>` in the job's logs. Each tool gets its own base under that path: `/bazel`, `/sccache` and `/gocacheprog`. On an older agent, the action warns and leaves the tools alone.
+`sccache: true`, `gocacheprog` and `bazel_remote_cache` store their entries through the RunsOn agent's tool caches (RunsOn v3.6.0 or later), in the stack's S3 cache bucket with GitHub's branch scoping, under the stack's cache isolation when it is enabled. None of these tools sends a GitHub token, so the action sends the job's runtime token to the agent once (`POST /tools`), and the agent answers with a path, `/tools/<id>`, that stands for it: the same token always gets the same path, nothing without the token can compute it, and it works on this runner only, until the token expires. The action masks `<id>` in the job's logs. Each protocol has its own base under that path: `/bazel` (Bazel's HTTP cache), `/sccache` (sccache's WebDAV storage) and `/kv/<namespace>`, a plain key/value cache that `gocacheprog` uses with the `gocacheprog` namespace. On an older agent, the action warns and leaves the tools alone.
+
+Later steps get the registered base URL as `RUNS_ON_TOOLS_URL`, so they can point other clients that store entries over plain HTTP at the key/value cache, in a namespace of their own (1 to 64 lowercase letters, digits, `-`, `_` or `.`): `GET` and `HEAD` on `$RUNS_ON_TOOLS_URL/kv/<namespace>/<key>` answer the entry or `404`, and `PUT` replaces it. For example, ccache's HTTP storage:
+
+```yaml
+- uses: runs-on/action@v2
+  with:
+    sccache: true # or any other tool cache input
+- run: |
+    echo "CCACHE_REMOTE_STORAGE=$RUNS_ON_TOOLS_URL/kv/ccache/" >> "$GITHUB_ENV"
+```
+
+The variable holds the same credential as the tools' configuration: whatever reads it can use the job's cache scopes on this runner until the job's token expires.
 
 ### `sticky_cache`
 

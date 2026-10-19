@@ -65,6 +65,7 @@ func TestConfigureWritesTheRegisteredCacheIntoTheSystemRC(t *testing.T) {
 			server := agent(status)
 			defer server.Close()
 			t.Setenv("RUNS_ON_MAGIC_CACHE_URL", server.URL+"/")
+			t.Setenv("GITHUB_ENV", filepath.Join(t.TempDir(), "env"))
 			rc := filepath.Join(t.TempDir(), "bazel.bazelrc")
 			if tc.existing != "" {
 				if err := os.WriteFile(rc, []byte(tc.existing), 0o644); err != nil {

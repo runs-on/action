@@ -49,9 +49,13 @@ func (c *storeClient) open(ctx context.Context, key string) (io.ReadCloser, bool
 		return resp.Body, true, nil
 	}
 	// Reading the short error body lets the connection serve the next
-	// request: a cold build misses thousands of times.
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+	// request: a cold build misses thousands of times. A body that fails to
+	// arrive is an error, which stops remote lookups, not a miss.
+	_, drainErr := io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 	_ = resp.Body.Close()
+	if drainErr != nil {
+		return nil, false, fmt.Errorf("read %s: %w", key, drainErr)
+	}
 	if resp.StatusCode == http.StatusNotFound {
 		return nil, false, nil
 	}

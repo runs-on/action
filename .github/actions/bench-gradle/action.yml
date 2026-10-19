@@ -1,0 +1,82 @@
+name: Bench Gradle
+description: Builds android/nowinandroid with one Gradle caching setup, and reports the build time and Gradle's task counts.
+inputs:
+  variant:
+    description: none, setup-gradle, sticky, magic or magic-setup-gradle
+    required: true
+  phase:
+    description: cold, warm (same commit, fresh runner) or edit (a leaf module changed)
+    required: true
+runs:
+  using: composite
+  steps:
+    - uses: actions/checkout@v6
+      with:
+        repository: android/nowinandroid
+        ref: a49ed253d75e61a2b6ab80a8da677b57437b08eb
+        path: nia
+        persist-credentials: false
+    # RunsOn's images have no Android SDK.
+    - uses: android-actions/setup-android@v4.0.4
+      with:
+        packages: platform-tools platforms;android-36 build-tools;36.0.0
+    - name: Prepare (not measured)
+      shell: bash
+      run: |
+        echo "JAVA_HOME=${JAVA_HOME_21_X64}" >> "${GITHUB_ENV}"
+        nproc; free -g; df -h / | tail -1
+        echo "ANDROID_HOME=${ANDROID_HOME}"; ls "${ANDROID_HOME}/platforms" "${ANDROID_HOME}/build-tools"
+    - if: startsWith(inputs.variant, 'magic')
+      uses: ./
+      with:
+        gradle_build_cache: "true"
+    - if: endsWith(inputs.variant, 'setup-gradle')
+      uses: gradle/actions/setup-gradle@v6.4.0
+      with:
+        cache-read-only: false
+        add-job-summary: never
+    - if: inputs.variant == 'sticky'
+      uses: ./
+      with:
+        sticky_cache: gradle
+    # A change in a leaf module that keeps its ABI, as most pull requests do.
+    - if: inputs.phase == 'edit'
+      shell: bash
+      run: |
+        echo 'private fun runsOnBenchEdit(): Int = 42' >> nia/feature/foryou/impl/src/main/kotlin/com/google/samples/apps/nowinandroid/feature/foryou/impl/ForYouViewModel.kt
+    - name: Build (measured)
+      shell: bash
+      run: |
+        cd nia
+        start=$(date +%s.%N)
+        set +e
+        ./gradlew assembleDemoDebug testDemoDebugUnitTest -Proborazzi.test.verify=false --continue --console=plain > build.log 2>&1
+        status=$?
+        set -e
+        end=$(date +%s.%N)
+        tail -40 build.log
+        echo "BUILD_SECONDS=$(python3 -c "print(round(${end} - ${start}, 1))")" >> "${GITHUB_ENV}"
+        echo "BUILD_STATUS=${status}" >> "${GITHUB_ENV}"
+        echo "BUILD_TASKS=$(grep -E 'actionable tasks' build.log | tail -1)" >> "${GITHUB_ENV}"
+        echo "BUILD_FROM_CACHE=$(grep -c ' FROM-CACHE$' build.log)" >> "${GITHUB_ENV}"
+        # Failed tasks run again in every setup; the job goes on so the warm
+        # and edit phases run.
+        grep -E "^> Task .* FAILED" build.log || true
+        grep -l "<failure" $(find . -path "*/build/test-results/*" -name "*.xml") 2>/dev/null | head -20 || true
+        grep -h -B1 "<failure" $(find . -path "*/build/test-results/*" -name "*.xml") 2>/dev/null | grep -o 'testcase name="[^"]*" classname="[^"]*"' | head -20 || true
+        grep -h -A3 "<failure" $(find . -path "*/build/test-results/*" -name "*.xml") 2>/dev/null | head -30 || true
+    - name: Report
+      if: always()
+      shell: bash
+      env:
+        VARIANT: ${{ inputs.variant }}
+        PHASE: ${{ inputs.phase }}
+      run: |
+        row="| ${VARIANT} | ${PHASE} | ${BUILD_SECONDS:-?} | ${BUILD_STATUS:-?} | ${BUILD_TASKS:-?} | ${BUILD_FROM_CACHE:-?} |"
+        echo "BENCH ${row}"
+        {
+          echo "| variant | phase | build s | exit | tasks | FROM-CACHE |"
+          echo "| --- | --- | --- | --- | --- | --- |"
+          echo "${row}"
+        } >> "${GITHUB_STEP_SUMMARY}"
+        du -sh ~/.gradle/caches ~/.gradle/wrapper 2>/dev/null || true

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/runs-on/action/internal/magiccache"
 	"github.com/runs-on/action/internal/mbx"
 	"github.com/runs-on/action/internal/monitoring"
+	"github.com/runs-on/action/internal/remotecache"
 	"github.com/runs-on/action/internal/sccache"
 	"github.com/runs-on/action/internal/stickydisk"
 	"github.com/sethvargo/go-githubactions"
@@ -119,14 +121,11 @@ func handleMainExecution(action *githubactions.Action, ctx context.Context) {
 		action.Infof("Cost tracking is already registered by an earlier runs-on/action invocation; this invocation will skip duplicate cost reporting.")
 	}
 
-	if cfg.HasSccache() {
-		sccache.Configure(action, cfg.Sccache, cfg.HasMagicCache())
-	}
-
 	requests, problems := cfg.RemoteCacheRequests()
 	for _, problem := range problems {
 		action.Warningf("remote_cache %s; that record is skipped.", problem)
 	}
+	configureSccacheInput(action, cfg, requests)
 	for _, request := range requests {
 		switch request.Tool {
 		case "bazel":
@@ -224,6 +223,20 @@ func handlePostExecution(action *githubactions.Action, ctx context.Context) {
 	}
 
 	action.Infof("Post-execution phase finished.")
+}
+
+// configureSccacheInput applies the sccache input, unless remote_cache also
+// lists sccache, which wins: both would export their settings, and sccache
+// ranks its S3 storage above the agent's WebDAV cache.
+func configureSccacheInput(action *githubactions.Action, cfg *config.Config, requests []remotecache.Request) {
+	if !cfg.HasSccache() {
+		return
+	}
+	if slices.ContainsFunc(requests, func(request remotecache.Request) bool { return request.Tool == "sccache" }) {
+		action.Warningf("sccache: %s and remote_cache: sccache both configure sccache; remote_cache: sccache is used, and the sccache input is ignored.", cfg.Sccache)
+		return
+	}
+	sccache.Configure(action, cfg.Sccache, cfg.HasMagicCache())
 }
 
 func main() {

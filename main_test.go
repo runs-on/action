@@ -8,7 +8,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/runs-on/action/internal/config"
 	"github.com/runs-on/action/internal/costs"
+	"github.com/runs-on/action/internal/remotecache"
 	"github.com/sethvargo/go-githubactions"
 )
 
@@ -147,6 +149,40 @@ func TestRequestAgentCostMode(t *testing.T) {
 			}
 			if err != nil || strings.TrimSpace(string(got)) != tt.want {
 				t.Fatalf("mode file = %q (%v), want %q", got, err, tt.want)
+			}
+		})
+	}
+}
+
+// sccache: s3 and remote_cache: sccache would both export their settings, and
+// sccache would pick S3: remote_cache wins.
+func TestConfigureSccacheInputYieldsToRemoteCache(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		requests   []remotecache.Request
+		wantS3     bool
+		wantWarned bool
+	}{
+		{name: "sccache: s3 alone", requests: []remotecache.Request{{Tool: "go"}}, wantS3: true},
+		{name: "with remote_cache: sccache", requests: []remotecache.Request{{Tool: "sccache"}}, wantWarned: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			envFile := filepath.Join(t.TempDir(), "env")
+			t.Setenv("GITHUB_ENV", envFile)
+			t.Setenv("RUNS_ON_RUNNER_NAME", "runner")
+			t.Setenv("RUNS_ON_S3_BUCKET_CACHE", "cache-bucket")
+			t.Setenv("RUNS_ON_AWS_REGION", "us-east-1")
+			t.Setenv("RUNS_ON_MAGIC_CACHE_URL", "")
+			var log strings.Builder
+
+			configureSccacheInput(githubactions.New(githubactions.WithWriter(&log)), &config.Config{Sccache: "s3"}, tc.requests)
+
+			exported, _ := os.ReadFile(envFile)
+			if got := strings.Contains(string(exported), "SCCACHE_BUCKET"); got != tc.wantS3 {
+				t.Errorf("exported SCCACHE_BUCKET: %v, want %v", got, tc.wantS3)
+			}
+			if got := strings.Contains(log.String(), "::warning::sccache: s3 and remote_cache: sccache"); got != tc.wantWarned {
+				t.Errorf("warned: %v, want %v; log %q", got, tc.wantWarned, log.String())
 			}
 		})
 	}

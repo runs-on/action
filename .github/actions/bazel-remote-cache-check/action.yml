@@ -31,6 +31,8 @@ runs:
         echo "${RUNNER_TEMP}/bazelisk" >> "${GITHUB_PATH}"
     - id: agent
       uses: ./.github/actions/tool-caches-served
+      with:
+        protocol: bazel
     - name: The system rc points Bazel at the agent only when it serves the cache
       shell: bash
       env:

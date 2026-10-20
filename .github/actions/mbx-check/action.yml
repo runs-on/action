@@ -95,7 +95,8 @@ runs:
         set -euo pipefail
         cache_url="${RUNS_ON_MAGIC_CACHE_URL:-${ACTIONS_RESULTS_URL}}"
         diagnostics=$(curl -fsS "${cache_url%/}/_runs-on/diagnostics")
-        count() { { grep -o "\"operation\":\"$1\",\"key\":\"[^\"]*\",\"objectKey\":\"[^\"]*\",\"version\":\"kv/mbx\"" <<<"${diagnostics}" || true; } | wc -l | tr -d ' '; }
+        # The capabilities document runs-on/action stores is not a build's.
+        count() { { grep -o "\"operation\":\"$1\",\"key\":\"[^\"]*\",\"objectKey\":\"[^\"]*\",\"version\":\"kv/mbx\"" <<<"${diagnostics}" || true; } | { grep -v 'v1/capabilities"' || true; } | wc -l | tr -d ' '; }
         reads=$(count read)
         writes=$(count write)
         echo "kv/mbx reads: ${reads}, writes: ${writes}"

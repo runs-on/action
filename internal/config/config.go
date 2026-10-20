@@ -20,6 +20,7 @@ type Config struct {
 	DiskDevice          string
 	Sccache             string
 	GoCacheProg         string
+	Mbx                 string
 	BazelRemoteCache    string
 	StickyCache         []string
 	StickyWaitTimeout   time.Duration
@@ -70,6 +71,7 @@ func NewConfigFromInputs(action *githubactions.Action) (*Config, error) {
 
 	cfg.Sccache = action.GetInput("sccache")
 	cfg.GoCacheProg = action.GetInput("gocacheprog")
+	cfg.Mbx = action.GetInput("mbx")
 	cfg.BazelRemoteCache = action.GetInput("bazel_remote_cache")
 
 	stickyCacheInput := action.GetInput("sticky_cache")
@@ -116,6 +118,7 @@ func NewConfigFromInputs(action *githubactions.Action) (*Config, error) {
 	action.Infof("Input 'disk_device': %s", cfg.DiskDevice)
 	action.Infof("Input 'sccache': %s", cfg.Sccache)
 	action.Infof("Input 'gocacheprog': %s", cfg.GoCacheProg)
+	action.Infof("Input 'mbx': %s", cfg.Mbx)
 	action.Infof("Input 'bazel_remote_cache': %s", cfg.BazelRemoteCache)
 	action.Infof("Input 'sticky_cache': %v", cfg.StickyCache)
 	action.Infof("Input 'sticky_wait_timeout': %s", cfg.StickyWaitTimeout)
@@ -150,6 +153,10 @@ func (c *Config) HasMetrics() bool {
 
 func (c *Config) HasGoCacheProg() bool {
 	return c.IsUsingRunsOn() && c.GoCacheProg != "" && c.GoCacheProg != "false"
+}
+
+func (c *Config) HasMbx() bool {
+	return c.IsUsingRunsOn() && c.Mbx != "" && c.Mbx != "false"
 }
 
 func (c *Config) HasBazelRemoteCache() bool {

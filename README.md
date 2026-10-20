@@ -443,9 +443,30 @@ Requires Magic Cache (`extras=s3-cache`) and RunsOn v3.6.0 or later. Otherwise, 
 
 Bazel's HTTP cache client sends no credentials, so the action registers the job's runtime token with the RunsOn agent (see [tool caches](#tool-caches)). The rc gets `common --remote_cache=` with the URL the agent gives Bazel's cache (`http://<runner IP>:6871/_runs-on/tools/<id>/bazel`), in `/etc/bazel.bazelrc` (with `sudo`), or `%ProgramData%\bazel.bazelrc` on Windows. In a container job, the action writes the container's system rc, which needs root or passwordless `sudo` in the container; without either, it warns.
 
+### `mbx`
+
+Gives [mbx](https://github.com/jdx/mr-boxington) a remote cache stored through Magic Cache: later steps get `MBX_REMOTE_URL`, the `mbx` namespace of the RunsOn agent's key/value cache, and, unless the job sets one, `MBX_REMOTE_NAMESPACE` (the repository's ID). Set up mbx after this action, so its setup finds them:
+
+```yaml
+jobs:
+  build:
+    runs-on: runs-on=${{ github.run_id }}/runner=8cpu-linux-x64/extras=s3-cache
+    steps:
+      - uses: runs-on/action@v2
+        with:
+          mbx: true
+      - uses: actions/checkout@v5
+      - uses: jdx/mr-boxington-action@v1.7.2
+        with:
+          backend: remote
+      - run: mbx build --workspace --locked
+```
+
+Requires Magic Cache (`extras=s3-cache`) and RunsOn v3.6.0 or later, whose agent stores the objects (see [tool caches](#tool-caches)). Otherwise, the action warns and mbx builds without the remote cache. Objects follow GitHub's branch scoping, and by default mbx publishes only from pushes to protected branches, so pull requests read what their base branch published. mbx sends the agent no token: the URL stands for the job's runtime token. mbx refuses to send its own credentials over plain HTTP, so a job that sets `MBX_REMOTE_TOKEN`, `MBX_REMOTE_TOKEN_FILE` or `MBX_REMOTE_OIDC_AUDIENCE` gets a warning, and the action leaves mbx alone.
+
 ### Tool caches
 
-`sccache: true`, `gocacheprog` and `bazel_remote_cache` store their entries through the RunsOn agent's tool caches (RunsOn v3.6.0 or later), in the stack's S3 cache bucket with GitHub's branch scoping, under the stack's cache isolation when it is enabled. None of these tools sends a GitHub token, so the action sends the job's runtime token to the agent once (`POST /_runs-on/tools`), and the agent answers with an ID that stands for it, `<id>`, and the path of each protocol it serves: `bazel` (Bazel's HTTP cache), `sccache` (sccache's WebDAV storage) and `kv`, a plain key/value cache that `gocacheprog` uses with the `gocacheprog` namespace. The paths hold the ID (`/_runs-on/tools/<id>/kv`), and the action uses them as given, on the same agent. The same token always gets the same paths, nothing without the token can compute them, and they work on this runner only, until the token expires. The action masks `<id>` in the job's logs. It configures a tool only when the agent gives its protocol a path (`GET /_runs-on/tools` lists the protocols without a token); on an older agent, or one without that protocol, the action warns and leaves the tool alone.
+`sccache: true`, `gocacheprog`, `bazel_remote_cache` and `mbx` store their entries through the RunsOn agent's tool caches (RunsOn v3.6.0 or later), in the stack's S3 cache bucket with GitHub's branch scoping, under the stack's cache isolation when it is enabled. None of these tools sends a GitHub token, so the action sends the job's runtime token to the agent once (`POST /_runs-on/tools`), and the agent answers with an ID that stands for it, `<id>`, and the path of each protocol it serves: `bazel` (Bazel's HTTP cache), `sccache` (sccache's WebDAV storage) and `kv`, a plain key/value cache that `gocacheprog` and `mbx` use with namespaces of their own. The paths hold the ID (`/_runs-on/tools/<id>/kv`), and the action uses them as given, on the same agent. The same token always gets the same paths, nothing without the token can compute them, and they work on this runner only, until the token expires. The action masks `<id>` in the job's logs. It configures a tool only when the agent gives its protocol a path (`GET /_runs-on/tools` lists the protocols without a token); on an older agent, or one without that protocol, the action warns and leaves the tool alone.
 
 Later steps get the key/value cache's URL as `RUNS_ON_TOOLS_KV_URL`, so they can point other clients that store entries over plain HTTP at it, in a namespace of their own (1 to 64 lowercase letters, digits, `-`, `_` or `.`): `GET` and `HEAD` on `$RUNS_ON_TOOLS_KV_URL/<namespace>/<key>` answer the entry or `404`, and `PUT` replaces it. For example, ccache's HTTP storage:
 

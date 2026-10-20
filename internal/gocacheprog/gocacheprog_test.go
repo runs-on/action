@@ -35,7 +35,7 @@ func TestConfigureExportsGOCACHEPROGOnlyWithMagicCacheAndAToken(t *testing.T) {
 	defer func() { startPrefetch = started }()
 	for _, tc := range []struct {
 		name       string
-		mode       string
+		shareTests bool
 		magicCache bool
 		token      string
 		want       []string
@@ -43,18 +43,17 @@ func TestConfigureExportsGOCACHEPROGOnlyWithMagicCacheAndAToken(t *testing.T) {
 		// wantPrefetch is whether each prefetch started shares test results.
 		wantPrefetch []bool
 	}{
-		{name: "builds only", mode: "true", magicCache: true, token: "job-token", want: []string{"GOCACHEPROG", self, Flag}, wantPrefetch: []bool{false}},
-		{name: "with test results", mode: "with-tests", magicCache: true, token: "job-token", want: []string{"GOCACHEPROG", self, Flag}, wantShared: true, wantPrefetch: []bool{true}},
-		{name: "unknown mode", mode: "tests", magicCache: true, token: "job-token"},
-		{name: "no Magic Cache", mode: "true", token: "job-token"},
-		{name: "no runtime token", mode: "true", magicCache: true},
+		{name: "builds only", magicCache: true, token: "job-token", want: []string{"GOCACHEPROG", self, Flag}, wantPrefetch: []bool{false}},
+		{name: "with test results", shareTests: true, magicCache: true, token: "job-token", want: []string{"GOCACHEPROG", self, Flag}, wantShared: true, wantPrefetch: []bool{true}},
+		{name: "no Magic Cache", token: "job-token"},
+		{name: "no runtime token", magicCache: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			envFile := filepath.Join(t.TempDir(), "env")
 			t.Setenv("GITHUB_ENV", envFile)
 			t.Setenv("RUNNER_TEMP", t.TempDir())
 			t.Setenv("ACTIONS_RUNTIME_TOKEN", "")
-			t.Setenv("RUNS_ON_TOOLS_KV_URL", "")
+			t.Setenv("RUNS_ON_REMOTE_CACHE_URL", "")
 			var log bytes.Buffer
 			var prefetches []bool
 			startPrefetch = func(_ string, shareTestResults bool) error {
@@ -62,7 +61,7 @@ func TestConfigureExportsGOCACHEPROGOnlyWithMagicCacheAndAToken(t *testing.T) {
 				return nil
 			}
 
-			Configure(githubactions.New(githubactions.WithWriter(&log)), tc.mode, tc.magicCache, tc.token)
+			Configure(githubactions.New(githubactions.WithWriter(&log)), tc.shareTests, tc.magicCache, tc.token)
 
 			if !slices.Equal(prefetches, tc.wantPrefetch) {
 				t.Errorf("prefetches started: %v, want %v", prefetches, tc.wantPrefetch)
@@ -84,7 +83,7 @@ func TestConfigureExportsGOCACHEPROGOnlyWithMagicCacheAndAToken(t *testing.T) {
 				t.Errorf("the runtime token reached the log or the next steps' environment")
 			}
 			// The helper, started from a run step, finds the job's key/value
-			// cache in RUNS_ON_TOOLS_KV_URL: its path stands for the job's token.
+			// cache in RUNS_ON_REMOTE_CACHE_URL: its path stands for the job's token.
 			wantStored := ""
 			if len(tc.want) > 0 {
 				wantStored = agent.URL + "/_runs-on/tools/" + id + "/kv/gocacheprog"
@@ -97,8 +96,8 @@ func TestConfigureExportsGOCACHEPROGOnlyWithMagicCacheAndAToken(t *testing.T) {
 			}
 			// Later steps get the key/value cache's URL, for clients they
 			// configure themselves; never the token.
-			if len(tc.want) > 0 && !strings.Contains(string(exported), "RUNS_ON_TOOLS_KV_URL") {
-				t.Errorf("exported env %q lacks RUNS_ON_TOOLS_KV_URL", exported)
+			if len(tc.want) > 0 && !strings.Contains(string(exported), "RUNS_ON_REMOTE_CACHE_URL") {
+				t.Errorf("exported env %q lacks RUNS_ON_REMOTE_CACHE_URL", exported)
 			}
 		})
 	}

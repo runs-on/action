@@ -17,8 +17,8 @@ import (
 )
 
 const (
-	blockStart = "# BEGIN runs-on/action bazel_remote_cache"
-	blockEnd   = "# END runs-on/action bazel_remote_cache"
+	blockStart = "# BEGIN runs-on/action remote_cache"
+	blockEnd   = "# END runs-on/action remote_cache"
 )
 
 // systemRC is Bazel's system rc. Bazel reads it before the workspace and user
@@ -41,19 +41,15 @@ var systemRC = func() string {
 // with the agent, which answers with a URL that stands for it. The cache URL
 // goes into Bazel's system rc as --remote_cache. When anything is missing,
 // Configure warns and Bazel builds without the remote cache.
-func Configure(action *githubactions.Action, mode string, magicCache bool, runtimeToken string) {
+func Configure(action *githubactions.Action, magicCache bool, runtimeToken string) {
 	const fallback = "Bazel builds without the remote cache"
-	if mode != "true" {
-		action.Warningf("bazel_remote_cache is %q, want \"true\"; %s.", mode, fallback)
-		return
-	}
-	cacheURL, ok := magiccache.RegisterFor(action, "bazel_remote_cache", "bazel", fallback, magicCache, runtimeToken)
+	cacheURL, ok := magiccache.RegisterFor(action, "remote_cache: bazel", "bazel", fallback, magicCache, runtimeToken)
 	if !ok {
 		return
 	}
 	path := systemRC()
 	if err := writeSystemRC(path, cacheURL); err != nil {
-		action.Warningf("bazel_remote_cache could not write %s (%v); %s.", path, err, fallback)
+		action.Warningf("remote_cache: bazel could not write %s (%v); %s.", path, err, fallback)
 		return
 	}
 	action.Infof("Wrote --remote_cache to %s: Bazel uses Magic Cache as its remote cache in the next steps, unless the project sets its own --remote_cache.", path)

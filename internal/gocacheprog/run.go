@@ -26,10 +26,10 @@ func jobTemp() string {
 
 // OptionsFromEnv describes the job's cache from what its steps see: the
 // gocacheprog namespace of the key/value cache the action registered, in
-// RUNS_ON_TOOLS_KV_URL. Without it, the cache stays on local disk.
+// RUNS_ON_REMOTE_CACHE_URL. Without it, the cache stays on local disk.
 func OptionsFromEnv(shareTestResults bool) Options {
 	endpoint := ""
-	if base := strings.TrimSpace(os.Getenv(magiccache.ToolsKVURLEnv)); base != "" {
+	if base := strings.TrimSpace(os.Getenv(magiccache.RemoteCacheURLEnv)); base != "" {
 		endpoint = strings.TrimSuffix(base, "/") + "/gocacheprog"
 	}
 	return Options{

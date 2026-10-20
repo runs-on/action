@@ -20,14 +20,14 @@ import (
 // (GET) and registers a job's runtime token for them (POST).
 const ToolsPath = "/_runs-on/tools"
 
-// ToolsKVURLEnv names the job variable that holds the URL of the agent's
-// key/value tool cache, for clients a step configures itself, such as
+// RemoteCacheURLEnv names the job variable that holds the URL of the agent's
+// key/value cache, for clients a step configures itself, such as
 // <URL>/<namespace>/ for a plain HTTP cache.
-const ToolsKVURLEnv = "RUNS_ON_TOOLS_KV_URL"
+const RemoteCacheURLEnv = "RUNS_ON_REMOTE_CACHE_URL"
 
 // ErrToolsNotServed is the registration's error on agents that do not serve
-// the tool caches.
-var ErrToolsNotServed = errors.New("this RunsOn agent does not serve the tool caches; upgrade it")
+// remote caches.
+var ErrToolsNotServed = errors.New("this RunsOn agent does not serve remote caches; upgrade it")
 
 // Tools is a job's registration: the URL of each tool cache protocol the
 // agent serves, and the ID in those URLs, which stands for the job's runtime
@@ -57,7 +57,7 @@ var validID = regexp.MustCompile(`^[0-9a-f]{32,128}$`)
 // with no escaping, query, or segment that starts with a dot.
 var validToolPath = regexp.MustCompile(`^(/[A-Za-z0-9_~-][A-Za-z0-9._~-]*)+$`)
 
-// Register exchanges the job's runtime token for the URLs of its tool caches.
+// Register exchanges the job's runtime token for the URLs of its remote caches.
 // Only the agent keeps the token: the URLs hold an ID the agent derives from
 // it, which works only on this agent, for the token's scopes, until it
 // expires. Registering the same token again returns the same URLs. The agent
@@ -107,7 +107,7 @@ func Register(runtimeToken string) (Tools, error) {
 }
 
 // Serves reports whether the runner's agent serves a tool cache protocol, from
-// the list it gives without a token. Agents before the tool caches answer 404.
+// the list it gives without a token. Agents before remote caches answer 404.
 func Serves(protocol string) bool {
 	agent, err := agentURL()
 	if err != nil {
@@ -159,7 +159,7 @@ func registerOnce(runtimeToken string) (Tools, error) {
 // URL, and fallback says what the job does instead, for example "Bazel builds
 // without the remote cache". The ID is masked in the job's logs: it stands
 // for the job's runtime token. Later steps get the key/value cache's URL as
-// RUNS_ON_TOOLS_KV_URL.
+// RUNS_ON_REMOTE_CACHE_URL.
 func RegisterFor(action *githubactions.Action, input, protocol, fallback string, magicCache bool, runtimeToken string) (string, bool) {
 	if !magicCache {
 		action.Warningf("%s needs Magic Cache (extras=s3-cache, or a Fleet runner with Magic Cache); %s.", input, fallback)
@@ -171,7 +171,7 @@ func RegisterFor(action *githubactions.Action, input, protocol, fallback string,
 	}
 	tools, err := registerOnce(runtimeToken)
 	if errors.Is(err, ErrToolsNotServed) {
-		action.Warningf("%s needs RunsOn v3.6.0 or later, whose agent serves the tool caches; %s.", input, fallback)
+		action.Warningf("%s needs RunsOn v3.6.0 or later, whose agent serves remote caches; %s.", input, fallback)
 		return "", false
 	}
 	if err != nil {
@@ -185,9 +185,9 @@ func RegisterFor(action *githubactions.Action, input, protocol, fallback string,
 		return "", false
 	}
 	if kv := tools.URLs["kv"]; kv != "" {
-		action.SetEnv(ToolsKVURLEnv, kv)
+		action.SetEnv(RemoteCacheURLEnv, kv)
 		// This step's own children, such as gocacheprog's prefetch, see it too.
-		_ = os.Setenv(ToolsKVURLEnv, kv)
+		_ = os.Setenv(RemoteCacheURLEnv, kv)
 	}
 	return toolURL, true
 }

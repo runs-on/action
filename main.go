@@ -119,19 +119,24 @@ func handleMainExecution(action *githubactions.Action, ctx context.Context) {
 	}
 
 	if cfg.HasSccache() {
-		sccache.Configure(action, cfg.Sccache, cfg.HasMagicCache(), cfg.ActionsRuntimeToken)
+		sccache.Configure(action, cfg.Sccache, cfg.HasMagicCache())
 	}
 
-	if cfg.HasGoCacheProg() {
-		gocacheprog.Configure(action, cfg.GoCacheProg, cfg.HasMagicCache(), cfg.ActionsRuntimeToken)
+	requests, problems := cfg.RemoteCacheRequests()
+	for _, problem := range problems {
+		action.Warningf("remote_cache %s; that record is skipped.", problem)
 	}
-
-	if cfg.HasMbx() {
-		mbx.Configure(action, cfg.Mbx, cfg.HasMagicCache(), cfg.ActionsRuntimeToken)
-	}
-
-	if cfg.HasBazelRemoteCache() {
-		bazel.Configure(action, cfg.BazelRemoteCache, cfg.HasMagicCache(), cfg.ActionsRuntimeToken)
+	for _, request := range requests {
+		switch request.Tool {
+		case "bazel":
+			bazel.Configure(action, cfg.HasMagicCache(), cfg.ActionsRuntimeToken)
+		case "go":
+			gocacheprog.Configure(action, request.Tests, cfg.HasMagicCache(), cfg.ActionsRuntimeToken)
+		case "mbx":
+			mbx.Configure(action, cfg.HasMagicCache(), cfg.ActionsRuntimeToken)
+		case "sccache":
+			sccache.ConfigureRemoteCache(action, cfg.HasMagicCache(), cfg.ActionsRuntimeToken)
+		}
 	}
 
 	// Configure sticky disk cache mounts (or restore-only mode) if requested
@@ -195,8 +200,11 @@ func handlePostExecution(action *githubactions.Action, ctx context.Context) {
 		monitoring.GenerateMetricsSummary(action, cfg.Metrics, "chart", cfg.NetworkInterface, cfg.DiskDevice)
 	}
 
-	if cfg.HasGoCacheProg() {
-		gocacheprog.SaveJobList(action, cfg.GoCacheProg)
+	requests, _ := cfg.RemoteCacheRequests()
+	for _, request := range requests {
+		if request.Tool == "go" {
+			gocacheprog.SaveJobList(action, request.Tests)
+		}
 	}
 
 	// Run cache mode post-job hooks (e.g. stop the Buildx builder) before the sticky

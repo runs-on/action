@@ -1,4 +1,4 @@
-name: Tool caches served
+name: Remote caches served
 description: >
   Tells whether the runner's RunsOn agent serves a tool cache protocol (bazel,
   sccache or kv, which gocacheprog and mbx use). GET /_runs-on/tools lists the

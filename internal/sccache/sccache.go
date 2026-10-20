@@ -29,30 +29,17 @@ const (
 // component, so a surprising repository or platform value cannot reshape the key.
 var unsafeScopeChars = regexp.MustCompile(`[^a-z0-9._-]+`)
 
-// The values of the sccache input.
-const (
-	modeMagicCache = "true"
-	modeS3         = "s3"
-)
-
-// Configure sets sccache up for the job's next steps. "true" stores its cache
-// through Magic Cache, "s3" straight in the RunsOn S3 cache bucket.
-func Configure(action *githubactions.Action, mode string, magicCache bool, runtimeToken string) {
-	switch mode {
-	case modeMagicCache:
-		configureMagicCache(action, magicCache, runtimeToken)
-	case modeS3:
-		configureS3(action, magicCache)
-	default:
-		action.Warningf("sccache is %q, want %q or %q; sccache is not configured.", mode, modeMagicCache, modeS3)
+// Configure sets sccache up for the job's next steps from the sccache input,
+// whose one value, "s3", stores its cache straight in the RunsOn S3 cache
+// bucket. remote_cache: sccache stores it through the agent instead
+// (ConfigureRemoteCache).
+func Configure(action *githubactions.Action, mode string, magicCache bool) {
+	if mode != "s3" {
+		action.Warningf("sccache is %q, want \"s3\"; sccache is not configured. For the RunsOn agent's cache, use remote_cache: sccache.", mode)
+		return
 	}
-}
-
-// configureS3 points sccache directly at the RunsOn S3 cache bucket. Where
-// the agent serves sccache's WebDAV endpoint, it recommends sccache: true.
-func configureS3(action *githubactions.Action, magicCache bool) {
 	if magicCache && magiccache.Serves("sccache") {
-		action.Warningf("sccache: s3 writes straight to the S3 cache bucket, where every branch of the repository reads and writes the same entries, outside the stack's cache isolation. This runner's agent supports sccache: true, which stores the cache through Magic Cache with GitHub's branch scoping.")
+		action.Warningf("sccache: s3 writes straight to the S3 cache bucket, where every branch of the repository reads and writes the same entries, outside the stack's cache isolation. This runner's agent supports remote_cache: sccache, which stores the cache through Magic Cache with GitHub's branch scoping.")
 	}
 	// Get required environment variables for RunsOn S3 cache
 	bucket := os.Getenv("RUNS_ON_S3_BUCKET_CACHE")

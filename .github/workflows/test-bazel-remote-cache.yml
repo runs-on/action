@@ -1,4 +1,4 @@
-name: Test / bazel_remote_cache
+name: Test / Bazel remote cache
 
 on:
   workflow_call:
@@ -7,7 +7,7 @@ jobs:
   # Each leg builds a one-rule workspace through the remote cache, cleans, and
   # builds it again from the cache.
   bazel:
-    name: bazel_remote_cache (${{ matrix.leg }})
+    name: bazel (${{ matrix.leg }})
     strategy:
       fail-fast: false
       matrix:
@@ -30,7 +30,7 @@ jobs:
       - uses: ./.github/actions/use-dist
       - uses: ./
         with:
-          bazel_remote_cache: true
+          remote_cache: bazel
       - uses: ./.github/actions/bazel-remote-cache-check
         with:
           workspace: ${{ github.run_id }}-${{ matrix.leg }}
@@ -47,7 +47,7 @@ jobs:
       - uses: ./.github/actions/use-dist
       - uses: ./
         with:
-          bazel_remote_cache: true
+          remote_cache: bazel
       - uses: ./.github/actions/bazel-remote-cache-check
         with:
           workspace: ${{ github.run_id }}-linux

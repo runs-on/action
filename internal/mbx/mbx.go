@@ -16,18 +16,14 @@ import (
 	"github.com/sethvargo/go-githubactions"
 )
 
-// Configure registers the job with the agent's tool caches and exports
+// Configure registers the job with the agent's remote caches and exports
 // MBX_REMOTE_URL, a path per mbx namespace in the mbx namespace of its
 // key/value cache, and, unless the job set one, MBX_REMOTE_NAMESPACE. mbx
 // sends no token to it: the URL's path stands for the job's token, and mbx
 // refuses a token over plain HTTP to another host. When anything is missing,
 // it warns and exports nothing.
-func Configure(action *githubactions.Action, mode string, magicCache bool, runtimeToken string) {
+func Configure(action *githubactions.Action, magicCache bool, runtimeToken string) {
 	const fallback = "mbx builds without the remote cache"
-	if mode != "true" {
-		action.Warningf("mbx is %q, want \"true\"; %s.", mode, fallback)
-		return
-	}
 	if os.Getenv("MBX_REMOTE_TOKEN") != "" || os.Getenv("MBX_REMOTE_TOKEN_FILE") != "" || os.Getenv("MBX_REMOTE_OIDC_AUDIENCE") != "" {
 		action.Warningf("the job sets mbx credentials (MBX_REMOTE_TOKEN, MBX_REMOTE_TOKEN_FILE or MBX_REMOTE_OIDC_AUDIENCE), which mbx refuses to send to the RunsOn agent over plain HTTP; %s.", fallback)
 		return
@@ -37,7 +33,7 @@ func Configure(action *githubactions.Action, mode string, magicCache bool, runti
 		action.Warningf("the job sets mbx's S3 settings (%s), which mbx refuses with the RunsOn agent's HTTP cache; the action leaves mbx's remote alone.", strings.Join(set, ", "))
 		return
 	}
-	kvURL, ok := magiccache.RegisterFor(action, "mbx", "kv", fallback, magicCache, runtimeToken)
+	kvURL, ok := magiccache.RegisterFor(action, "remote_cache: mbx", "kv", fallback, magicCache, runtimeToken)
 	if !ok {
 		return
 	}

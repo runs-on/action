@@ -31,7 +31,7 @@ jobs:
       - uses: ./.github/actions/use-dist
       - uses: ./
         with:
-          sccache: true
+          remote_cache: sccache
       - uses: taiki-e/install-action@v2.87.28
         with:
           tool: sccache@0.18.0
@@ -52,7 +52,7 @@ jobs:
       - uses: ./.github/actions/use-dist
       - uses: ./
         with:
-          sccache: true
+          remote_cache: sccache
       - uses: taiki-e/install-action@v2.87.28
         with:
           tool: sccache@0.18.0

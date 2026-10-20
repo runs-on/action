@@ -56,7 +56,7 @@ func TestWebDAVRegistration(t *testing.T) {
 			envFile := filepath.Join(t.TempDir(), "env")
 			t.Setenv("GITHUB_ENV", envFile)
 			var log bytes.Buffer
-			Configure(githubactions.New(githubactions.WithWriter(&log)), "true", true, "runtime-secret")
+			ConfigureRemoteCache(githubactions.New(githubactions.WithWriter(&log)), true, "runtime-secret")
 			env, _ := os.ReadFile(envFile)
 			if strings.Contains(string(env)+log.String(), "runtime-secret") || strings.Contains(log.String(), "do-not-log-response-body") {
 				t.Fatal("registration leaked a secret")
@@ -73,7 +73,7 @@ func TestWebDAVRegistration(t *testing.T) {
 				key, _, _ := strings.Cut(lines[i], "<<")
 				exports[key] = lines[i+1]
 			}
-			want := map[string]string{"SCCACHE_GHA_ENABLED": "false", "SCCACHE_WEBDAV_ENDPOINT": server.URL + "/_runs-on/tools/" + id + "/sccache", "RUSTC_WRAPPER": "sccache", "RUNS_ON_TOOLS_KV_URL": server.URL + "/_runs-on/tools/" + id + "/kv"}
+			want := map[string]string{"SCCACHE_GHA_ENABLED": "false", "SCCACHE_WEBDAV_ENDPOINT": server.URL + "/_runs-on/tools/" + id + "/sccache", "RUSTC_WRAPPER": "sccache", "RUNS_ON_REMOTE_CACHE_URL": server.URL + "/_runs-on/tools/" + id + "/kv"}
 			if len(exports) != len(want) {
 				t.Fatalf("unexpected exports: %d", len(exports))
 			}
@@ -124,7 +124,7 @@ func TestWebDAVWarnsAboutSettingsSccachePrefers(t *testing.T) {
 			t.Setenv("GITHUB_ENV", filepath.Join(t.TempDir(), "env"))
 			var log bytes.Buffer
 
-			Configure(githubactions.New(githubactions.WithWriter(&log)), "true", true, "runtime-secret")
+			ConfigureRemoteCache(githubactions.New(githubactions.WithWriter(&log)), true, "runtime-secret")
 
 			warned := strings.Contains(log.String(), "::warning::These settings") && strings.Contains(log.String(), tc.name)
 			if warned != tc.warns {

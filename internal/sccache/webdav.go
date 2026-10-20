@@ -9,24 +9,24 @@ import (
 	"github.com/sethvargo/go-githubactions"
 )
 
-// configureMagicCache points sccache's WebDAV backend at the agent's sccache
+// ConfigureRemoteCache points sccache's WebDAV backend at the agent's sccache
 // cache, at the URL the agent registered for the job's runtime token. The
 // URL is the credential: sccache needs no token, and the runtime token stays
 // with the agent. The first compiler invocation starts sccache in the job's
 // own environment; the action does not require or manage a sccache process.
-func configureMagicCache(action *githubactions.Action, magicCache bool, runtimeToken string) {
+func ConfigureRemoteCache(action *githubactions.Action, magicCache bool, runtimeToken string) {
 	// sccache sends these to its WebDAV endpoint: once the action replaces the
 	// job's endpoint, to the agent, over plain HTTP.
 	if set := setVariables("SCCACHE_WEBDAV_TOKEN", "SCCACHE_WEBDAV_USERNAME", "SCCACHE_WEBDAV_PASSWORD"); len(set) > 0 {
-		action.Warningf("These settings hold credentials for another WebDAV server, which sccache would send to the agent's cache: %s. Unset them for sccache: true to take effect; sccache is not configured.", strings.Join(set, ", "))
+		action.Warningf("These settings hold credentials for another WebDAV server, which sccache would send to the agent's cache: %s. Unset them for remote_cache: sccache to take effect; sccache is not configured.", strings.Join(set, ", "))
 		return
 	}
-	endpoint, ok := magiccache.RegisterFor(action, "sccache: true", "sccache", "sccache is not configured", magicCache, runtimeToken)
+	endpoint, ok := magiccache.RegisterFor(action, "remote_cache: sccache", "sccache", "sccache is not configured", magicCache, runtimeToken)
 	if !ok {
 		return
 	}
 	if set := competingBackends(); len(set) > 0 {
-		action.Warningf("These settings make sccache use another storage than the agent's WebDAV cache: %s. Unset them for sccache: true to take effect.", strings.Join(set, ", "))
+		action.Warningf("These settings make sccache use another storage than the agent's WebDAV cache: %s. Unset them for remote_cache: sccache to take effect.", strings.Join(set, ", "))
 	}
 	action.SetEnv("SCCACHE_GHA_ENABLED", "false")
 	action.SetEnv("SCCACHE_WEBDAV_ENDPOINT", endpoint)

@@ -1,4 +1,4 @@
-name: Check bazel_remote_cache
+name: Check the Bazel remote cache
 description: Builds a one-rule Bazel workspace through the remote cache that runs-on/action configured, and checks what came from it.
 
 inputs:

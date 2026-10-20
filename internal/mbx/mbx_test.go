@@ -17,7 +17,6 @@ func TestConfigurePointsMbxAtTheAgentsCache(t *testing.T) {
 	urls := map[string]bool{}
 	for _, tc := range []struct {
 		name       string
-		mode       string
 		noMagic    bool
 		token      string
 		status     int
@@ -25,14 +24,13 @@ func TestConfigurePointsMbxAtTheAgentsCache(t *testing.T) {
 		wantNS     string
 		wantWarned string
 	}{
-		{name: "registered", mode: "true", token: "job-token", wantNS: "1234"},
-		{name: "the job's own namespace", mode: "true", token: "job-token", env: map[string]string{"MBX_REMOTE_NAMESPACE": "team/app"}},
-		{name: "agent without the tool caches", mode: "true", token: "job-token", status: http.StatusNotFound, wantWarned: "v3.6.0"},
-		{name: "no Magic Cache", mode: "true", token: "job-token", noMagic: true, wantWarned: "needs Magic Cache"},
-		{name: "no runtime token", mode: "true", wantWarned: "ACTIONS_RUNTIME_TOKEN"},
-		{name: "mbx credentials", mode: "true", token: "job-token", env: map[string]string{"MBX_REMOTE_TOKEN": "secret"}, wantWarned: "plain HTTP"},
-		{name: "S3 settings", mode: "true", token: "job-token", env: map[string]string{"MBX_REMOTE_S3_REGION": "us-west-2"}, wantWarned: "MBX_REMOTE_S3_REGION"},
-		{name: "unknown mode", mode: "read-only", token: "job-token", wantWarned: `"read-only"`},
+		{name: "registered", token: "job-token", wantNS: "1234"},
+		{name: "the job's own namespace", token: "job-token", env: map[string]string{"MBX_REMOTE_NAMESPACE": "team/app"}},
+		{name: "agent without remote caches", token: "job-token", status: http.StatusNotFound, wantWarned: "v3.6.0"},
+		{name: "no Magic Cache", token: "job-token", noMagic: true, wantWarned: "needs Magic Cache"},
+		{name: "no runtime token", wantWarned: "ACTIONS_RUNTIME_TOKEN"},
+		{name: "mbx credentials", token: "job-token", env: map[string]string{"MBX_REMOTE_TOKEN": "secret"}, wantWarned: "plain HTTP"},
+		{name: "S3 settings", token: "job-token", env: map[string]string{"MBX_REMOTE_S3_REGION": "us-west-2"}, wantWarned: "MBX_REMOTE_S3_REGION"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			agent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -56,7 +54,7 @@ func TestConfigurePointsMbxAtTheAgentsCache(t *testing.T) {
 			}
 			var log bytes.Buffer
 
-			Configure(githubactions.New(githubactions.WithWriter(&log)), tc.mode, !tc.noMagic, tc.token)
+			Configure(githubactions.New(githubactions.WithWriter(&log)), !tc.noMagic, tc.token)
 
 			exported, _ := os.ReadFile(envFile)
 			warned := strings.Contains(log.String(), "::warning::")

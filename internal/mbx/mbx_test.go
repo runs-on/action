@@ -31,6 +31,7 @@ func TestConfigurePointsMbxAtTheAgentsCache(t *testing.T) {
 		{name: "no Magic Cache", mode: "true", token: "job-token", noMagic: true, wantWarned: "needs Magic Cache"},
 		{name: "no runtime token", mode: "true", wantWarned: "ACTIONS_RUNTIME_TOKEN"},
 		{name: "mbx credentials", mode: "true", token: "job-token", env: map[string]string{"MBX_REMOTE_TOKEN": "secret"}, wantWarned: "plain HTTP"},
+		{name: "S3 settings", mode: "true", token: "job-token", env: map[string]string{"MBX_REMOTE_S3_REGION": "us-west-2"}, wantWarned: "MBX_REMOTE_S3_REGION"},
 		{name: "unknown mode", mode: "read-only", token: "job-token", wantWarned: `"read-only"`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -50,7 +51,7 @@ func TestConfigurePointsMbxAtTheAgentsCache(t *testing.T) {
 			t.Setenv("RUNS_ON_MAGIC_CACHE_URL", agent.URL+"/")
 			t.Setenv("GITHUB_ENV", envFile)
 			t.Setenv("GITHUB_REPOSITORY_ID", "1234")
-			for _, name := range []string{"MBX_REMOTE_NAMESPACE", "MBX_REMOTE_TOKEN", "MBX_REMOTE_TOKEN_FILE", "MBX_REMOTE_OIDC_AUDIENCE"} {
+			for _, name := range []string{"MBX_REMOTE_NAMESPACE", "MBX_REMOTE_TOKEN", "MBX_REMOTE_TOKEN_FILE", "MBX_REMOTE_OIDC_AUDIENCE", "MBX_REMOTE_S3_REGION"} {
 				t.Setenv(name, tc.env[name])
 			}
 			var log bytes.Buffer

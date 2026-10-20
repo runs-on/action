@@ -17,6 +17,8 @@ runs:
   steps:
     - id: tools
       uses: ./.github/actions/tool-caches-served
+      with:
+        protocol: kv
     # GitHub gives the job's runtime token to actions only. runs-on/action
     # registers it with the agent and must not export it.
     - name: The runtime token is not in the steps' environment

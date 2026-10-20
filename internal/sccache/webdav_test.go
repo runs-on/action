@@ -96,10 +96,12 @@ func TestWebDAVWarnsAboutSettingsSccachePrefers(t *testing.T) {
 		_, _ = fmt.Fprint(w, registration(strings.Repeat("b", 32), "bazel", "sccache", "kv"))
 	}))
 	defer server.Close()
-	competing := []string{"SCCACHE_BUCKET", "SCCACHE_REDIS", "SCCACHE_REDIS_ENDPOINT", "SCCACHE_REDIS_CLUSTER_ENDPOINTS", "SCCACHE_MEMCACHED", "SCCACHE_MEMCACHED_ENDPOINT", "SCCACHE_GCS_BUCKET", "SCCACHE_GHA_VERSION", "SCCACHE_AZURE_BLOB_CONTAINER", "SCCACHE_GHA_ENABLED"}
+	competing := []string{"SCCACHE_BUCKET", "SCCACHE_REDIS", "SCCACHE_REDIS_ENDPOINT", "SCCACHE_REDIS_CLUSTER_ENDPOINTS", "SCCACHE_MEMCACHED", "SCCACHE_MEMCACHED_ENDPOINT", "SCCACHE_GCS_BUCKET", "SCCACHE_GHA_VERSION", "SCCACHE_AZURE_BLOB_CONTAINER", "SCCACHE_GHA_ENABLED", "SCCACHE_MULTILEVEL_CHAIN", "SCCACHE_WEBDAV_TOKEN", "SCCACHE_WEBDAV_USERNAME", "SCCACHE_WEBDAV_PASSWORD"}
 	for _, tc := range []struct {
 		name, value string
 		warns       bool
+		// leftAlone is for credentials sccache would send to the agent.
+		leftAlone bool
 	}{
 		{name: "SCCACHE_BUCKET", value: "left-from-s3", warns: true},
 		{name: "SCCACHE_REDIS_ENDPOINT", value: "redis://cache", warns: true},
@@ -108,6 +110,10 @@ func TestWebDAVWarnsAboutSettingsSccachePrefers(t *testing.T) {
 		{name: "SCCACHE_GHA_ENABLED", value: "false"},
 		{name: "SCCACHE_BUCKET", value: ""},
 		{name: "SCCACHE_WEBDAV_KEY_PREFIX", value: "namespace"},
+		{name: "SCCACHE_MULTILEVEL_CHAIN", value: "disk,s3", warns: true},
+		{name: "SCCACHE_MULTILEVEL_CHAIN", value: "disk, WebDAV"},
+		{name: "SCCACHE_WEBDAV_TOKEN", value: "another-servers-token", warns: true, leftAlone: true},
+		{name: "SCCACHE_WEBDAV_PASSWORD", value: "another-servers-password", warns: true, leftAlone: true},
 	} {
 		t.Run(tc.name+"="+tc.value, func(t *testing.T) {
 			for _, name := range competing {
@@ -124,8 +130,9 @@ func TestWebDAVWarnsAboutSettingsSccachePrefers(t *testing.T) {
 			if warned != tc.warns {
 				t.Errorf("warned about %s: %v, want %v; log:\n%s", tc.name, warned, tc.warns, log.String())
 			}
-			if exported, _ := os.ReadFile(os.Getenv("GITHUB_ENV")); !strings.Contains(string(exported), "SCCACHE_WEBDAV_ENDPOINT") {
-				t.Errorf("sccache: true did not configure WebDAV: %q", exported)
+			exported, _ := os.ReadFile(os.Getenv("GITHUB_ENV"))
+			if configured := strings.Contains(string(exported), "SCCACHE_WEBDAV_ENDPOINT"); configured == tc.leftAlone {
+				t.Errorf("sccache: true configured WebDAV: %v, want %v (%q)", configured, !tc.leftAlone, exported)
 			}
 		})
 	}

@@ -14,6 +14,8 @@ runs:
   steps:
     - id: tools
       uses: ./.github/actions/tool-caches-served
+      with:
+        protocol: kv
     # An agent before RunsOn v3.6.0: runs-on/action warns and leaves mbx
     # alone.
     - name: Without the tool caches, MBX_REMOTE_URL is not set

@@ -346,7 +346,7 @@ The action registers the job's runtime token with the agent (see [tool caches](#
 
 Install sccache before compiling. Its first client starts the compiler daemon in the job or container. The action never starts or stops it. It can exit and restart from a later step without a new action invocation. Configure the action before starting the daemon; restart an existing daemon yourself after changing its configuration.
 
-Use `SCCACHE_WEBDAV_KEY_PREFIX` for an additional namespace. sccache ranks WebDAV below its S3, Redis, Memcached, GCS, GitHub Actions cache and Azure storages, so a setting for one of them, such as a `SCCACHE_BUCKET` left from `sccache: s3`, wins over the agent's cache: the action warns when it finds one. For Rust, disable incremental compilation. C and C++ builds can use `cmake -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache`.
+Use `SCCACHE_WEBDAV_KEY_PREFIX` for an additional namespace. sccache ranks WebDAV below its S3, Redis, Memcached, GCS, GitHub Actions cache and Azure storages, so a setting for one of them, such as a `SCCACHE_BUCKET` left from `sccache: s3`, or a `SCCACHE_MULTILEVEL_CHAIN` without `webdav`, wins over the agent's cache: the action warns when the environment has one (it does not read sccache's config file, whose storages win too). A job that sets WebDAV credentials (`SCCACHE_WEBDAV_TOKEN`, `SCCACHE_WEBDAV_USERNAME` or `SCCACHE_WEBDAV_PASSWORD`) keeps its own WebDAV server, since sccache would send them to the agent; `SCCACHE_WEBDAV_RW_MODE=READ_ONLY` applies to the agent's cache. For Rust, disable incremental compilation. C and C++ builds can use `cmake -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache`.
 
 #### `sccache: s3`
 
@@ -462,7 +462,7 @@ jobs:
       - run: mbx build --workspace --locked
 ```
 
-Requires Magic Cache (`extras=s3-cache`) and RunsOn v3.6.0 or later, whose agent stores the objects (see [tool caches](#tool-caches)). Otherwise, the action warns and mbx builds without the remote cache. Objects follow GitHub's branch scoping, and by default mbx publishes only from pushes to protected branches, so pull requests read what their base branch published. mbx sends the agent no token: the URL stands for the job's runtime token. mbx refuses to send its own credentials over plain HTTP, so a job that sets `MBX_REMOTE_TOKEN`, `MBX_REMOTE_TOKEN_FILE` or `MBX_REMOTE_OIDC_AUDIENCE` gets a warning, and the action leaves mbx alone.
+Requires Magic Cache (`extras=s3-cache`) and RunsOn v3.6.0 or later, whose agent stores the objects (see [tool caches](#tool-caches)). Otherwise, the action warns and mbx builds without the remote cache. Objects follow GitHub's branch scoping, and by default mbx publishes only from pushes to protected branches, so pull requests read what their base branch published. mbx sends the agent no token: the URL stands for the job's runtime token. mbx refuses to send its own credentials over plain HTTP, so a job that sets `MBX_REMOTE_TOKEN`, `MBX_REMOTE_TOKEN_FILE` or `MBX_REMOTE_OIDC_AUDIENCE` gets a warning, and the action leaves mbx alone. So does a job that sets `MBX_REMOTE_S3_*` settings, which mbx refuses with an HTTP cache.
 
 ### `gradle_build_cache`
 

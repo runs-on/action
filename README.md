@@ -466,7 +466,7 @@ Requires Magic Cache (`extras=s3-cache`) and RunsOn v3.6.0 or later, whose agent
 
 ### `gradle_build_cache`
 
-Gives Gradle a [remote build cache](https://docs.gradle.org/current/userguide/build_cache.html) in the RunsOn agent's key/value tool cache (see [tool caches](#tool-caches)), with GitHub's branch scoping: a pull request reads its base branch's entries and writes only its own. The action writes an init script into Gradle's user home (`~/.gradle/init.d`, or `$GRADLE_USER_HOME/init.d`) that points every build of the job at `$RUNS_ON_TOOLS_KV_URL/gradle/`. Builds that have the build cache on, with `org.gradle.caching=true` in `gradle.properties` or `--build-cache`, then take the outputs of cacheable tasks, compilations and tests among them, from whatever job ran them first with the same inputs. A build that has it off says so in its output.
+Gives Gradle a [remote build cache](https://docs.gradle.org/current/userguide/build_cache.html) in the RunsOn agent's key/value tool cache (see [tool caches](#tool-caches)), with GitHub's branch scoping: a pull request reads its base branch's entries and writes only its own. The action writes an init script into Gradle's user home (`$GRADLE_USER_HOME/init.d`; when `GRADLE_USER_HOME` is unset, the action sets it to `~/.gradle` for later steps, since in container jobs Gradle would otherwise take the account's home rather than `HOME`) that points every build of the job at `$RUNS_ON_TOOLS_KV_URL/gradle/`. Builds that have the build cache on, with `org.gradle.caching=true` in `gradle.properties` or `--build-cache`, then take the outputs of cacheable tasks, compilations and tests among them, from whatever job ran them first with the same inputs. A build that has it off says so in its output.
 
 ```yaml
 jobs:

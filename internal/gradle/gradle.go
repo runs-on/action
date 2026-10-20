@@ -14,15 +14,19 @@ import (
 	"github.com/sethvargo/go-githubactions"
 )
 
+// gradleUserHome is GRADLE_USER_HOME, or ~/.gradle.
+func gradleUserHome() string {
+	if home := os.Getenv("GRADLE_USER_HOME"); home != "" {
+		return home
+	}
+	userHome, _ := os.UserHomeDir()
+	return filepath.Join(userHome, ".gradle")
+}
+
 // initScriptPath is in Gradle's user home, whose init.d scripts every build
 // runs.
 func initScriptPath() string {
-	home := os.Getenv("GRADLE_USER_HOME")
-	if home == "" {
-		userHome, _ := os.UserHomeDir()
-		home = filepath.Join(userHome, ".gradle")
-	}
-	return filepath.Join(home, "init.d", "runs-on-build-cache.gradle")
+	return filepath.Join(gradleUserHome(), "init.d", "runs-on-build-cache.gradle")
 }
 
 // initScriptHeader starts the script, so the post step removes only its own.
@@ -75,6 +79,13 @@ func Configure(action *githubactions.Action, mode string, magicCache bool, runti
 	if err := writeInitScript(script, kvURL+"/gradle/"); err != nil {
 		action.Warningf("gradle_build_cache could not write %s (%v); %s.", script, err, fallback)
 		return
+	}
+	// Without GRADLE_USER_HOME, Gradle uses the JVM's user.home, which is the
+	// account's home from the user database, not HOME: in a container job,
+	// HOME is /github/home while root's home is /root. Exporting the home the
+	// script is in makes Gradle read it there.
+	if os.Getenv("GRADLE_USER_HOME") == "" {
+		action.SetEnv("GRADLE_USER_HOME", gradleUserHome())
 	}
 	action.Infof("Wrote %s: Gradle builds in the next steps that have the build cache on use the RunsOn agent's cache, unless they configure a remote cache of their own.", script)
 }

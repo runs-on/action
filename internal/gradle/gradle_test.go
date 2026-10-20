@@ -21,9 +21,11 @@ func TestConfigurePointsGradleAtTheAgentsCache(t *testing.T) {
 		noMagic    bool
 		token      string
 		status     int
+		gradleHome bool
 		wantWarned string
 	}{
 		{name: "registered", mode: "true", token: "job-token"},
+		{name: "the job's own Gradle user home", mode: "true", token: "job-token", gradleHome: true},
 		{name: "agent without the tool caches", mode: "true", token: "job-token", status: http.StatusNotFound, wantWarned: "v3.6.0"},
 		{name: "no Magic Cache", mode: "true", token: "job-token", noMagic: true, wantWarned: "needs Magic Cache"},
 		{name: "no runtime token", mode: "true", wantWarned: "ACTIONS_RUNTIME_TOKEN"},
@@ -43,11 +45,29 @@ func TestConfigurePointsGradleAtTheAgentsCache(t *testing.T) {
 			}))
 			defer agent.Close()
 			t.Setenv("RUNS_ON_MAGIC_CACHE_URL", agent.URL+"/")
-			t.Setenv("GITHUB_ENV", filepath.Join(t.TempDir(), "env"))
-			t.Setenv("GRADLE_USER_HOME", t.TempDir())
+			envFile := filepath.Join(t.TempDir(), "env")
+			t.Setenv("GITHUB_ENV", envFile)
+			// Without GRADLE_USER_HOME, the action exports the one it wrote the
+			// script in, ~/.gradle, which Gradle would otherwise take from the
+			// user database rather than HOME.
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("USERPROFILE", home)
+			gradleHome := ""
+			if tc.gradleHome {
+				gradleHome = t.TempDir()
+			}
+			t.Setenv("GRADLE_USER_HOME", gradleHome)
 			var log bytes.Buffer
 
 			Configure(githubactions.New(githubactions.WithWriter(&log)), tc.mode, !tc.noMagic, tc.token)
+			exported, _ := os.ReadFile(envFile)
+			if got, want := strings.Contains(string(exported), "GRADLE_USER_HOME"), tc.wantWarned == "" && !tc.gradleHome; got != want {
+				t.Errorf("exported GRADLE_USER_HOME: %v, want %v (%q)", got, want, exported)
+			}
+			if tc.wantWarned == "" && !tc.gradleHome && !strings.Contains(string(exported), filepath.Join(home, ".gradle")) {
+				t.Errorf("exported %q, want GRADLE_USER_HOME=%s", exported, filepath.Join(home, ".gradle"))
+			}
 
 			script, err := os.ReadFile(initScriptPath())
 			warned := strings.Contains(log.String(), "::warning::")

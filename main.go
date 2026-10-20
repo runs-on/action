@@ -16,6 +16,7 @@ import (
 	"github.com/runs-on/action/internal/env"
 	"github.com/runs-on/action/internal/gitproxy"
 	"github.com/runs-on/action/internal/gocacheprog"
+	"github.com/runs-on/action/internal/gradle"
 	"github.com/runs-on/action/internal/magiccache"
 	"github.com/runs-on/action/internal/mbx"
 	"github.com/runs-on/action/internal/monitoring"
@@ -131,6 +132,8 @@ func handleMainExecution(action *githubactions.Action, ctx context.Context) {
 			bazel.Configure(action, cfg.HasMagicCache(), cfg.ActionsRuntimeToken)
 		case "go":
 			gocacheprog.Configure(action, request.Tests, cfg.HasMagicCache(), cfg.ActionsRuntimeToken)
+		case "gradle":
+			gradle.Configure(action, cfg.HasMagicCache(), cfg.ActionsRuntimeToken)
 		case "mbx":
 			mbx.Configure(action, cfg.HasMagicCache(), cfg.ActionsRuntimeToken)
 		case "sccache":
@@ -201,8 +204,11 @@ func handlePostExecution(action *githubactions.Action, ctx context.Context) {
 
 	requests, _ := cfg.RemoteCacheRequests()
 	for _, request := range requests {
-		if request.Tool == "go" {
+		switch request.Tool {
+		case "go":
 			gocacheprog.SaveJobList(action, request.Tests)
+		case "gradle":
+			gradle.Finish()
 		}
 	}
 

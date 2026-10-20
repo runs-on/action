@@ -372,6 +372,7 @@ Gives build tools a remote cache that the RunsOn agent stores in the stack's S3 
     remote_cache: |
       bazel
       go,tests=true
+      gradle
       mbx
       sccache
 ```
@@ -380,6 +381,7 @@ Gives build tools a remote cache that the RunsOn agent stores in the stack's S3 
 | --- | --- |
 | `bazel` | `--remote_cache` in Bazel's system rc (Bazel 6.3 or later) |
 | `go` | `GOCACHEPROG` (Go 1.24 or later); `go,tests=true` also shares test results |
+| `gradle` | an init script for Gradle's HTTP build cache (Gradle 7.6 or later) |
 | `mbx` | `MBX_REMOTE_URL` and `MBX_REMOTE_NAMESPACE` |
 | `sccache` | `RUSTC_WRAPPER` and `SCCACHE_WEBDAV_ENDPOINT` |
 
@@ -434,6 +436,29 @@ Container jobs work too: the runner mounts the action, and so the helper, into t
 Compiled packages are shared between jobs; test results are not. Within a job, tests whose inputs did not change are still reported as `(cached)`, but a new job runs its tests again, because a test can depend on things Go does not track, such as a database or the network.
 
 To share test results too, use `go,tests=true`. A job then reports `(cached)` for a test that passed in another job with the same inputs: the package, its dependencies, and the files and environment variables the test read through the standard library. Go does not see a database, the network or a file read by a child process, so keep the default for tests that depend on those, or run them with `go test -count=1`. Jobs that use `go` never read the results that `go,tests=true` jobs share. What a passing test printed is stored with its result, so with `tests=true` it is readable by any job that can read the cache, including pull requests from forks: do not use it for tests that print secrets.
+
+#### `remote_cache: gradle`
+
+Gives Gradle a [remote build cache](https://docs.gradle.org/current/userguide/build_cache.html) in the agent's key/value cache. The action writes an init script into Gradle's user home (`$GRADLE_USER_HOME/init.d`; when `GRADLE_USER_HOME` is unset, the action sets it to `~/.gradle` for later steps, since in container jobs Gradle would otherwise take the account's home rather than `HOME`) that points every build of the job at `$RUNS_ON_REMOTE_CACHE_URL/gradle/`. Builds that have the build cache on, with `org.gradle.caching=true` in `gradle.properties` or `--build-cache`, then take the outputs of cacheable tasks, compilations and tests among them, from whatever job ran them first with the same inputs. A build that has it off says so in its output.
+
+```yaml
+jobs:
+  build:
+    runs-on: runs-on=${{ github.run_id }}/runner=16cpu-linux-x64/extras=s3-cache
+    steps:
+      - uses: runs-on/action@v2
+        with:
+          remote_cache: gradle
+      - uses: actions/checkout@v5
+      - uses: gradle/actions/setup-gradle@v6 # the distribution and dependencies
+      - run: ./gradlew build --build-cache
+```
+
+The build cache holds task outputs, not Gradle's distribution, dependencies or compiled build scripts, which most of a warm build's time goes to without a cache of its own: keep `gradle/actions/setup-gradle` for those. It only saves on the default branch by default, so on a pull request, a push to the pull request rebuilds what earlier pushes changed; `remote_cache: gradle` saves those outputs in the pull request's scope.
+
+Gradle 7.6 to 9 are tested. A build that configures its own enabled remote cache, for example Develocity's, keeps it, and Gradle says so in its output; a disabled one is replaced. The post step removes the init script.
+
+The init script holds the job's cache URL, which changes from one job to the next, so a [configuration cache](https://docs.gradle.org/current/userguide/configuration_cache.html) restored from another job, as `setup-gradle` does when given a `cache-encryption-key`, is not reused.
 
 #### `remote_cache: sccache`
 
@@ -499,7 +524,7 @@ The variable holds the same credential as the tools' configuration: whatever rea
 
 #### How the job reaches the cache
 
-None of these tools sends a GitHub token, so the action sends the job's runtime token to the agent once (`POST /_runs-on/tools`), and the agent answers with an ID that stands for it, `<id>`, and the path of each protocol it serves: `bazel` (Bazel's HTTP cache), `sccache` (sccache's WebDAV storage) and `kv`, a plain key/value cache that `go`, `mbx` and other clients use with namespaces of their own. The paths hold the ID (`/_runs-on/tools/<id>/kv`), and the action uses them as given, on the same agent. The same token always gets the same paths, nothing without the token can compute them, and they work on this runner only, until the token expires. The action masks `<id>` in the job's logs. It configures a tool only when the agent gives its protocol a path (`GET /_runs-on/tools` lists the protocols without a token); on an older agent, or one without that protocol, the action warns and leaves the tool alone.
+None of these tools sends a GitHub token, so the action sends the job's runtime token to the agent once (`POST /_runs-on/tools`), and the agent answers with an ID that stands for it, `<id>`, and the path of each protocol it serves: `bazel` (Bazel's HTTP cache), `sccache` (sccache's WebDAV storage) and `kv`, a plain key/value cache that `go`, `gradle`, `mbx` and other clients use with namespaces of their own. The paths hold the ID (`/_runs-on/tools/<id>/kv`), and the action uses them as given, on the same agent. The same token always gets the same paths, nothing without the token can compute them, and they work on this runner only, until the token expires. The action masks `<id>` in the job's logs. It configures a tool only when the agent gives its protocol a path (`GET /_runs-on/tools` lists the protocols without a token); on an older agent, or one without that protocol, the action warns and leaves the tool alone.
 
 ### `sticky_cache`
 

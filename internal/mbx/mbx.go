@@ -8,9 +8,13 @@ package mbx
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/runs-on/action/internal/magiccache"
 	"github.com/sethvargo/go-githubactions"
@@ -46,8 +50,38 @@ func Configure(action *githubactions.Action, magicCache bool, runtimeToken strin
 	// read, so the URL keeps namespaces apart. A hash fits any namespace in
 	// one path segment.
 	sum := sha256.Sum256([]byte(namespace))
-	action.SetEnv("MBX_REMOTE_URL", kvURL+"/mbx/"+hex.EncodeToString(sum[:16])+"/")
+	remoteURL := kvURL + "/mbx/" + hex.EncodeToString(sum[:16]) + "/"
+	action.SetEnv("MBX_REMOTE_URL", remoteURL)
 	action.Infof("Set MBX_REMOTE_URL: mbx uses the RunsOn agent's cache in the next steps.")
+	if err := storeCapabilities(remoteURL); err != nil {
+		action.Infof("Could not store mbx's capabilities document (%v): mbx builds work without it, but mbx's setup action warns that it could not reach the remote cache.", err)
+	}
+}
+
+// capabilities is mbx's protocol 1 capabilities document claiming no
+// optional feature, which is what mbx builds assume when there is none. mbx
+// doctor, which mbx's setup action runs, requires one.
+const capabilities = `{"protocol":{"major":1,"minor":0}}`
+
+// storeCapabilities stores the capabilities document in the cache, where mbx
+// reads it: it is an ordinary entry, which the job rewrites in its own scope.
+func storeCapabilities(remoteURL string) error {
+	req, err := http.NewRequest(http.MethodPut, remoteURL+"v1/capabilities", strings.NewReader(capabilities))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	client := &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+	if resp.StatusCode/100 != 2 {
+		return fmt.Errorf("the agent answered HTTP %d", resp.StatusCode)
+	}
+	return nil
 }
 
 // defaultNamespace keeps the repository's objects apart: its ID survives a

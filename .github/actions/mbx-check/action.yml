@@ -44,6 +44,17 @@ runs:
       uses: jdx/mr-boxington-action@v1.7.2
       with:
         backend: remote
+    # mbx doctor, which the setup action also runs, needs the capabilities
+    # document runs-on/action stores in the cache.
+    - name: mbx finds the remote cache compatible
+      if: steps.tools.outputs.served == 'true'
+      shell: bash
+      run: |
+        report=$(mbx doctor --json || true)
+        if ! grep -q 'is compatible' <<<"${report}"; then
+          echo "::error::mbx doctor does not find the remote cache compatible: ${report}"
+          exit 1
+        fi
     - name: Create a workspace
       if: steps.tools.outputs.served == 'true'
       shell: bash

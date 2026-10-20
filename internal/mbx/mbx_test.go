@@ -2,10 +2,14 @@ package mbx
 
 import (
 	"bytes"
+	"encoding/json"
+	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -33,9 +37,16 @@ func TestConfigurePointsMbxAtTheAgentsCache(t *testing.T) {
 		{name: "S3 settings", token: "job-token", env: map[string]string{"MBX_REMOTE_S3_REGION": "us-west-2"}, wantWarned: "MBX_REMOTE_S3_REGION"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			// stored holds the agent's key/value entries by path.
+			stored := map[string][]byte{}
 			agent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if tc.status != 0 {
 					w.WriteHeader(tc.status)
+					return
+				}
+				if r.Method == http.MethodPut && strings.HasPrefix(r.URL.Path, "/_runs-on/tools/"+id+"/kv/mbx/") {
+					stored[r.URL.Path], _ = io.ReadAll(r.Body)
+					w.WriteHeader(http.StatusNoContent)
 					return
 				}
 				if r.Method != http.MethodPost || r.URL.Path != "/_runs-on/tools" || r.Header.Get("Authorization") != "Bearer job-token" {
@@ -62,8 +73,8 @@ func TestConfigurePointsMbxAtTheAgentsCache(t *testing.T) {
 				if !warned || !strings.Contains(log.String(), tc.wantWarned) {
 					t.Errorf("log %q, want a warning containing %q", log.String(), tc.wantWarned)
 				}
-				if strings.Contains(string(exported), "MBX_REMOTE_URL") {
-					t.Error("MBX_REMOTE_URL was exported")
+				if strings.Contains(string(exported), "MBX_REMOTE_URL") || len(stored) > 0 {
+					t.Error("MBX_REMOTE_URL was exported, or an entry stored")
 				}
 				return
 			}
@@ -82,6 +93,14 @@ func TestConfigurePointsMbxAtTheAgentsCache(t *testing.T) {
 				t.Errorf("MBX_REMOTE_URL %q has another namespace's path", url)
 			}
 			urls[path] = true
+			// mbx doctor, which mbx's setup action runs, reads a protocol 1
+			// capabilities document there.
+			var document struct {
+				Protocol struct{ Major int } `json:"protocol"`
+			}
+			if err := json.Unmarshal(stored[strings.TrimPrefix(url, agent.URL)+"v1/capabilities"], &document); err != nil || document.Protocol.Major != 1 {
+				t.Errorf("stored entries %q, want a protocol 1 capabilities document below %s (%v)", slices.Collect(maps.Keys(stored)), url, err)
+			}
 			if got := strings.Contains(string(exported), "MBX_REMOTE_NAMESPACE"); got != (tc.wantNS != "") || !strings.Contains(string(exported), tc.wantNS) {
 				t.Errorf("exported %q, want MBX_REMOTE_NAMESPACE %q only when the job sets none", exported, tc.wantNS)
 			}

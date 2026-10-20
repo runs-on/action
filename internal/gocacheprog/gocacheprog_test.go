@@ -27,7 +27,7 @@ func TestConfigureExportsGOCACHEPROGOnlyWithMagicCacheAndAToken(t *testing.T) {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
-		_, _ = w.Write([]byte(`{"path":"/_runs-on/tools/` + id + `","protocols":["bazel","sccache","kv"]}`))
+		_, _ = w.Write([]byte(`{"id":"` + id + `","protocols":{"bazel":"/_runs-on/tools/` + id + `/bazel","sccache":"/_runs-on/tools/` + id + `/sccache","kv":"/_runs-on/tools/` + id + `/kv"}}`))
 	}))
 	defer agent.Close()
 	t.Setenv("RUNS_ON_MAGIC_CACHE_URL", agent.URL+"/")
@@ -54,7 +54,7 @@ func TestConfigureExportsGOCACHEPROGOnlyWithMagicCacheAndAToken(t *testing.T) {
 			t.Setenv("GITHUB_ENV", envFile)
 			t.Setenv("RUNNER_TEMP", t.TempDir())
 			t.Setenv("ACTIONS_RUNTIME_TOKEN", "")
-			t.Setenv("RUNS_ON_TOOLS_URL", "")
+			t.Setenv("RUNS_ON_TOOLS_KV_URL", "")
 			var log bytes.Buffer
 			var prefetches []bool
 			startPrefetch = func(_ string, shareTestResults bool) error {
@@ -83,8 +83,8 @@ func TestConfigureExportsGOCACHEPROGOnlyWithMagicCacheAndAToken(t *testing.T) {
 			if strings.Contains(log.String(), "job-token") || strings.Contains(string(exported), "job-token") {
 				t.Errorf("the runtime token reached the log or the next steps' environment")
 			}
-			// The helper, started from a run step, finds the job's tool caches
-			// in RUNS_ON_TOOLS_URL: its path stands for the job's token.
+			// The helper, started from a run step, finds the job's key/value
+			// cache in RUNS_ON_TOOLS_KV_URL: its path stands for the job's token.
 			wantStored := ""
 			if len(tc.want) > 0 {
 				wantStored = agent.URL + "/_runs-on/tools/" + id + "/kv/gocacheprog"
@@ -95,10 +95,10 @@ func TestConfigureExportsGOCACHEPROGOnlyWithMagicCacheAndAToken(t *testing.T) {
 			if got := OptionsFromEnv(false).Endpoint; got != wantStored {
 				t.Errorf("the helper's endpoint is %q, want %q: the job's only when GOCACHEPROG is exported", got, wantStored)
 			}
-			// Later steps get the registered base URL, for clients they
+			// Later steps get the key/value cache's URL, for clients they
 			// configure themselves; never the token.
-			if len(tc.want) > 0 && !strings.Contains(string(exported), "RUNS_ON_TOOLS_URL") {
-				t.Errorf("exported env %q lacks RUNS_ON_TOOLS_URL", exported)
+			if len(tc.want) > 0 && !strings.Contains(string(exported), "RUNS_ON_TOOLS_KV_URL") {
+				t.Errorf("exported env %q lacks RUNS_ON_TOOLS_KV_URL", exported)
 			}
 		})
 	}

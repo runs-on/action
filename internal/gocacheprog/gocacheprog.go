@@ -28,9 +28,9 @@ const (
 // Configure exports GOCACHEPROG for the job's next steps: this binary, run
 // with Flag, serves the go command's build cache (Go 1.24+) through the RunsOn
 // agent's key/value cache. The job's runtime token, which only actions
-// receive, is registered with the agent, whose answer is a cache path that
-// stands for it: the helper finds it in RUNS_ON_TOOLS_URL. Without it, the go
-// command keeps its local build cache. Configure also starts, in the background, the download of the
+// receive, is registered with the agent, whose answer is a cache URL that
+// stands for it: the helper finds it in RUNS_ON_TOOLS_KV_URL. Without it, the
+// go command keeps its local build cache. Configure also starts, in the background, the download of the
 // entries the job's previous run used.
 func Configure(action *githubactions.Action, mode string, magicCache bool, runtimeToken string) {
 	if mode != modeBuilds && mode != modeWithTests {

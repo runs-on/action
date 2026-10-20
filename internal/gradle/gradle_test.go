@@ -39,7 +39,7 @@ func TestConfigurePointsGradleAtTheAgentsCache(t *testing.T) {
 					w.WriteHeader(http.StatusUnauthorized)
 					return
 				}
-				_, _ = w.Write([]byte(`{"path":"/_runs-on/tools/` + id + `","protocols":["bazel","sccache","kv"]}`))
+				_, _ = w.Write([]byte(`{"id":"` + id + `","protocols":{"bazel":"/_runs-on/tools/` + id + `/bazel","sccache":"/_runs-on/tools/` + id + `/sccache","kv":"/_runs-on/tools/` + id + `/kv"}}`))
 			}))
 			defer agent.Close()
 			t.Setenv("RUNS_ON_MAGIC_CACHE_URL", agent.URL+"/")

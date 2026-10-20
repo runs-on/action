@@ -9,12 +9,12 @@ import (
 )
 
 // configureMagicCache points sccache's WebDAV backend at the agent's sccache
-// cache, under the path the agent registered for the job's runtime token. The
-// path is the credential: sccache needs no token, and the runtime token stays
+// cache, at the URL the agent registered for the job's runtime token. The
+// URL is the credential: sccache needs no token, and the runtime token stays
 // with the agent. The first compiler invocation starts sccache in the job's
 // own environment; the action does not require or manage a sccache process.
 func configureMagicCache(action *githubactions.Action, magicCache bool, runtimeToken string) {
-	tools, ok := magiccache.RegisterFor(action, "sccache: true", "sccache", "sccache is not configured", magicCache, runtimeToken)
+	endpoint, ok := magiccache.RegisterFor(action, "sccache: true", "sccache", "sccache is not configured", magicCache, runtimeToken)
 	if !ok {
 		return
 	}
@@ -22,7 +22,7 @@ func configureMagicCache(action *githubactions.Action, magicCache bool, runtimeT
 		action.Warningf("These settings make sccache use another storage than the agent's WebDAV cache: %s. Unset them for sccache: true to take effect.", strings.Join(set, ", "))
 	}
 	action.SetEnv("SCCACHE_GHA_ENABLED", "false")
-	action.SetEnv("SCCACHE_WEBDAV_ENDPOINT", tools.URL+"/sccache")
+	action.SetEnv("SCCACHE_WEBDAV_ENDPOINT", endpoint)
 	action.SetEnv("RUSTC_WRAPPER", "sccache")
 	action.Infof("Configured sccache to use the agent's WebDAV cache. Install sccache before compiling; its first client starts the server.")
 }

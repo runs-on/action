@@ -17,6 +17,7 @@ import (
 	"github.com/runs-on/action/internal/gocacheprog"
 	"github.com/runs-on/action/internal/gradle"
 	"github.com/runs-on/action/internal/magiccache"
+	"github.com/runs-on/action/internal/mbx"
 	"github.com/runs-on/action/internal/monitoring"
 	"github.com/runs-on/action/internal/sccache"
 	"github.com/runs-on/action/internal/stickydisk"
@@ -124,6 +125,10 @@ func handleMainExecution(action *githubactions.Action, ctx context.Context) {
 
 	if cfg.HasGoCacheProg() {
 		gocacheprog.Configure(action, cfg.GoCacheProg, cfg.HasMagicCache(), cfg.ActionsRuntimeToken)
+	}
+
+	if cfg.HasMbx() {
+		mbx.Configure(action, cfg.Mbx, cfg.HasMagicCache(), cfg.ActionsRuntimeToken)
 	}
 
 	if cfg.HasGradleBuildCache() {

@@ -22,7 +22,7 @@ func TestConfigureWritesTheRegisteredCacheIntoTheSystemRC(t *testing.T) {
 			case r.Method != http.MethodPost || r.URL.Path != "/_runs-on/tools" || r.Header.Get("Authorization") != "Bearer job-token":
 				w.WriteHeader(http.StatusUnauthorized)
 			default:
-				_, _ = w.Write([]byte(`{"path":"/_runs-on/tools/` + id + `","protocols":["bazel","sccache","kv"]}`))
+				_, _ = w.Write([]byte(`{"id":"` + id + `","protocols":{"bazel":"/_runs-on/tools/` + id + `/bazel","sccache":"/_runs-on/tools/` + id + `/sccache","kv":"/_runs-on/tools/` + id + `/kv"}}`))
 			}
 		}))
 	}

@@ -67,12 +67,12 @@ func Configure(action *githubactions.Action, mode string, magicCache bool, runti
 		action.Warningf("gradle_build_cache is %q, want \"true\"; %s.", mode, fallback)
 		return
 	}
-	tools, ok := magiccache.RegisterFor(action, "gradle_build_cache", "kv", fallback, magicCache, runtimeToken)
+	kvURL, ok := magiccache.RegisterFor(action, "gradle_build_cache", "kv", fallback, magicCache, runtimeToken)
 	if !ok {
 		return
 	}
 	script := initScriptPath()
-	if err := writeInitScript(script, tools.URL+"/kv/gradle/"); err != nil {
+	if err := writeInitScript(script, kvURL+"/gradle/"); err != nil {
 		action.Warningf("gradle_build_cache could not write %s (%v); %s.", script, err, fallback)
 		return
 	}

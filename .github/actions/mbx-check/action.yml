@@ -1,0 +1,97 @@
+name: Check mbx
+description: Builds a small Cargo workspace with mbx through the RunsOn agent's key/value cache, and checks what went to and came from Magic Cache.
+
+inputs:
+  workspace:
+    description: Identifies the workspace's content. The job that publishes it and the job that builds from it pass the same value.
+    required: true
+  uploads:
+    description: '"true" in the job that builds and publishes, "false" in a later job that only reads.'
+    default: 'true'
+
+runs:
+  using: composite
+  steps:
+    - id: tools
+      uses: ./.github/actions/tool-caches-served
+    # An agent before RunsOn v3.6.0: runs-on/action warns and leaves mbx
+    # alone.
+    - name: Without the tool caches, MBX_REMOTE_URL is not set
+      if: steps.tools.outputs.served != 'true'
+      shell: bash
+      run: |
+        if [[ -n "${MBX_REMOTE_URL:-}" ]]; then
+          echo "::error::MBX_REMOTE_URL is set on an agent without the tool caches"
+          exit 1
+        fi
+    # GitHub gives the job's runtime token to actions only. mbx gets a URL
+    # that stands for it, and no token.
+    - name: mbx gets the agent's cache, and no token
+      if: steps.tools.outputs.served == 'true'
+      shell: bash
+      run: |
+        if [[ -n "${ACTIONS_RUNTIME_TOKEN:-}" || -n "${MBX_REMOTE_TOKEN:-}" ]]; then
+          echo "::error::a token is in the environment of the job's run steps"
+          exit 1
+        fi
+        if [[ "${MBX_REMOTE_URL:-}" != http://*/mbx/ || -z "${MBX_REMOTE_NAMESPACE:-}" ]]; then
+          echo "::error::MBX_REMOTE_URL is '${MBX_REMOTE_URL:-}' and MBX_REMOTE_NAMESPACE '${MBX_REMOTE_NAMESPACE:-}', want the agent's key/value cache and a namespace"
+          exit 1
+        fi
+    - if: steps.tools.outputs.served == 'true'
+      uses: jdx/mr-boxington-action@v1.7.2
+      with:
+        backend: remote
+    - name: Create a workspace
+      if: steps.tools.outputs.served == 'true'
+      shell: bash
+      env:
+        WORKSPACE: ${{ inputs.workspace }}
+      run: |
+        dir="${RUNNER_TEMP}/mbx-check"
+        mkdir -p "${dir}/lib/src" "${dir}/app/src"
+        cd "${dir}"
+        printf '[workspace]\nmembers = ["lib", "app"]\nresolver = "2"\n' > Cargo.toml
+        printf '[package]\nname = "mbx-check-lib"\nversion = "0.1.0"\nedition = "2021"\n' > lib/Cargo.toml
+        printf 'pub fn greeting() -> &%sstatic str {\n    "%s"\n}\n' "'" "${WORKSPACE}" > lib/src/lib.rs
+        printf '[package]\nname = "mbx-check-app"\nversion = "0.1.0"\nedition = "2021"\n\n[dependencies]\nmbx-check-lib = { path = "../lib" }\n' > app/Cargo.toml
+        printf 'fn main() {\n    println!("{}", mbx_check_lib::greeting());\n}\n' > app/src/main.rs
+        # mbx keys its predictions by the lockfile, which a project commits.
+        cargo generate-lockfile
+    # mbx only publishes from pushes to protected branches, and CI runs on
+    # every branch, so the job that publishes tells mbx it is one. The agent
+    # still scopes what it writes to this job's ref.
+    - name: Build and publish
+      if: steps.tools.outputs.served == 'true' && inputs.uploads == 'true'
+      shell: bash
+      run: |
+        cd "${RUNNER_TEMP}/mbx-check"
+        GITHUB_EVENT_NAME=push GITHUB_REF_TYPE=branch GITHUB_REF_PROTECTED=true mbx build --workspace --locked
+    - name: Build from Magic Cache
+      if: steps.tools.outputs.served == 'true' && inputs.uploads != 'true'
+      shell: bash
+      run: |
+        cd "${RUNNER_TEMP}/mbx-check"
+        mbx build --workspace --locked
+    - name: Check what went through the agent
+      if: steps.tools.outputs.served == 'true'
+      shell: bash
+      env:
+        UPLOADS: ${{ inputs.uploads }}
+      run: |
+        set -euo pipefail
+        command -v jq >/dev/null || { apt-get update -qq && apt-get install -y -qq jq >/dev/null; }
+        cache_url="${RUNS_ON_MAGIC_CACHE_URL:-${ACTIONS_RESULTS_URL}}"
+        diagnostics=$(curl -fsS "${cache_url%/}/_runs-on/diagnostics")
+        count() { jq --arg op "$1" '[.objects[] | select(.operation == $op and .version == "kv/mbx")] | length' <<<"${diagnostics}"; }
+        reads=$(count read)
+        writes=$(count write)
+        echo "kv/mbx reads: ${reads}, writes: ${writes}"
+        if [[ "${UPLOADS}" == true && "${writes}" == 0 ]]; then
+          echo "::error::mbx published nothing through the agent"
+          exit 1
+        fi
+        if [[ "${UPLOADS}" != true && "${reads}" == 0 ]]; then
+          echo "::error::mbx read nothing through the agent"
+          exit 1
+        fi

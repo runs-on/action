@@ -342,7 +342,7 @@ jobs:
       - run: cargo build --release --locked
 ```
 
-The action registers the job's runtime token with the agent (see [tool caches](#tool-caches)), then exports `SCCACHE_WEBDAV_ENDPOINT=<Magic Cache URL>/_runs-on/tools/<id>/sccache`, `RUSTC_WRAPPER=sccache` and `SCCACHE_GHA_ENABLED=false`. sccache needs no token: only the agent keeps the job's runtime token.
+The action registers the job's runtime token with the agent (see [tool caches](#tool-caches)), then exports `SCCACHE_WEBDAV_ENDPOINT` with the URL the agent gives sccache's cache (`<Magic Cache URL>/_runs-on/tools/<id>/sccache`), `RUSTC_WRAPPER=sccache` and `SCCACHE_GHA_ENABLED=false`. sccache needs no token: only the agent keeps the job's runtime token.
 
 Install sccache before compiling. Its first client starts the compiler daemon in the job or container. The action never starts or stops it. It can exit and restart from a later step without a new action invocation. Configure the action before starting the daemon; restart an existing daemon yourself after changing its configuration.
 
@@ -417,7 +417,7 @@ jobs:
       - run: go build ./... && go test ./...
 ```
 
-Requires Magic Cache (`extras=s3-cache`) and RunsOn v3.6.0 or later, whose agent stores the entries (see [tool caches](#tool-caches)). Otherwise, the action warns and the go command keeps its local build cache. Container jobs work too: the runner mounts the action, and so the helper, into the job container. The helper finds the job's tool caches in `RUNS_ON_TOOLS_URL`; the runtime token reaches no run step.
+Requires Magic Cache (`extras=s3-cache`) and RunsOn v3.6.0 or later, whose agent stores the entries (see [tool caches](#tool-caches)). Otherwise, the action warns and the go command keeps its local build cache. Container jobs work too: the runner mounts the action, and so the helper, into the job container. The helper finds the job's key/value cache in `RUNS_ON_TOOLS_KV_URL`; the runtime token reaches no run step.
 
 Compiled packages are shared between jobs; test results are not. Within a job, tests whose inputs did not change are still reported as `(cached)`, but a new job runs its tests again, because a test can depend on things Go does not track, such as a database or the network.
 
@@ -441,11 +441,32 @@ jobs:
 
 Requires Magic Cache (`extras=s3-cache`) and RunsOn v3.6.0 or later. Otherwise, the action warns and Bazel builds without the remote cache. `--remote_download_minimal` skips downloading outputs that later actions do not need, which matters most on warm builds.
 
-Bazel's HTTP cache client sends no credentials, so the action registers the job's runtime token with the RunsOn agent (see [tool caches](#tool-caches)). The rc gets `common --remote_cache=http://<runner IP>:6871/_runs-on/tools/<id>/bazel`, in `/etc/bazel.bazelrc` (with `sudo`), or `%ProgramData%\bazel.bazelrc` on Windows. In a container job, the action writes the container's system rc, which needs root or passwordless `sudo` in the container; without either, it warns.
+Bazel's HTTP cache client sends no credentials, so the action registers the job's runtime token with the RunsOn agent (see [tool caches](#tool-caches)). The rc gets `common --remote_cache=` with the URL the agent gives Bazel's cache (`http://<runner IP>:6871/_runs-on/tools/<id>/bazel`), in `/etc/bazel.bazelrc` (with `sudo`), or `%ProgramData%\bazel.bazelrc` on Windows. In a container job, the action writes the container's system rc, which needs root or passwordless `sudo` in the container; without either, it warns.
+
+### `mbx`
+
+Gives [mbx](https://github.com/jdx/mr-boxington) a remote cache stored through Magic Cache: later steps get `MBX_REMOTE_URL`, the `mbx` namespace of the RunsOn agent's key/value cache, and, unless the job sets one, `MBX_REMOTE_NAMESPACE` (the repository's ID). Set up mbx after this action, so its setup finds them:
+
+```yaml
+jobs:
+  build:
+    runs-on: runs-on=${{ github.run_id }}/runner=8cpu-linux-x64/extras=s3-cache
+    steps:
+      - uses: runs-on/action@v2
+        with:
+          mbx: true
+      - uses: actions/checkout@v5
+      - uses: jdx/mr-boxington-action@v1.7.2
+        with:
+          backend: remote
+      - run: mbx build --workspace --locked
+```
+
+Requires Magic Cache (`extras=s3-cache`) and RunsOn v3.6.0 or later, whose agent stores the objects (see [tool caches](#tool-caches)). Otherwise, the action warns and mbx builds without the remote cache. Objects follow GitHub's branch scoping, and by default mbx publishes only from pushes to protected branches, so pull requests read what their base branch published. mbx sends the agent no token: the URL stands for the job's runtime token. mbx refuses to send its own credentials over plain HTTP, so a job that sets `MBX_REMOTE_TOKEN`, `MBX_REMOTE_TOKEN_FILE` or `MBX_REMOTE_OIDC_AUDIENCE` gets a warning, and the action leaves mbx alone.
 
 ### `gradle_build_cache`
 
-Gives Gradle a [remote build cache](https://docs.gradle.org/current/userguide/build_cache.html) in the RunsOn agent's key/value tool cache (see [tool caches](#tool-caches)), with GitHub's branch scoping: a pull request reads its base branch's entries and writes only its own. The action writes an init script into Gradle's user home (`~/.gradle/init.d`, or `$GRADLE_USER_HOME/init.d`) that points every build of the job at `$RUNS_ON_TOOLS_URL/kv/gradle/`. Builds that have the build cache on, with `org.gradle.caching=true` in `gradle.properties` or `--build-cache`, then take the outputs of cacheable tasks, compilations and tests among them, from whatever job ran them first with the same inputs. A build that has it off says so in its output.
+Gives Gradle a [remote build cache](https://docs.gradle.org/current/userguide/build_cache.html) in the RunsOn agent's key/value tool cache (see [tool caches](#tool-caches)), with GitHub's branch scoping: a pull request reads its base branch's entries and writes only its own. The action writes an init script into Gradle's user home (`~/.gradle/init.d`, or `$GRADLE_USER_HOME/init.d`) that points every build of the job at `$RUNS_ON_TOOLS_KV_URL/gradle/`. Builds that have the build cache on, with `org.gradle.caching=true` in `gradle.properties` or `--build-cache`, then take the outputs of cacheable tasks, compilations and tests among them, from whatever job ran them first with the same inputs. A build that has it off says so in its output.
 
 ```yaml
 jobs:
@@ -468,16 +489,16 @@ The init script holds the job's cache URL, which changes from one job to the nex
 
 ### Tool caches
 
-`sccache: true`, `gocacheprog`, `gradle_build_cache` and `bazel_remote_cache` store their entries through the RunsOn agent's tool caches (RunsOn v3.6.0 or later), in the stack's S3 cache bucket with GitHub's branch scoping, under the stack's cache isolation when it is enabled. None of these tools sends a GitHub token, so the action sends the job's runtime token to the agent once (`POST /_runs-on/tools`), and the agent answers with a path, `/_runs-on/tools/<id>`, that stands for it, and the protocols it serves: the same token always gets the same path, nothing without the token can compute it, and it works on this runner only, until the token expires. The action masks `<id>` in the job's logs. Each protocol has its own base under that path: `/bazel` (Bazel's HTTP cache), `/sccache` (sccache's WebDAV storage) and `/kv/<namespace>`, a plain key/value cache that `gocacheprog` and `gradle_build_cache` use with the `gocacheprog` and `gradle` namespaces. The action configures a tool only when the agent lists its protocol (`GET /_runs-on/tools` gives the list without a token); on an older agent, or one without that protocol, the action warns and leaves the tool alone.
+`sccache: true`, `gocacheprog`, `gradle_build_cache`, `bazel_remote_cache` and `mbx` store their entries through the RunsOn agent's tool caches (RunsOn v3.6.0 or later), in the stack's S3 cache bucket with GitHub's branch scoping, under the stack's cache isolation when it is enabled. None of these tools sends a GitHub token, so the action sends the job's runtime token to the agent once (`POST /_runs-on/tools`), and the agent answers with an ID that stands for it, `<id>`, and the path of each protocol it serves: `bazel` (Bazel's HTTP cache), `sccache` (sccache's WebDAV storage) and `kv`, a plain key/value cache that `gocacheprog`, `gradle_build_cache` and `mbx` use with namespaces of their own. The paths hold the ID (`/_runs-on/tools/<id>/kv`), and the action uses them as given, on the same agent. The same token always gets the same paths, nothing without the token can compute them, and they work on this runner only, until the token expires. The action masks `<id>` in the job's logs. It configures a tool only when the agent gives its protocol a path (`GET /_runs-on/tools` lists the protocols without a token); on an older agent, or one without that protocol, the action warns and leaves the tool alone.
 
-Later steps get the registered base URL as `RUNS_ON_TOOLS_URL`, so they can point other clients that store entries over plain HTTP at the key/value cache, in a namespace of their own (1 to 64 lowercase letters, digits, `-`, `_` or `.`): `GET` and `HEAD` on `$RUNS_ON_TOOLS_URL/kv/<namespace>/<key>` answer the entry or `404`, and `PUT` replaces it. For example, ccache's HTTP storage:
+Later steps get the key/value cache's URL as `RUNS_ON_TOOLS_KV_URL`, so they can point other clients that store entries over plain HTTP at it, in a namespace of their own (1 to 64 lowercase letters, digits, `-`, `_` or `.`): `GET` and `HEAD` on `$RUNS_ON_TOOLS_KV_URL/<namespace>/<key>` answer the entry or `404`, and `PUT` replaces it. For example, ccache's HTTP storage:
 
 ```yaml
 - uses: runs-on/action@v2
   with:
     sccache: true # or any other tool cache input
 - run: |
-    echo "CCACHE_REMOTE_STORAGE=$RUNS_ON_TOOLS_URL/kv/ccache/" >> "$GITHUB_ENV"
+    echo "CCACHE_REMOTE_STORAGE=$RUNS_ON_TOOLS_KV_URL/ccache/" >> "$GITHUB_ENV"
 ```
 
 The variable holds the same credential as the tools' configuration: whatever reads it can use the job's cache scopes on this runner until the job's token expires.

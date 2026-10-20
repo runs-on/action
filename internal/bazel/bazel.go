@@ -38,7 +38,7 @@ var systemRC = func() string {
 // Configure points Bazel at the RunsOn agent's Bazel remote cache, which
 // stores entries in Magic Cache's bucket with GitHub's cache scoping. Bazel's
 // HTTP cache client sends no token, so the job's runtime token is registered
-// with the agent, which answers with a path that stands for it. The cache URL
+// with the agent, which answers with a URL that stands for it. The cache URL
 // goes into Bazel's system rc as --remote_cache. When anything is missing,
 // Configure warns and Bazel builds without the remote cache.
 func Configure(action *githubactions.Action, mode string, magicCache bool, runtimeToken string) {
@@ -47,12 +47,12 @@ func Configure(action *githubactions.Action, mode string, magicCache bool, runti
 		action.Warningf("bazel_remote_cache is %q, want \"true\"; %s.", mode, fallback)
 		return
 	}
-	tools, ok := magiccache.RegisterFor(action, "bazel_remote_cache", "bazel", fallback, magicCache, runtimeToken)
+	cacheURL, ok := magiccache.RegisterFor(action, "bazel_remote_cache", "bazel", fallback, magicCache, runtimeToken)
 	if !ok {
 		return
 	}
 	path := systemRC()
-	if err := writeSystemRC(path, tools.URL+"/bazel"); err != nil {
+	if err := writeSystemRC(path, cacheURL); err != nil {
 		action.Warningf("bazel_remote_cache could not write %s (%v); %s.", path, err, fallback)
 		return
 	}

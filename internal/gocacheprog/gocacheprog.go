@@ -38,7 +38,7 @@ func Configure(action *githubactions.Action, mode string, magicCache bool, runti
 		return
 	}
 	const fallback = "the go command keeps its local build cache"
-	if _, ok := magiccache.RegisterFor(action, "gocacheprog", fallback, magicCache, runtimeToken); !ok {
+	if _, ok := magiccache.RegisterFor(action, "gocacheprog", "kv", fallback, magicCache, runtimeToken); !ok {
 		return
 	}
 	self, err := os.Executable()

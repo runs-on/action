@@ -35,11 +35,11 @@ func TestConfigurePointsGradleAtTheAgentsCache(t *testing.T) {
 					w.WriteHeader(tc.status)
 					return
 				}
-				if r.Method != http.MethodPost || r.URL.Path != "/tools" || r.Header.Get("Authorization") != "Bearer job-token" {
+				if r.Method != http.MethodPost || r.URL.Path != "/_runs-on/tools" || r.Header.Get("Authorization") != "Bearer job-token" {
 					w.WriteHeader(http.StatusUnauthorized)
 					return
 				}
-				_, _ = w.Write([]byte(`{"path":"/tools/` + id + `"}`))
+				_, _ = w.Write([]byte(`{"path":"/_runs-on/tools/` + id + `","protocols":["bazel","sccache","kv"]}`))
 			}))
 			defer agent.Close()
 			t.Setenv("RUNS_ON_MAGIC_CACHE_URL", agent.URL+"/")
@@ -63,7 +63,7 @@ func TestConfigurePointsGradleAtTheAgentsCache(t *testing.T) {
 			if warned || err != nil {
 				t.Fatalf("no init script (%v); log %q", err, log.String())
 			}
-			if want := "url = '" + agent.URL + "/tools/" + id + "/kv/gradle/'"; !strings.Contains(string(script), want) {
+			if want := "url = '" + agent.URL + "/_runs-on/tools/" + id + "/kv/gradle/'"; !strings.Contains(string(script), want) {
 				t.Errorf("init script lacks %q:\n%s", want, script)
 			}
 			if !strings.Contains(log.String(), "::add-mask::"+id) {

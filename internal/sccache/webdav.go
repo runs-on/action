@@ -14,7 +14,7 @@ import (
 // with the agent. The first compiler invocation starts sccache in the job's
 // own environment; the action does not require or manage a sccache process.
 func configureMagicCache(action *githubactions.Action, magicCache bool, runtimeToken string) {
-	tools, ok := magiccache.RegisterFor(action, "sccache: true", "sccache is not configured", magicCache, runtimeToken)
+	tools, ok := magiccache.RegisterFor(action, "sccache: true", "sccache", "sccache is not configured", magicCache, runtimeToken)
 	if !ok {
 		return
 	}

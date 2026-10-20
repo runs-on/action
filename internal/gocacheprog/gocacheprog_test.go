@@ -23,11 +23,11 @@ func TestConfigureExportsGOCACHEPROGOnlyWithMagicCacheAndAToken(t *testing.T) {
 	}
 	const id = "0123456789abcdef0123456789abcdef"
 	agent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost || r.URL.Path != "/tools" || r.Header.Get("Authorization") != "Bearer job-token" {
+		if r.Method != http.MethodPost || r.URL.Path != "/_runs-on/tools" || r.Header.Get("Authorization") != "Bearer job-token" {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
-		_, _ = w.Write([]byte(`{"path":"/tools/` + id + `"}`))
+		_, _ = w.Write([]byte(`{"path":"/_runs-on/tools/` + id + `","protocols":["bazel","sccache","kv"]}`))
 	}))
 	defer agent.Close()
 	t.Setenv("RUNS_ON_MAGIC_CACHE_URL", agent.URL+"/")
@@ -87,7 +87,7 @@ func TestConfigureExportsGOCACHEPROGOnlyWithMagicCacheAndAToken(t *testing.T) {
 			// in RUNS_ON_TOOLS_URL: its path stands for the job's token.
 			wantStored := ""
 			if len(tc.want) > 0 {
-				wantStored = agent.URL + "/tools/" + id + "/kv/gocacheprog"
+				wantStored = agent.URL + "/_runs-on/tools/" + id + "/kv/gocacheprog"
 				if !strings.Contains(log.String(), "::add-mask::"+id) {
 					t.Errorf("the path ID is not masked in the job's logs")
 				}
@@ -162,7 +162,7 @@ func TestSaveListGivesUpOnACacheThatStopsAnswering(t *testing.T) {
 	listUploadTimeout = 200 * time.Millisecond
 	defer func() { listUploadTimeout = timeout }()
 
-	opts := Options{Dir: t.TempDir(), Endpoint: srv.URL + "/tools/test/kv/gocacheprog", Namespace: "test"}
+	opts := Options{Dir: t.TempDir(), Endpoint: srv.URL + "/_runs-on/tools/test/kv/gocacheprog", Namespace: "test"}
 	if err := os.WriteFile(filepath.Join(opts.Dir, usedFile), bytes.Repeat([]byte{1}, actionIDSize), 0o644); err != nil {
 		t.Fatal(err)
 	}

@@ -67,7 +67,7 @@ func Configure(action *githubactions.Action, mode string, magicCache bool, runti
 		action.Warningf("gradle_build_cache is %q, want \"true\"; %s.", mode, fallback)
 		return
 	}
-	tools, ok := magiccache.RegisterFor(action, "gradle_build_cache", fallback, magicCache, runtimeToken)
+	tools, ok := magiccache.RegisterFor(action, "gradle_build_cache", "kv", fallback, magicCache, runtimeToken)
 	if !ok {
 		return
 	}

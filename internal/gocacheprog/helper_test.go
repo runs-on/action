@@ -21,7 +21,7 @@ import (
 
 // fakeStore is an in-memory copy of the RunsOn agent's gocacheprog cache:
 // GET (404 on a miss) and PUT, which replaces the entry, on
-// /tools/<id>/kv/gocacheprog/<key>, for the registered ID testID only.
+// /_runs-on/tools/<id>/kv/gocacheprog/<key>, for the registered ID testID only.
 type fakeStore struct {
 	mu        sync.Mutex
 	entries_  map[string][]byte
@@ -38,7 +38,7 @@ const testID = "0123456789abcdef0123456789abcdef"
 
 // endpoint is the gocacheprog cache of the job registered as id.
 func endpoint(srv *httptest.Server, id string) string {
-	return srv.URL + "/tools/" + id + "/kv/gocacheprog"
+	return srv.URL + "/_runs-on/tools/" + id + "/kv/gocacheprog"
 }
 
 // isList tells a job's list from a build output by its key.
@@ -95,7 +95,7 @@ func (f *fakeStore) downloadCount() int {
 func newFakeStore() (*httptest.Server, *fakeStore) {
 	f := &fakeStore{entries_: map[string][]byte{}}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		key, ok := strings.CutPrefix(r.URL.Path, "/tools/"+testID+"/kv/gocacheprog/")
+		key, ok := strings.CutPrefix(r.URL.Path, "/_runs-on/tools/"+testID+"/kv/gocacheprog/")
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		if !ok {
@@ -270,7 +270,7 @@ func TestGoCommandSharesBuildsButNotTestResults(t *testing.T) {
 	}
 
 	// A cache service that is down degrades to a local build.
-	goCmd("down", "http://127.0.0.1:1/tools/"+testID+"/kv/gocacheprog", "build", "-o", app, ".")
+	goCmd("down", "http://127.0.0.1:1/_runs-on/tools/"+testID+"/kv/gocacheprog", "build", "-o", app, ".")
 
 	// The go command stores three records for this test run: what the test
 	// read, what it printed, and its coverage profile.

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -15,9 +16,10 @@ import (
 	"github.com/sethvargo/go-githubactions"
 )
 
-// ToolsPath is where the agent registers a job's runtime token for the tool
-// caches it serves, and the base of the path it answers with.
-const ToolsPath = "/tools"
+// ToolsPath is where the agent lists the tool cache protocols it serves
+// (GET) and registers a job's runtime token for them (POST), and the base of
+// the path it answers with.
+const ToolsPath = "/_runs-on/tools"
 
 // ToolsURLEnv names the job variable that holds the registered base URL, for
 // clients a step configures itself, such as <URL>/kv/<namespace>/ for a
@@ -30,11 +32,12 @@ var ErrToolsNotServed = errors.New("this RunsOn agent does not serve the tool ca
 
 // Tools is a job's registration: the base URL of its tool caches, each
 // protocol under its own path (URL + "/bazel", "/sccache" or
-// "/kv/<namespace>"), and the ID in it, which stands for the job's runtime
-// token and is therefore masked like a secret.
+// "/kv/<namespace>"), the ID in it, which stands for the job's runtime token
+// and is therefore masked like a secret, and the protocols the agent serves.
 type Tools struct {
-	URL string
-	ID  string
+	URL       string
+	ID        string
+	Protocols []string
 }
 
 // noRedirect keeps requests to the agent from following a redirect elsewhere.
@@ -75,7 +78,8 @@ func Register(runtimeToken string) (Tools, error) {
 		return Tools{}, fmt.Errorf("the agent answered the registration with HTTP %d", resp.StatusCode)
 	}
 	var registration struct {
-		Path string `json:"path"`
+		Path      string   `json:"path"`
+		Protocols []string `json:"protocols"`
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&registration); err != nil {
 		return Tools{}, fmt.Errorf("invalid registration response")
@@ -86,24 +90,29 @@ func Register(runtimeToken string) (Tools, error) {
 	if !ok || len(id) < 32 || len(id) > 128 || strings.Trim(id, "0123456789abcdef") != "" {
 		return Tools{}, fmt.Errorf("invalid registration path")
 	}
-	return Tools{URL: endpoint.String() + "/" + id, ID: id}, nil
+	return Tools{URL: endpoint.String() + "/" + id, ID: id, Protocols: registration.Protocols}, nil
 }
 
-// ServesTools reports whether the runner's agent serves the tool caches: it
-// refuses a registration without a token with 401, where earlier agents do
-// not know the path.
-func ServesTools() bool {
+// Serves reports whether the runner's agent serves a tool cache protocol, from
+// the list it gives without a token. Agents before the tool caches answer 404.
+func Serves(protocol string) bool {
 	endpoint, err := toolsURL()
 	if err != nil {
 		return false
 	}
 	client := &http.Client{Timeout: 5 * time.Second, CheckRedirect: noRedirect}
-	resp, err := client.Post(endpoint.String(), "", nil)
+	resp, err := client.Get(endpoint.String())
 	if err != nil {
 		return false
 	}
-	_ = resp.Body.Close()
-	return resp.StatusCode == http.StatusUnauthorized
+	defer func() { _ = resp.Body.Close() }()
+	var capabilities struct {
+		Protocols []string `json:"protocols"`
+	}
+	if resp.StatusCode != http.StatusOK || json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&capabilities) != nil {
+		return false
+	}
+	return slices.Contains(capabilities.Protocols, protocol)
 }
 
 // registrations keeps, per agent and runtime token, the outcome of this process's
@@ -132,11 +141,12 @@ func registerOnce(runtimeToken string) (Tools, error) {
 }
 
 // RegisterFor registers the job for a tool cache, or warns why it cannot.
-// input names the action input, and fallback says what the job does instead,
-// for example "Bazel builds without the remote cache". The ID is masked in
-// the job's logs: it stands for the job's runtime token. Later steps get the
-// base URL as RUNS_ON_TOOLS_URL.
-func RegisterFor(action *githubactions.Action, input, fallback string, magicCache bool, runtimeToken string) (Tools, bool) {
+// input names the action input, protocol the one it configures, which the
+// agent must list, and fallback says what the job does instead, for example
+// "Bazel builds without the remote cache". The ID is masked in the job's
+// logs: it stands for the job's runtime token. Later steps get the base URL
+// as RUNS_ON_TOOLS_URL.
+func RegisterFor(action *githubactions.Action, input, protocol, fallback string, magicCache bool, runtimeToken string) (Tools, bool) {
 	if !magicCache {
 		action.Warningf("%s needs Magic Cache (extras=s3-cache, or a Fleet runner with Magic Cache); %s.", input, fallback)
 		return Tools{}, false
@@ -155,6 +165,10 @@ func RegisterFor(action *githubactions.Action, input, fallback string, magicCach
 		return Tools{}, false
 	}
 	action.AddMask(tools.ID)
+	if !slices.Contains(tools.Protocols, protocol) {
+		action.Warningf("%s needs a newer RunsOn version, whose agent serves the %q tool cache; %s.", input, protocol, fallback)
+		return Tools{}, false
+	}
 	action.SetEnv(ToolsURLEnv, tools.URL)
 	// This step's own children, such as gocacheprog's prefetch, see it too.
 	_ = os.Setenv(ToolsURLEnv, tools.URL)

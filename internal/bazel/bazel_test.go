@@ -19,15 +19,15 @@ func TestConfigureWritesTheRegisteredCacheIntoTheSystemRC(t *testing.T) {
 			switch {
 			case status != http.StatusOK:
 				w.WriteHeader(status)
-			case r.Method != http.MethodPost || r.URL.Path != "/tools" || r.Header.Get("Authorization") != "Bearer job-token":
+			case r.Method != http.MethodPost || r.URL.Path != "/_runs-on/tools" || r.Header.Get("Authorization") != "Bearer job-token":
 				w.WriteHeader(http.StatusUnauthorized)
 			default:
-				_, _ = w.Write([]byte(`{"path":"/tools/` + id + `"}`))
+				_, _ = w.Write([]byte(`{"path":"/_runs-on/tools/` + id + `","protocols":["bazel","sccache","kv"]}`))
 			}
 		}))
 	}
 	block := func(server *httptest.Server) string {
-		return blockStart + "\ncommon --remote_cache=" + server.URL + "/tools/" + id + "/bazel\n" + blockEnd + "\n"
+		return blockStart + "\ncommon --remote_cache=" + server.URL + "/_runs-on/tools/" + id + "/bazel\n" + blockEnd + "\n"
 	}
 
 	for _, tc := range []struct {

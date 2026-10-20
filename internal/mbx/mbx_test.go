@@ -77,10 +77,12 @@ func TestConfigurePointsMbxAtTheAgentsCache(t *testing.T) {
 			if !strings.HasPrefix(url, base) || !strings.HasSuffix(url, "/") || strings.Count(url[len(base):], "/") != 1 {
 				t.Errorf("MBX_REMOTE_URL is %q, want a path below %s", url, base)
 			}
-			if urls[url] {
-				t.Errorf("MBX_REMOTE_URL %q is another namespace's", url)
+			// Each case has its own fake agent: compare the paths below it.
+			path := strings.TrimPrefix(url, base)
+			if urls[path] {
+				t.Errorf("MBX_REMOTE_URL %q has another namespace's path", url)
 			}
-			urls[url] = true
+			urls[path] = true
 			if got := strings.Contains(string(exported), "MBX_REMOTE_NAMESPACE"); got != (tc.wantNS != "") || !strings.Contains(string(exported), tc.wantNS) {
 				t.Errorf("exported %q, want MBX_REMOTE_NAMESPACE %q only when the job sets none", exported, tc.wantNS)
 			}

@@ -445,7 +445,7 @@ Bazel's HTTP cache client sends no credentials, so the action registers the job'
 
 ### `mbx`
 
-Gives [mbx](https://github.com/jdx/mr-boxington) a remote cache stored through Magic Cache: later steps get `MBX_REMOTE_URL`, the `mbx` namespace of the RunsOn agent's key/value cache, and, unless the job sets one, `MBX_REMOTE_NAMESPACE` (the repository's ID). Set up mbx after this action, so its setup finds them:
+Gives [mbx](https://github.com/jdx/mr-boxington) a remote cache stored through Magic Cache: later steps get `MBX_REMOTE_URL`, in the `mbx` namespace of the RunsOn agent's key/value cache, and, unless the job sets one, `MBX_REMOTE_NAMESPACE` (the repository's ID). mbx sends its namespace in a header that the agent does not read, so the URL has a path per mbx namespace: set `MBX_REMOTE_NAMESPACE` in the job's `env:`, or before this action, for it to separate entries. Set up mbx after this action, so its setup finds them:
 
 ```yaml
 jobs:

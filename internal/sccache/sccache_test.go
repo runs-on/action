@@ -2,6 +2,7 @@ package sccache
 
 import (
 	"bytes"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -141,18 +142,23 @@ func TestS3RecommendsMagicCacheWhereTheAgentServesIt(t *testing.T) {
 		name       string
 		magicCache bool
 		status     int
+		protocols  string
 		recommend  bool
 	}{
-		{name: "an agent with the tool caches", magicCache: true, status: http.StatusUnauthorized, recommend: true},
+		{name: "an agent with the sccache cache", magicCache: true, status: http.StatusOK, protocols: `["bazel","sccache","kv"]`, recommend: true},
+		{name: "an agent without it", magicCache: true, status: http.StatusOK, protocols: `["kv"]`},
 		{name: "an earlier agent", magicCache: true, status: http.StatusNotFound},
-		{name: "no Magic Cache", status: http.StatusUnauthorized},
+		{name: "no Magic Cache", status: http.StatusOK, protocols: `["sccache"]`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			agent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.Method != http.MethodPost || r.URL.Path != "/tools" || r.Header.Get("Authorization") != "" {
+				if r.Method != http.MethodGet || r.URL.Path != "/_runs-on/tools" || r.Header.Get("Authorization") != "" {
 					t.Errorf("unexpected probe %s %s", r.Method, r.URL.Path)
 				}
 				w.WriteHeader(tc.status)
+				if tc.protocols != "" {
+					_, _ = fmt.Fprintf(w, `{"version":1,"protocols":%s}`, tc.protocols)
+				}
 			}))
 			defer agent.Close()
 			t.Setenv("RUNS_ON_MAGIC_CACHE_URL", agent.URL+"/")

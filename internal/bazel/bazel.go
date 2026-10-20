@@ -47,7 +47,7 @@ func Configure(action *githubactions.Action, mode string, magicCache bool, runti
 		action.Warningf("bazel_remote_cache is %q, want \"true\"; %s.", mode, fallback)
 		return
 	}
-	tools, ok := magiccache.RegisterFor(action, "bazel_remote_cache", fallback, magicCache, runtimeToken)
+	tools, ok := magiccache.RegisterFor(action, "bazel_remote_cache", "bazel", fallback, magicCache, runtimeToken)
 	if !ok {
 		return
 	}

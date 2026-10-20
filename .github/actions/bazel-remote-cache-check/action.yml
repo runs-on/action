@@ -42,7 +42,7 @@ runs:
           rc=/c/ProgramData/bazel.bazelrc
         fi
         configured=false
-        if grep -q '^common --remote_cache=http://.*/tools/[0-9a-f]\{32\}/bazel$' "${rc}" 2>/dev/null; then
+        if grep -q '^common --remote_cache=http://.*/_runs-on/tools/[0-9a-f]\{32\}/bazel$' "${rc}" 2>/dev/null; then
           configured=true
         fi
         if [[ "${configured}" != "${SERVES}" ]]; then

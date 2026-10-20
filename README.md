@@ -319,7 +319,7 @@ The action will display live metrics with charts in the post-execution summary.
 
 Available on RunsOn Linux and Windows runners.
 
-`sccache: s3` configures [`sccache`](https://github.com/mozilla/sccache), which caches the compilation of C/C++ code, Rust and NVIDIA's CUDA, with its [S3 cache backend](https://github.com/mozilla/sccache/blob/main/docs/S3.md): sccache writes straight to the RunsOn S3 cache bucket, with the runner's instance role. For sccache through the RunsOn agent, with GitHub's branch scoping and cache isolation, use [`remote_cache: sccache`](#remote_cache-sccache) instead; on an agent that serves it, `sccache: s3` warns and recommends it.
+`sccache: s3` configures [`sccache`](https://github.com/mozilla/sccache), which caches the compilation of C/C++ code, Rust and NVIDIA's CUDA, with its [S3 cache backend](https://github.com/mozilla/sccache/blob/main/docs/S3.md): sccache writes straight to the RunsOn S3 cache bucket, with the runner's instance role. For sccache through the RunsOn agent, with GitHub's branch scoping and cache isolation, use [`remote_cache: sccache`](#remote_cache-sccache) instead; on an agent that serves it, `sccache: s3` warns and recommends it. When `remote_cache` also lists `sccache`, it wins, and the action ignores `sccache: s3` with a warning.
 
 ```yaml
 jobs:

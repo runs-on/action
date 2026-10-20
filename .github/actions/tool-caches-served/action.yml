@@ -1,0 +1,43 @@
+name: Remote caches served
+description: >
+  Tells whether the runner's RunsOn agent serves a tool cache protocol (bazel,
+  sccache or kv, which gocacheprog, Gradle and mbx use). GET /_runs-on/tools lists the
+  protocols without a token; agents before RunsOn v3.6.0 answer 404. The
+  bootstrap stack runs the latest RunsOn release, so the suites check
+  whichever it has.
+
+inputs:
+  protocol:
+    description: The protocol the calling check's tool uses.
+    required: true
+
+outputs:
+  served:
+    description: '"true" when the agent serves the protocol, "false" otherwise.'
+    value: ${{ steps.probe.outputs.served }}
+
+runs:
+  using: composite
+  steps:
+    - id: probe
+      shell: bash
+      env:
+        PROTOCOL: ${{ inputs.protocol }}
+      run: |
+        set -euo pipefail
+        cache_url="${RUNS_ON_MAGIC_CACHE_URL:-${ACTIONS_RESULTS_URL}}"
+        body="${RUNNER_TEMP}/runs-on-tools.json"
+        status=$(curl -s -o "${body}" -w '%{http_code}' "${cache_url%/}/_runs-on/tools")
+        echo "GET ${cache_url%/}/_runs-on/tools: ${status} $(cat "${body}" 2>/dev/null)"
+        case "${status}" in
+          200)
+            # The protocols are a JSON list of names.
+            if grep -q "\"${PROTOCOL}\"" "${body}"; then
+              echo "served=true" >> "${GITHUB_OUTPUT}"
+            else
+              echo "served=false" >> "${GITHUB_OUTPUT}"
+            fi
+            ;;
+          404|405) echo "served=false" >> "${GITHUB_OUTPUT}" ;;
+          *) echo "::error::unexpected answer ${status}"; exit 1 ;;
+        esac

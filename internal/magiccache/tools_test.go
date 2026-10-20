@@ -81,34 +81,6 @@ func TestRegister(t *testing.T) {
 // errAny stands for any error in TestRegister.
 var errAny = errors.New("any error")
 
-// Serves reads the protocols the agent lists without a token; agents before
-// remote caches answer 404.
-func TestServes(t *testing.T) {
-	for _, tc := range []struct {
-		status int
-		body   string
-		want   bool
-	}{
-		{status: http.StatusOK, body: `{"version":1,"protocols":["bazel","sccache","kv"]}`, want: true},
-		{status: http.StatusOK, body: `{"version":1,"protocols":["kv"]}`},
-		{status: http.StatusOK, body: `not json`},
-		{status: http.StatusNotFound},
-	} {
-		agent := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.Method != http.MethodGet || r.URL.Path != "/_runs-on/tools" || r.Header.Get("Authorization") != "" {
-				t.Errorf("unexpected probe %s %s", r.Method, r.URL.Path)
-			}
-			w.WriteHeader(tc.status)
-			_, _ = w.Write([]byte(tc.body))
-		}))
-		t.Setenv("RUNS_ON_MAGIC_CACHE_URL", agent.URL+"/")
-		if got := Serves("sccache"); got != tc.want {
-			t.Errorf("Serves(sccache) on an agent answering %d %q = %v, want %v", tc.status, tc.body, got, tc.want)
-		}
-		agent.Close()
-	}
-}
-
 // An agent that gives a tool's protocol no path gets a warning, and the tool
 // is left alone; a tool whose protocol has a path gets its URL, and later
 // steps the key/value cache's.

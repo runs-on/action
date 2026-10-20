@@ -236,7 +236,7 @@ func configureSccacheInput(action *githubactions.Action, cfg *config.Config, req
 		action.Warningf("sccache: %s and remote_cache: sccache both configure sccache; remote_cache: sccache is used, and the sccache input is ignored.", cfg.Sccache)
 		return
 	}
-	sccache.Configure(action, cfg.Sccache, cfg.HasMagicCache())
+	sccache.Configure(action, cfg.Sccache)
 }
 
 func main() {

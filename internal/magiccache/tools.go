@@ -9,15 +9,14 @@ import (
 	"net/url"
 	"os"
 	"regexp"
-	"slices"
 	"sync"
 	"time"
 
 	"github.com/sethvargo/go-githubactions"
 )
 
-// ToolsPath is where the agent lists the tool cache protocols it serves
-// (GET) and registers a job's runtime token for them (POST).
+// ToolsPath is where the agent registers a job's runtime token for its
+// remote caches (POST).
 const ToolsPath = "/_runs-on/tools"
 
 // RemoteCacheURLEnv names the job variable that holds the URL of the agent's
@@ -104,28 +103,6 @@ func Register(runtimeToken string) (Tools, error) {
 		tools.URLs[protocol] = agent.String() + path
 	}
 	return tools, nil
-}
-
-// Serves reports whether the runner's agent serves a tool cache protocol, from
-// the list it gives without a token. Agents before remote caches answer 404.
-func Serves(protocol string) bool {
-	agent, err := agentURL()
-	if err != nil {
-		return false
-	}
-	client := &http.Client{Timeout: 5 * time.Second, CheckRedirect: noRedirect}
-	resp, err := client.Get(agent.String() + ToolsPath)
-	if err != nil {
-		return false
-	}
-	defer func() { _ = resp.Body.Close() }()
-	var capabilities struct {
-		Protocols []string `json:"protocols"`
-	}
-	if resp.StatusCode != http.StatusOK || json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&capabilities) != nil {
-		return false
-	}
-	return slices.Contains(capabilities.Protocols, protocol)
 }
 
 // registrations keeps, per agent and runtime token, the outcome of this process's

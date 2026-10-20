@@ -7,7 +7,6 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/runs-on/action/internal/magiccache"
 	"github.com/sethvargo/go-githubactions"
 )
 
@@ -33,13 +32,10 @@ var unsafeScopeChars = regexp.MustCompile(`[^a-z0-9._-]+`)
 // whose one value, "s3", stores its cache straight in the RunsOn S3 cache
 // bucket. remote_cache: sccache stores it through the agent instead
 // (ConfigureRemoteCache).
-func Configure(action *githubactions.Action, mode string, magicCache bool) {
+func Configure(action *githubactions.Action, mode string) {
 	if mode != "s3" {
 		action.Warningf("sccache is %q, want \"s3\"; sccache is not configured. For the RunsOn agent's cache, use remote_cache: sccache.", mode)
 		return
-	}
-	if magicCache && magiccache.Serves("sccache") {
-		action.Warningf("sccache: s3 writes straight to the S3 cache bucket, where every branch of the repository reads and writes the same entries, outside the stack's cache isolation. This runner's agent supports remote_cache: sccache, which stores the cache through Magic Cache with GitHub's branch scoping.")
 	}
 	// Get required environment variables for RunsOn S3 cache
 	bucket := os.Getenv("RUNS_ON_S3_BUCKET_CACHE")

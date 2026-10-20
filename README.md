@@ -481,7 +481,7 @@ jobs:
       - run: mbx build --workspace --locked
 ```
 
-By default, mbx publishes only from pushes to protected branches, so pull requests read what their base branch published. mbx sends the agent no token: the URL stands for the job's runtime token. mbx refuses to send its own credentials over plain HTTP, so a job that sets `MBX_REMOTE_TOKEN`, `MBX_REMOTE_TOKEN_FILE` or `MBX_REMOTE_OIDC_AUDIENCE` gets a warning, and the action leaves mbx alone. So does a job that sets `MBX_REMOTE_S3_*` settings, which mbx refuses with an HTTP cache.
+The action also stores mbx's capabilities document in the cache, claiming none of the protocol's optional features, which is what mbx builds assume without one; `mbx doctor`, and so mbx's setup action, require it. By default, mbx publishes only from pushes to protected branches, so pull requests read what their base branch published. mbx sends the agent no token: the URL stands for the job's runtime token. mbx refuses to send its own credentials over plain HTTP, so a job that sets `MBX_REMOTE_TOKEN`, `MBX_REMOTE_TOKEN_FILE` or `MBX_REMOTE_OIDC_AUDIENCE` gets a warning, and the action leaves mbx alone. So does a job that sets `MBX_REMOTE_S3_*` settings, which mbx refuses with an HTTP cache.
 
 #### Other clients
 

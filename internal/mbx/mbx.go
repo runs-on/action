@@ -6,6 +6,8 @@
 package mbx
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 
 	"github.com/runs-on/action/internal/magiccache"
@@ -13,10 +15,11 @@ import (
 )
 
 // Configure registers the job with the agent's tool caches and exports
-// MBX_REMOTE_URL, the mbx namespace of its key/value cache, and, unless the
-// job set one, MBX_REMOTE_NAMESPACE. mbx sends no token to it: the URL's path
-// stands for the job's token, and mbx refuses a token over plain HTTP to
-// another host. When anything is missing, it warns and exports nothing.
+// MBX_REMOTE_URL, a path per mbx namespace in the mbx namespace of its
+// key/value cache, and, unless the job set one, MBX_REMOTE_NAMESPACE. mbx
+// sends no token to it: the URL's path stands for the job's token, and mbx
+// refuses a token over plain HTTP to another host. When anything is missing,
+// it warns and exports nothing.
 func Configure(action *githubactions.Action, mode string, magicCache bool, runtimeToken string) {
 	const fallback = "mbx builds without the remote cache"
 	if mode != "true" {
@@ -31,10 +34,16 @@ func Configure(action *githubactions.Action, mode string, magicCache bool, runti
 	if !ok {
 		return
 	}
-	action.SetEnv("MBX_REMOTE_URL", kvURL+"/mbx/")
-	if os.Getenv("MBX_REMOTE_NAMESPACE") == "" {
-		action.SetEnv("MBX_REMOTE_NAMESPACE", defaultNamespace())
+	namespace := os.Getenv("MBX_REMOTE_NAMESPACE")
+	if namespace == "" {
+		namespace = defaultNamespace()
+		action.SetEnv("MBX_REMOTE_NAMESPACE", namespace)
 	}
+	// mbx sends its namespace in a header, which the key/value cache does not
+	// read, so the URL keeps namespaces apart. A hash fits any namespace in
+	// one path segment.
+	sum := sha256.Sum256([]byte(namespace))
+	action.SetEnv("MBX_REMOTE_URL", kvURL+"/mbx/"+hex.EncodeToString(sum[:16])+"/")
 	action.Infof("Set MBX_REMOTE_URL: mbx uses the RunsOn agent's cache in the next steps.")
 }
 

@@ -34,7 +34,7 @@ runs:
           echo "::error::a token is in the environment of the job's run steps"
           exit 1
         fi
-        if [[ "${MBX_REMOTE_URL:-}" != http://*/mbx/ || -z "${MBX_REMOTE_NAMESPACE:-}" ]]; then
+        if [[ "${MBX_REMOTE_URL:-}" != http://*/mbx/*/ || -z "${MBX_REMOTE_NAMESPACE:-}" ]]; then
           echo "::error::MBX_REMOTE_URL is '${MBX_REMOTE_URL:-}' and MBX_REMOTE_NAMESPACE '${MBX_REMOTE_NAMESPACE:-}', want the agent's key/value cache and a namespace"
           exit 1
         fi
@@ -80,10 +80,9 @@ runs:
         UPLOADS: ${{ inputs.uploads }}
       run: |
         set -euo pipefail
-        command -v jq >/dev/null || { apt-get update -qq && apt-get install -y -qq jq >/dev/null; }
         cache_url="${RUNS_ON_MAGIC_CACHE_URL:-${ACTIONS_RESULTS_URL}}"
         diagnostics=$(curl -fsS "${cache_url%/}/_runs-on/diagnostics")
-        count() { jq --arg op "$1" '[.objects[] | select(.operation == $op and .version == "kv/mbx")] | length' <<<"${diagnostics}"; }
+        count() { { grep -o "\"operation\":\"$1\",\"key\":\"[^\"]*\",\"objectKey\":\"[^\"]*\",\"version\":\"kv/mbx\"" <<<"${diagnostics}" || true; } | wc -l | tr -d ' '; }
         reads=$(count read)
         writes=$(count write)
         echo "kv/mbx reads: ${reads}, writes: ${writes}"

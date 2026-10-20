@@ -14,6 +14,7 @@ import (
 
 func TestConfigurePointsMbxAtTheAgentsCache(t *testing.T) {
 	const id = "0123456789abcdef0123456789abcdef"
+	urls := map[string]bool{}
 	for _, tc := range []struct {
 		name       string
 		mode       string
@@ -70,9 +71,16 @@ func TestConfigurePointsMbxAtTheAgentsCache(t *testing.T) {
 			if warned {
 				t.Fatalf("unexpected warning: %q", log.String())
 			}
-			if want := agent.URL + "/_runs-on/tools/" + id + "/kv/mbx/"; !strings.Contains(string(exported), want) {
-				t.Errorf("exported %q, want MBX_REMOTE_URL %s", exported, want)
+			// Each namespace has its own path below the mbx namespace.
+			base := agent.URL + "/_runs-on/tools/" + id + "/kv/mbx/"
+			url := exportedValue(string(exported), "MBX_REMOTE_URL")
+			if !strings.HasPrefix(url, base) || !strings.HasSuffix(url, "/") || strings.Count(url[len(base):], "/") != 1 {
+				t.Errorf("MBX_REMOTE_URL is %q, want a path below %s", url, base)
 			}
+			if urls[url] {
+				t.Errorf("MBX_REMOTE_URL %q is another namespace's", url)
+			}
+			urls[url] = true
 			if got := strings.Contains(string(exported), "MBX_REMOTE_NAMESPACE"); got != (tc.wantNS != "") || !strings.Contains(string(exported), tc.wantNS) {
 				t.Errorf("exported %q, want MBX_REMOTE_NAMESPACE %q only when the job sets none", exported, tc.wantNS)
 			}
@@ -84,4 +92,15 @@ func TestConfigurePointsMbxAtTheAgentsCache(t *testing.T) {
 			}
 		})
 	}
+}
+
+// exportedValue reads a variable from a GITHUB_ENV file.
+func exportedValue(env, name string) string {
+	lines := strings.Split(env, "\n")
+	for i, line := range lines {
+		if strings.HasPrefix(line, name+"<<") && i+1 < len(lines) {
+			return lines[i+1]
+		}
+	}
+	return ""
 }

@@ -9,6 +9,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"os"
+	"slices"
+	"strings"
 
 	"github.com/runs-on/action/internal/magiccache"
 	"github.com/sethvargo/go-githubactions"
@@ -28,6 +30,11 @@ func Configure(action *githubactions.Action, mode string, magicCache bool, runti
 	}
 	if os.Getenv("MBX_REMOTE_TOKEN") != "" || os.Getenv("MBX_REMOTE_TOKEN_FILE") != "" || os.Getenv("MBX_REMOTE_OIDC_AUDIENCE") != "" {
 		action.Warningf("the job sets mbx credentials (MBX_REMOTE_TOKEN, MBX_REMOTE_TOKEN_FILE or MBX_REMOTE_OIDC_AUDIENCE), which mbx refuses to send to the RunsOn agent over plain HTTP; %s.", fallback)
+		return
+	}
+	// mbx refuses S3 settings with a URL that is not a bucket's.
+	if set := s3Settings(); len(set) > 0 {
+		action.Warningf("the job sets mbx's S3 settings (%s), which mbx refuses with the RunsOn agent's HTTP cache; the action leaves mbx's remote alone.", strings.Join(set, ", "))
 		return
 	}
 	kvURL, ok := magiccache.RegisterFor(action, "mbx", "kv", fallback, magicCache, runtimeToken)
@@ -54,4 +61,17 @@ func defaultNamespace() string {
 		return id
 	}
 	return os.Getenv("GITHUB_REPOSITORY")
+}
+
+// s3Settings are the MBX_REMOTE_S3_* variables the step's environment sets.
+func s3Settings() []string {
+	var set []string
+	for _, variable := range os.Environ() {
+		name, value, _ := strings.Cut(variable, "=")
+		if strings.HasPrefix(name, "MBX_REMOTE_S3_") && value != "" {
+			set = append(set, name)
+		}
+	}
+	slices.Sort(set)
+	return set
 }

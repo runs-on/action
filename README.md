@@ -462,7 +462,7 @@ jobs:
       - run: mbx build --workspace --locked
 ```
 
-Requires Magic Cache (`extras=s3-cache`) and RunsOn v3.6.0 or later, whose agent stores the objects (see [tool caches](#tool-caches)). Otherwise, the action warns and mbx builds without the remote cache. Objects follow GitHub's branch scoping, and by default mbx publishes only from pushes to protected branches, so pull requests read what their base branch published. mbx sends the agent no token: the URL stands for the job's runtime token. mbx refuses to send its own credentials over plain HTTP, so a job that sets `MBX_REMOTE_TOKEN`, `MBX_REMOTE_TOKEN_FILE` or `MBX_REMOTE_OIDC_AUDIENCE` gets a warning, and the action leaves mbx alone.
+Requires Magic Cache (`extras=s3-cache`) and RunsOn v3.6.0 or later, whose agent stores the objects (see [tool caches](#tool-caches)). Otherwise, the action warns and mbx builds without the remote cache. Objects follow GitHub's branch scoping, and by default mbx publishes only from pushes to protected branches, so pull requests read what their base branch published. mbx sends the agent no token: the URL stands for the job's runtime token. mbx refuses to send its own credentials over plain HTTP, so a job that sets `MBX_REMOTE_TOKEN`, `MBX_REMOTE_TOKEN_FILE` or `MBX_REMOTE_OIDC_AUDIENCE` gets a warning, and the action leaves mbx alone. So does a job that sets `MBX_REMOTE_S3_*` settings, which mbx refuses with an HTTP cache.
 
 ### Tool caches
 

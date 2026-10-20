@@ -34,7 +34,7 @@ jobs:
           remote_cache: gradle
       - uses: ./.github/actions/gradle-build-cache-check
         with:
-          project: ${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.leg }}
+          project: ${{ github.run_id }}-${{ matrix.leg }}
           gradle: ${{ matrix.gradle || '9.1.0' }}
 
   # What a cache is for: a later job, on another runner, builds from what the
@@ -51,5 +51,5 @@ jobs:
           remote_cache: gradle
       - uses: ./.github/actions/gradle-build-cache-check
         with:
-          project: ${{ github.run_id }}-${{ github.run_attempt }}-linux
+          project: ${{ github.run_id }}-linux
           uploads: 'false'

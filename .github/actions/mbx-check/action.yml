@@ -18,12 +18,12 @@ runs:
         protocol: kv
     # An agent before RunsOn v3.6.0: runs-on/action warns and leaves mbx
     # alone.
-    - name: Without the tool caches, MBX_REMOTE_URL is not set
+    - name: Without remote caches, MBX_REMOTE_URL is not set
       if: steps.tools.outputs.served != 'true'
       shell: bash
       run: |
         if [[ -n "${MBX_REMOTE_URL:-}" ]]; then
-          echo "::error::MBX_REMOTE_URL is set on an agent without the tool caches"
+          echo "::error::MBX_REMOTE_URL is set on an agent without remote caches"
           exit 1
         fi
     # GitHub gives the job's runtime token to actions only. mbx gets a URL

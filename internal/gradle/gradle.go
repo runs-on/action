@@ -30,7 +30,7 @@ func initScriptPath() string {
 }
 
 // initScriptHeader starts the script, so the post step removes only its own.
-const initScriptHeader = "// Written by runs-on/action (gradle_build_cache) for this job"
+const initScriptHeader = "// Written by runs-on/action (remote_cache: gradle) for this job"
 
 // initScript makes the agent's cache the build's remote cache, unless the
 // build configures an enabled remote cache of its own. Included builds run it
@@ -65,19 +65,15 @@ gradle.settingsEvaluated { settings ->
 // init script that points Gradle at the gradle namespace of its key/value
 // cache. When anything is missing, it warns and Gradle builds without the
 // remote cache.
-func Configure(action *githubactions.Action, mode string, magicCache bool, runtimeToken string) {
+func Configure(action *githubactions.Action, magicCache bool, runtimeToken string) {
 	const fallback = "Gradle builds without the remote cache"
-	if mode != "true" {
-		action.Warningf("gradle_build_cache is %q, want \"true\"; %s.", mode, fallback)
-		return
-	}
-	kvURL, ok := magiccache.RegisterFor(action, "gradle_build_cache", "kv", fallback, magicCache, runtimeToken)
+	kvURL, ok := magiccache.RegisterFor(action, "remote_cache: gradle", "kv", fallback, magicCache, runtimeToken)
 	if !ok {
 		return
 	}
 	script := initScriptPath()
 	if err := writeInitScript(script, kvURL+"/gradle/"); err != nil {
-		action.Warningf("gradle_build_cache could not write %s (%v); %s.", script, err, fallback)
+		action.Warningf("remote_cache: gradle could not write %s (%v); %s.", script, err, fallback)
 		return
 	}
 	// Without GRADLE_USER_HOME, Gradle uses the JVM's user.home, which is the

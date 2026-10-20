@@ -24,7 +24,7 @@ func TestConfigureSccacheExportsResolvedPrefix(t *testing.T) {
 	envFile := filepath.Join(t.TempDir(), "env")
 	t.Setenv("GITHUB_ENV", envFile)
 	var log bytes.Buffer
-	Configure(githubactions.New(githubactions.WithWriter(&log)), "s3", false, "")
+	Configure(githubactions.New(githubactions.WithWriter(&log)), "s3", false)
 	data, err := os.ReadFile(envFile)
 	if err != nil {
 		t.Fatal(err)
@@ -133,8 +133,8 @@ func TestDefaultKeyPrefixSpellsThePlatformConsistently(t *testing.T) {
 	}
 }
 
-// sccache: s3 recommends sccache: true only where it works: on an agent that
-// serves the tool caches.
+// sccache: s3 recommends remote_cache: sccache only where it works: on an agent that
+// serves remote caches.
 func TestS3RecommendsMagicCacheWhereTheAgentServesIt(t *testing.T) {
 	t.Setenv("RUNS_ON_S3_BUCKET_CACHE", "test-cache-bucket")
 	t.Setenv("RUNS_ON_AWS_REGION", "us-east-1")
@@ -165,10 +165,10 @@ func TestS3RecommendsMagicCacheWhereTheAgentServesIt(t *testing.T) {
 			t.Setenv("GITHUB_ENV", filepath.Join(t.TempDir(), "env"))
 			var log bytes.Buffer
 
-			Configure(githubactions.New(githubactions.WithWriter(&log)), "s3", tc.magicCache, "")
+			Configure(githubactions.New(githubactions.WithWriter(&log)), "s3", tc.magicCache)
 
-			if got := strings.Contains(log.String(), "supports sccache: true"); got != tc.recommend {
-				t.Errorf("recommends sccache: true: %v, want %v; log:\n%s", got, tc.recommend, log.String())
+			if got := strings.Contains(log.String(), "supports remote_cache: sccache"); got != tc.recommend {
+				t.Errorf("recommends remote_cache: sccache: %v, want %v; log:\n%s", got, tc.recommend, log.String())
 			}
 			if exported, _ := os.ReadFile(os.Getenv("GITHUB_ENV")); !strings.Contains(string(exported), "SCCACHE_BUCKET") {
 				t.Errorf("sccache: s3 no longer exports SCCACHE_BUCKET: %q", exported)

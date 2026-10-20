@@ -1,4 +1,4 @@
-name: Test / gradle_build_cache
+name: Test / Gradle remote cache
 
 on:
   workflow_call:
@@ -7,7 +7,7 @@ jobs:
   # Each leg builds a one-module project through the remote build cache,
   # empties Gradle's local build cache, and builds it again.
   gradle:
-    name: gradle_build_cache (${{ matrix.leg }})
+    name: gradle (${{ matrix.leg }})
     strategy:
       fail-fast: false
       matrix:
@@ -31,7 +31,7 @@ jobs:
       - uses: ./.github/actions/use-dist
       - uses: ./
         with:
-          gradle_build_cache: true
+          remote_cache: gradle
       - uses: ./.github/actions/gradle-build-cache-check
         with:
           project: ${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.leg }}
@@ -48,7 +48,7 @@ jobs:
       - uses: ./.github/actions/use-dist
       - uses: ./
         with:
-          gradle_build_cache: true
+          remote_cache: gradle
       - uses: ./.github/actions/gradle-build-cache-check
         with:
           project: ${{ github.run_id }}-${{ github.run_attempt }}-linux

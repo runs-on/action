@@ -186,12 +186,12 @@ func TestGoCommandSharesBuildsButNotTestResults(t *testing.T) {
 			prog += " --share-test-results"
 		}
 		// As in a job: run steps have the registered key/value cache in
-		// RUNS_ON_TOOLS_KV_URL, and not the runtime token.
+		// RUNS_ON_REMOTE_CACHE_URL, and not the runtime token.
 		if err := os.MkdirAll(home, 0o755); err != nil {
 			t.Fatal(err)
 		}
 		t.Setenv("RUNNER_TEMP", home)
-		t.Setenv("RUNS_ON_TOOLS_KV_URL", strings.TrimSuffix(cacheEndpoint, "/gocacheprog"))
+		t.Setenv("RUNS_ON_REMOTE_CACHE_URL", strings.TrimSuffix(cacheEndpoint, "/gocacheprog"))
 		stepEnv := slices.DeleteFunc(os.Environ(), func(kv string) bool { return strings.HasPrefix(kv, "ACTIONS_RUNTIME_TOKEN=") })
 		cmd := exec.Command(goBin, args...)
 		cmd.Dir = module
@@ -223,7 +223,7 @@ func TestGoCommandSharesBuildsButNotTestResults(t *testing.T) {
 		if err := os.MkdirAll(filepath.Join(tmp, job), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		t.Setenv("RUNS_ON_TOOLS_KV_URL", strings.TrimSuffix(endpoint(srv, testID), "/gocacheprog"))
+		t.Setenv("RUNS_ON_REMOTE_CACHE_URL", strings.TrimSuffix(endpoint(srv, testID), "/gocacheprog"))
 		return gocacheprog.OptionsFromEnv(false)
 	}
 	startJob := func(job string) {

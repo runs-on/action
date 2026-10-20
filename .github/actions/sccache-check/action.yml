@@ -15,12 +15,12 @@ runs:
         protocol: sccache
     # An agent before RunsOn v3.6.0: runs-on/action warns and leaves sccache
     # alone.
-    - name: Without the tool caches, sccache is left alone
+    - name: Without remote caches, sccache is left alone
       if: steps.tools.outputs.served != 'true'
       shell: bash
       run: |
         if [[ -n "${RUSTC_WRAPPER:-}" || -n "${SCCACHE_WEBDAV_ENDPOINT:-}" ]]; then
-          echo "::error::sccache is configured on an agent without the tool caches"
+          echo "::error::sccache is configured on an agent without remote caches"
           exit 1
         fi
     # GitHub gives the job's runtime token to actions only. runs-on/action

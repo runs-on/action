@@ -82,7 +82,7 @@ func TestRegister(t *testing.T) {
 var errAny = errors.New("any error")
 
 // Serves reads the protocols the agent lists without a token; agents before
-// the tool caches answer 404.
+// remote caches answer 404.
 func TestServes(t *testing.T) {
 	for _, tc := range []struct {
 		status int
@@ -121,7 +121,7 @@ func TestRegisterForChecksTheProtocol(t *testing.T) {
 	t.Setenv("RUNS_ON_MAGIC_CACHE_URL", agent.URL+"/")
 	envFile := filepath.Join(t.TempDir(), "env")
 	t.Setenv("GITHUB_ENV", envFile)
-	t.Setenv(ToolsKVURLEnv, "")
+	t.Setenv(RemoteCacheURLEnv, "")
 	var log bytes.Buffer
 	action := githubactions.New(githubactions.WithWriter(&log))
 	if _, ok := RegisterFor(action, "bazel_remote_cache", "bazel", "no cache", true, "token-a"); ok {
@@ -137,8 +137,8 @@ func TestRegisterForChecksTheProtocol(t *testing.T) {
 	if got, ok := RegisterFor(action, "gocacheprog", "kv", "no cache", true, "token-a"); !ok || got != want {
 		t.Errorf("RegisterFor(kv) = %q, %v, want %q: %q", got, ok, want, log.String())
 	}
-	if exported, _ := os.ReadFile(envFile); !strings.Contains(string(exported), want) || os.Getenv(ToolsKVURLEnv) != want {
-		t.Errorf("exported %q, want %s=%s for later steps and this step's children", exported, ToolsKVURLEnv, want)
+	if exported, _ := os.ReadFile(envFile); !strings.Contains(string(exported), want) || os.Getenv(RemoteCacheURLEnv) != want {
+		t.Errorf("exported %q, want %s=%s for later steps and this step's children", exported, RemoteCacheURLEnv, want)
 	}
 }
 

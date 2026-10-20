@@ -6,7 +6,7 @@ inputs:
     description: Identifies the module's content. The job that uploads it and the job that restores it pass the same value.
     required: true
   mode:
-    description: The gocacheprog input the job gave runs-on/action.
+    description: '"with-tests" when the job gave runs-on/action remote_cache: go,tests=true, "true" for go.'
     default: 'true'
   uploads:
     description: '"true" in the job that compiles and uploads the module, "false" in a later job that only restores it.'
@@ -21,12 +21,12 @@ runs:
         protocol: kv
     # An agent before RunsOn v3.6.0: runs-on/action warns and the go command
     # keeps its local build cache.
-    - name: Without the tool caches, GOCACHEPROG is not set
+    - name: Without remote caches, GOCACHEPROG is not set
       if: steps.tools.outputs.served != 'true'
       shell: bash
       run: |
         if [[ -n "${GOCACHEPROG:-}" ]]; then
-          echo "::error::GOCACHEPROG is set on an agent without the tool caches"
+          echo "::error::GOCACHEPROG is set on an agent without remote caches"
           exit 1
         fi
     # GitHub gives the job's runtime token to actions only. runs-on/action
@@ -127,7 +127,7 @@ runs:
           echo "::error::a build with every package in Magic Cache compiled some"
           exit 1
         fi
-    - name: Test results are shared only with with-tests
+    - name: Test results are shared only with tests=true
       if: steps.tools.outputs.served == 'true'
       shell: bash
       env:

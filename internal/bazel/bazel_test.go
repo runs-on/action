@@ -32,7 +32,6 @@ func TestConfigureWritesTheRegisteredCacheIntoTheSystemRC(t *testing.T) {
 
 	for _, tc := range []struct {
 		name       string
-		mode       string
 		noMagic    bool
 		token      string
 		status     int
@@ -55,7 +54,6 @@ func TestConfigureWritesTheRegisteredCacheIntoTheSystemRC(t *testing.T) {
 		{name: "agent refuses the token", status: http.StatusUnauthorized, wantWarned: "401"},
 		{name: "no Magic Cache", noMagic: true, wantWarned: "needs Magic Cache"},
 		{name: "no runtime token", token: "-", wantWarned: "ACTIONS_RUNTIME_TOKEN"},
-		{name: "unknown mode", mode: "read-only", wantWarned: `"read-only"`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			status := tc.status
@@ -75,10 +73,7 @@ func TestConfigureWritesTheRegisteredCacheIntoTheSystemRC(t *testing.T) {
 			previous := systemRC
 			systemRC = func() string { return rc }
 			defer func() { systemRC = previous }()
-			mode, token := tc.mode, tc.token
-			if mode == "" {
-				mode = "true"
-			}
+			token := tc.token
 			switch token {
 			case "":
 				token = "job-token"
@@ -87,7 +82,7 @@ func TestConfigureWritesTheRegisteredCacheIntoTheSystemRC(t *testing.T) {
 			}
 			var log bytes.Buffer
 
-			Configure(githubactions.New(githubactions.WithWriter(&log)), mode, !tc.noMagic, token)
+			Configure(githubactions.New(githubactions.WithWriter(&log)), !tc.noMagic, token)
 
 			got, _ := os.ReadFile(rc)
 			want := tc.existing

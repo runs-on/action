@@ -1,4 +1,4 @@
-name: Check gradle_build_cache
+name: Check the Gradle remote cache
 description: Builds a one-module Gradle project through the remote build cache runs-on/action points it at, the RunsOn agent's key/value tool cache, and checks what came from it.
 
 inputs:
@@ -30,13 +30,13 @@ runs:
         fi
     # An agent before RunsOn v3.6.0: runs-on/action warns and writes no init
     # script, so Gradle builds without a remote cache.
-    - name: Without the tool caches, Gradle has no remote cache
+    - name: Without remote caches, Gradle has no remote cache
       if: steps.tools.outputs.served != 'true'
       shell: bash
       run: |
         script="${GRADLE_USER_HOME:-${HOME}/.gradle}/init.d/runs-on-build-cache.gradle"
         if [[ -e "${script}" ]]; then
-          echo "::error::runs-on/action wrote ${script} on an agent without the tool caches"
+          echo "::error::runs-on/action wrote ${script} on an agent without remote caches"
           exit 1
         fi
     # RunsOn's Windows image has no JDK.

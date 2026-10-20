@@ -29,7 +29,7 @@ jobs:
       - uses: ./.github/actions/use-dist
       - uses: ./
         with:
-          mbx: true
+          remote_cache: mbx
       - uses: ./.github/actions/mbx-check
         with:
           workspace: ${{ github.run_id }}-${{ matrix.leg }}
@@ -47,7 +47,7 @@ jobs:
       - uses: ./.github/actions/use-dist
       - uses: ./
         with:
-          mbx: true
+          remote_cache: mbx
       - uses: ./.github/actions/mbx-check
         with:
           workspace: ${{ github.run_id }}-linux

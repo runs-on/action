@@ -2,6 +2,7 @@ package sccache
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -13,8 +14,16 @@ import (
 	"github.com/sethvargo/go-githubactions"
 )
 
-// protocols is what a v3.6.0 agent's registration lists.
-const protocols = `"protocols":["bazel","sccache","kv"]`
+// registration is an agent's registration reply, with each protocol at the
+// path a v3.6.0 agent gives it.
+func registration(id string, protocols ...string) string {
+	paths := map[string]string{}
+	for _, protocol := range protocols {
+		paths[protocol] = "/_runs-on/tools/" + id + "/" + protocol
+	}
+	body, _ := json.Marshal(map[string]any{"id": id, "protocols": paths})
+	return string(body)
+}
 
 func TestWebDAVRegistration(t *testing.T) {
 	id := strings.Repeat("a", 32)
@@ -24,12 +33,12 @@ func TestWebDAVRegistration(t *testing.T) {
 		body    string
 		success bool
 	}{
-		{"available", 200, fmt.Sprintf(`{"path":"/_runs-on/tools/%s",%s}`, id, protocols), true},
-		{"agent without sccache's cache", 200, fmt.Sprintf(`{"path":"/_runs-on/tools/%s","protocols":["kv"]}`, id), false},
+		{"available", 200, registration(id, "bazel", "sccache", "kv"), true},
+		{"agent without sccache's cache", 200, registration(id, "kv"), false},
 		{"old agent", 404, "", false},
 		{"broker refusal", 403, "do-not-log-response-body", false},
 		{"redirect", 307, "", false},
-		{"malformed", 200, `{"path":"/_runs-on/tools/bad\nid"}`, false},
+		{"malformed", 200, `{"id":"bad\nid","protocols":{"sccache":"/sccache"}}`, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -64,7 +73,7 @@ func TestWebDAVRegistration(t *testing.T) {
 				key, _, _ := strings.Cut(lines[i], "<<")
 				exports[key] = lines[i+1]
 			}
-			want := map[string]string{"SCCACHE_GHA_ENABLED": "false", "SCCACHE_WEBDAV_ENDPOINT": server.URL + "/_runs-on/tools/" + id + "/sccache", "RUSTC_WRAPPER": "sccache", "RUNS_ON_TOOLS_URL": server.URL + "/_runs-on/tools/" + id}
+			want := map[string]string{"SCCACHE_GHA_ENABLED": "false", "SCCACHE_WEBDAV_ENDPOINT": server.URL + "/_runs-on/tools/" + id + "/sccache", "RUSTC_WRAPPER": "sccache", "RUNS_ON_TOOLS_KV_URL": server.URL + "/_runs-on/tools/" + id + "/kv"}
 			if len(exports) != len(want) {
 				t.Fatalf("unexpected exports: %d", len(exports))
 			}
@@ -84,7 +93,7 @@ func TestWebDAVRegistration(t *testing.T) {
 // of them would silently win over the agent's cache.
 func TestWebDAVWarnsAboutSettingsSccachePrefers(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = fmt.Fprintf(w, `{"path":"/_runs-on/tools/%s",%s}`, strings.Repeat("b", 32), protocols)
+		_, _ = fmt.Fprint(w, registration(strings.Repeat("b", 32), "bazel", "sccache", "kv"))
 	}))
 	defer server.Close()
 	competing := []string{"SCCACHE_BUCKET", "SCCACHE_REDIS", "SCCACHE_REDIS_ENDPOINT", "SCCACHE_REDIS_CLUSTER_ENDPOINTS", "SCCACHE_MEMCACHED", "SCCACHE_MEMCACHED_ENDPOINT", "SCCACHE_GCS_BUCKET", "SCCACHE_GHA_VERSION", "SCCACHE_AZURE_BLOB_CONTAINER", "SCCACHE_GHA_ENABLED"}

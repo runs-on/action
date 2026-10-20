@@ -8,8 +8,8 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"slices"
-	"strings"
 	"sync"
 	"time"
 
@@ -17,50 +17,57 @@ import (
 )
 
 // ToolsPath is where the agent lists the tool cache protocols it serves
-// (GET) and registers a job's runtime token for them (POST), and the base of
-// the path it answers with.
+// (GET) and registers a job's runtime token for them (POST).
 const ToolsPath = "/_runs-on/tools"
 
-// ToolsURLEnv names the job variable that holds the registered base URL, for
-// clients a step configures itself, such as <URL>/kv/<namespace>/ for a
-// plain HTTP cache.
-const ToolsURLEnv = "RUNS_ON_TOOLS_URL"
+// ToolsKVURLEnv names the job variable that holds the URL of the agent's
+// key/value tool cache, for clients a step configures itself, such as
+// <URL>/<namespace>/ for a plain HTTP cache.
+const ToolsKVURLEnv = "RUNS_ON_TOOLS_KV_URL"
 
 // ErrToolsNotServed is the registration's error on agents that do not serve
 // the tool caches.
 var ErrToolsNotServed = errors.New("this RunsOn agent does not serve the tool caches; upgrade it")
 
-// Tools is a job's registration: the base URL of its tool caches, each
-// protocol under its own path (URL + "/bazel", "/sccache" or
-// "/kv/<namespace>"), the ID in it, which stands for the job's runtime token
-// and is therefore masked like a secret, and the protocols the agent serves.
+// Tools is a job's registration: the URL of each tool cache protocol the
+// agent serves, and the ID in those URLs, which stands for the job's runtime
+// token and is therefore masked like a secret.
 type Tools struct {
-	URL       string
-	ID        string
-	Protocols []string
+	ID   string
+	URLs map[string]string
 }
 
 // noRedirect keeps requests to the agent from following a redirect elsewhere.
 func noRedirect(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 
-func toolsURL() (*url.URL, error) {
+func agentURL() (*url.URL, error) {
 	base, err := url.Parse(URL())
 	if err != nil || base.Host == "" || (base.Scheme != "http" && base.Scheme != "https") || base.User != nil {
 		return nil, fmt.Errorf("invalid Magic Cache URL")
 	}
-	return base.ResolveReference(&url.URL{Path: ToolsPath}), nil
+	return &url.URL{Scheme: base.Scheme, Host: base.Host}, nil
 }
 
-// Register exchanges the job's runtime token for the path of its tool caches.
-// Only the agent keeps the token: the path is an ID the agent derives from it,
-// which works only on this agent, for the token's scopes, until it expires.
-// Registering the same token again returns the same path.
+// validID matches the IDs the agent derives from tokens: long enough that
+// masking one hides nothing else in the job's logs.
+var validID = regexp.MustCompile(`^[0-9a-f]{32,128}$`)
+
+// validToolPath matches the paths the agent gives protocols: absolute paths
+// on the agent itself, which go into tool configurations as they are, so
+// with no escaping, query, or segment that starts with a dot.
+var validToolPath = regexp.MustCompile(`^(/[A-Za-z0-9_~-][A-Za-z0-9._~-]*)+$`)
+
+// Register exchanges the job's runtime token for the URLs of its tool caches.
+// Only the agent keeps the token: the URLs hold an ID the agent derives from
+// it, which works only on this agent, for the token's scopes, until it
+// expires. Registering the same token again returns the same URLs. The agent
+// chooses each protocol's path; they stay on the agent the action posted to.
 func Register(runtimeToken string) (Tools, error) {
-	endpoint, err := toolsURL()
+	agent, err := agentURL()
 	if err != nil {
 		return Tools{}, err
 	}
-	req, err := http.NewRequest(http.MethodPost, endpoint.String(), nil)
+	req, err := http.NewRequest(http.MethodPost, agent.String()+ToolsPath, nil)
 	if err != nil {
 		return Tools{}, err
 	}
@@ -78,30 +85,36 @@ func Register(runtimeToken string) (Tools, error) {
 		return Tools{}, fmt.Errorf("the agent answered the registration with HTTP %d", resp.StatusCode)
 	}
 	var registration struct {
-		Path      string   `json:"path"`
-		Protocols []string `json:"protocols"`
+		ID        string            `json:"id"`
+		Protocols map[string]string `json:"protocols"`
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&registration); err != nil {
 		return Tools{}, fmt.Errorf("invalid registration response")
 	}
-	// The path holds a credential: a malformed one is refused without being
-	// logged.
-	id, ok := strings.CutPrefix(registration.Path, ToolsPath+"/")
-	if !ok || len(id) < 32 || len(id) > 128 || strings.Trim(id, "0123456789abcdef") != "" {
-		return Tools{}, fmt.Errorf("invalid registration path")
+	// The ID and the paths hold a credential: malformed ones are refused
+	// without being logged.
+	if !validID.MatchString(registration.ID) {
+		return Tools{}, fmt.Errorf("invalid registration ID")
 	}
-	return Tools{URL: endpoint.String() + "/" + id, ID: id, Protocols: registration.Protocols}, nil
+	tools := Tools{ID: registration.ID, URLs: make(map[string]string, len(registration.Protocols))}
+	for protocol, path := range registration.Protocols {
+		if !validToolPath.MatchString(path) {
+			return Tools{}, fmt.Errorf("invalid registration path for %q", protocol)
+		}
+		tools.URLs[protocol] = agent.String() + path
+	}
+	return tools, nil
 }
 
 // Serves reports whether the runner's agent serves a tool cache protocol, from
 // the list it gives without a token. Agents before the tool caches answer 404.
 func Serves(protocol string) bool {
-	endpoint, err := toolsURL()
+	agent, err := agentURL()
 	if err != nil {
 		return false
 	}
 	client := &http.Client{Timeout: 5 * time.Second, CheckRedirect: noRedirect}
-	resp, err := client.Get(endpoint.String())
+	resp, err := client.Get(agent.String() + ToolsPath)
 	if err != nil {
 		return false
 	}
@@ -140,37 +153,41 @@ func registerOnce(runtimeToken string) (Tools, error) {
 	return tools, err
 }
 
-// RegisterFor registers the job for a tool cache, or warns why it cannot.
-// input names the action input, protocol the one it configures, which the
-// agent must list, and fallback says what the job does instead, for example
-// "Bazel builds without the remote cache". The ID is masked in the job's
-// logs: it stands for the job's runtime token. Later steps get the base URL
-// as RUNS_ON_TOOLS_URL.
-func RegisterFor(action *githubactions.Action, input, protocol, fallback string, magicCache bool, runtimeToken string) (Tools, bool) {
+// RegisterFor registers the job for a tool cache, or warns why it cannot, and
+// returns the URL of the protocol it configures. input names the action
+// input, protocol the one it configures, which the registration must give a
+// URL, and fallback says what the job does instead, for example "Bazel builds
+// without the remote cache". The ID is masked in the job's logs: it stands
+// for the job's runtime token. Later steps get the key/value cache's URL as
+// RUNS_ON_TOOLS_KV_URL.
+func RegisterFor(action *githubactions.Action, input, protocol, fallback string, magicCache bool, runtimeToken string) (string, bool) {
 	if !magicCache {
 		action.Warningf("%s needs Magic Cache (extras=s3-cache, or a Fleet runner with Magic Cache); %s.", input, fallback)
-		return Tools{}, false
+		return "", false
 	}
 	if runtimeToken == "" {
 		action.Warningf("%s needs the job's ACTIONS_RUNTIME_TOKEN, which this step did not receive; %s.", input, fallback)
-		return Tools{}, false
+		return "", false
 	}
 	tools, err := registerOnce(runtimeToken)
 	if errors.Is(err, ErrToolsNotServed) {
 		action.Warningf("%s needs RunsOn v3.6.0 or later, whose agent serves the tool caches; %s.", input, fallback)
-		return Tools{}, false
+		return "", false
 	}
 	if err != nil {
 		action.Warningf("%s could not register the job with the RunsOn agent (%v); %s.", input, err, fallback)
-		return Tools{}, false
+		return "", false
 	}
 	action.AddMask(tools.ID)
-	if !slices.Contains(tools.Protocols, protocol) {
+	toolURL, ok := tools.URLs[protocol]
+	if !ok {
 		action.Warningf("%s needs a newer RunsOn version, whose agent serves the %q tool cache; %s.", input, protocol, fallback)
-		return Tools{}, false
+		return "", false
 	}
-	action.SetEnv(ToolsURLEnv, tools.URL)
-	// This step's own children, such as gocacheprog's prefetch, see it too.
-	_ = os.Setenv(ToolsURLEnv, tools.URL)
-	return tools, true
+	if kv := tools.URLs["kv"]; kv != "" {
+		action.SetEnv(ToolsKVURLEnv, kv)
+		// This step's own children, such as gocacheprog's prefetch, see it too.
+		_ = os.Setenv(ToolsKVURLEnv, kv)
+	}
+	return toolURL, true
 }

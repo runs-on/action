@@ -342,7 +342,7 @@ jobs:
       - run: cargo build --release --locked
 ```
 
-The action registers the job's runtime token with the agent (see [tool caches](#tool-caches)), then exports `SCCACHE_WEBDAV_ENDPOINT=<Magic Cache URL>/_runs-on/tools/<id>/sccache`, `RUSTC_WRAPPER=sccache` and `SCCACHE_GHA_ENABLED=false`. sccache needs no token: only the agent keeps the job's runtime token.
+The action registers the job's runtime token with the agent (see [tool caches](#tool-caches)), then exports `SCCACHE_WEBDAV_ENDPOINT` with the URL the agent gives sccache's cache (`<Magic Cache URL>/_runs-on/tools/<id>/sccache`), `RUSTC_WRAPPER=sccache` and `SCCACHE_GHA_ENABLED=false`. sccache needs no token: only the agent keeps the job's runtime token.
 
 Install sccache before compiling. Its first client starts the compiler daemon in the job or container. The action never starts or stops it. It can exit and restart from a later step without a new action invocation. Configure the action before starting the daemon; restart an existing daemon yourself after changing its configuration.
 
@@ -417,7 +417,7 @@ jobs:
       - run: go build ./... && go test ./...
 ```
 
-Requires Magic Cache (`extras=s3-cache`) and RunsOn v3.6.0 or later, whose agent stores the entries (see [tool caches](#tool-caches)). Otherwise, the action warns and the go command keeps its local build cache. Container jobs work too: the runner mounts the action, and so the helper, into the job container. The helper finds the job's tool caches in `RUNS_ON_TOOLS_URL`; the runtime token reaches no run step.
+Requires Magic Cache (`extras=s3-cache`) and RunsOn v3.6.0 or later, whose agent stores the entries (see [tool caches](#tool-caches)). Otherwise, the action warns and the go command keeps its local build cache. Container jobs work too: the runner mounts the action, and so the helper, into the job container. The helper finds the job's key/value cache in `RUNS_ON_TOOLS_KV_URL`; the runtime token reaches no run step.
 
 Compiled packages are shared between jobs; test results are not. Within a job, tests whose inputs did not change are still reported as `(cached)`, but a new job runs its tests again, because a test can depend on things Go does not track, such as a database or the network.
 
@@ -441,20 +441,20 @@ jobs:
 
 Requires Magic Cache (`extras=s3-cache`) and RunsOn v3.6.0 or later. Otherwise, the action warns and Bazel builds without the remote cache. `--remote_download_minimal` skips downloading outputs that later actions do not need, which matters most on warm builds.
 
-Bazel's HTTP cache client sends no credentials, so the action registers the job's runtime token with the RunsOn agent (see [tool caches](#tool-caches)). The rc gets `common --remote_cache=http://<runner IP>:6871/_runs-on/tools/<id>/bazel`, in `/etc/bazel.bazelrc` (with `sudo`), or `%ProgramData%\bazel.bazelrc` on Windows. In a container job, the action writes the container's system rc, which needs root or passwordless `sudo` in the container; without either, it warns.
+Bazel's HTTP cache client sends no credentials, so the action registers the job's runtime token with the RunsOn agent (see [tool caches](#tool-caches)). The rc gets `common --remote_cache=` with the URL the agent gives Bazel's cache (`http://<runner IP>:6871/_runs-on/tools/<id>/bazel`), in `/etc/bazel.bazelrc` (with `sudo`), or `%ProgramData%\bazel.bazelrc` on Windows. In a container job, the action writes the container's system rc, which needs root or passwordless `sudo` in the container; without either, it warns.
 
 ### Tool caches
 
-`sccache: true`, `gocacheprog` and `bazel_remote_cache` store their entries through the RunsOn agent's tool caches (RunsOn v3.6.0 or later), in the stack's S3 cache bucket with GitHub's branch scoping, under the stack's cache isolation when it is enabled. None of these tools sends a GitHub token, so the action sends the job's runtime token to the agent once (`POST /_runs-on/tools`), and the agent answers with a path, `/_runs-on/tools/<id>`, that stands for it, and the protocols it serves: the same token always gets the same path, nothing without the token can compute it, and it works on this runner only, until the token expires. The action masks `<id>` in the job's logs. Each protocol has its own base under that path: `/bazel` (Bazel's HTTP cache), `/sccache` (sccache's WebDAV storage) and `/kv/<namespace>`, a plain key/value cache that `gocacheprog` uses with the `gocacheprog` namespace. The action configures a tool only when the agent lists its protocol (`GET /_runs-on/tools` gives the list without a token); on an older agent, or one without that protocol, the action warns and leaves the tool alone.
+`sccache: true`, `gocacheprog` and `bazel_remote_cache` store their entries through the RunsOn agent's tool caches (RunsOn v3.6.0 or later), in the stack's S3 cache bucket with GitHub's branch scoping, under the stack's cache isolation when it is enabled. None of these tools sends a GitHub token, so the action sends the job's runtime token to the agent once (`POST /_runs-on/tools`), and the agent answers with an ID that stands for it, `<id>`, and the path of each protocol it serves: `bazel` (Bazel's HTTP cache), `sccache` (sccache's WebDAV storage) and `kv`, a plain key/value cache that `gocacheprog` uses with the `gocacheprog` namespace. The paths hold the ID (`/_runs-on/tools/<id>/kv`), and the action uses them as given, on the same agent. The same token always gets the same paths, nothing without the token can compute them, and they work on this runner only, until the token expires. The action masks `<id>` in the job's logs. It configures a tool only when the agent gives its protocol a path (`GET /_runs-on/tools` lists the protocols without a token); on an older agent, or one without that protocol, the action warns and leaves the tool alone.
 
-Later steps get the registered base URL as `RUNS_ON_TOOLS_URL`, so they can point other clients that store entries over plain HTTP at the key/value cache, in a namespace of their own (1 to 64 lowercase letters, digits, `-`, `_` or `.`): `GET` and `HEAD` on `$RUNS_ON_TOOLS_URL/kv/<namespace>/<key>` answer the entry or `404`, and `PUT` replaces it. For example, ccache's HTTP storage:
+Later steps get the key/value cache's URL as `RUNS_ON_TOOLS_KV_URL`, so they can point other clients that store entries over plain HTTP at it, in a namespace of their own (1 to 64 lowercase letters, digits, `-`, `_` or `.`): `GET` and `HEAD` on `$RUNS_ON_TOOLS_KV_URL/<namespace>/<key>` answer the entry or `404`, and `PUT` replaces it. For example, ccache's HTTP storage:
 
 ```yaml
 - uses: runs-on/action@v2
   with:
     sccache: true # or any other tool cache input
 - run: |
-    echo "CCACHE_REMOTE_STORAGE=$RUNS_ON_TOOLS_URL/kv/ccache/" >> "$GITHUB_ENV"
+    echo "CCACHE_REMOTE_STORAGE=$RUNS_ON_TOOLS_KV_URL/ccache/" >> "$GITHUB_ENV"
 ```
 
 The variable holds the same credential as the tools' configuration: whatever reads it can use the job's cache scopes on this runner until the job's token expires.

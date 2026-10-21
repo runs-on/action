@@ -4,33 +4,22 @@ package bazel
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"net/http"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
-	"time"
 
 	"github.com/runs-on/action/internal/magiccache"
 	"github.com/sethvargo/go-githubactions"
 )
 
 const (
-	// registerPath is where the agent gives the job's runtime token a cache
-	// path. Agents without the Bazel cache answer 404.
-	registerPath = "/bazel"
-
-	blockStart = "# BEGIN runs-on/action bazel_remote_cache"
-	blockEnd   = "# END runs-on/action bazel_remote_cache"
+	blockStart = "# BEGIN runs-on/action remote_cache"
+	blockEnd   = "# END runs-on/action remote_cache"
 )
-
-var errUnsupported = errors.New("the RunsOn agent does not serve a Bazel remote cache")
 
 // systemRC is Bazel's system rc. Bazel reads it before the workspace and user
 // rc files, so a project's own --remote_cache wins. No flag or variable moves
@@ -49,77 +38,21 @@ var systemRC = func() string {
 // Configure points Bazel at the RunsOn agent's Bazel remote cache, which
 // stores entries in Magic Cache's bucket with GitHub's cache scoping. Bazel's
 // HTTP cache client sends no token, so the job's runtime token is registered
-// with the agent, which answers with a cache path that stands for it. The
-// path goes into Bazel's system rc as --remote_cache. When anything is
-// missing, Configure warns and Bazel builds without the remote cache.
-func Configure(action *githubactions.Action, mode string, magicCache bool, runtimeToken string) {
-	if mode != "true" {
-		action.Warningf("bazel_remote_cache is %q, want \"true\"; Bazel builds without the remote cache.", mode)
+// with the agent, which answers with a URL that stands for it. The cache URL
+// goes into Bazel's system rc as --remote_cache. When anything is missing,
+// Configure warns and Bazel builds without the remote cache.
+func Configure(action *githubactions.Action, magicCache bool, runtimeToken string) {
+	const fallback = "Bazel builds without the remote cache"
+	cacheURL, ok := magiccache.RegisterFor(action, "remote_cache: bazel", "bazel", fallback, magicCache, runtimeToken)
+	if !ok {
 		return
 	}
-	if !magicCache {
-		action.Warningf("bazel_remote_cache needs Magic Cache (extras=s3-cache, or a Fleet runner with Magic Cache); Bazel builds without the remote cache.")
-		return
-	}
-	if runtimeToken == "" {
-		action.Warningf("bazel_remote_cache needs the job's ACTIONS_RUNTIME_TOKEN, which this step did not receive; Bazel builds without the remote cache.")
-		return
-	}
-	cacheURL, err := register(magiccache.URL(), runtimeToken)
-	if errors.Is(err, errUnsupported) {
-		action.Warningf("bazel_remote_cache needs RunsOn v3.5.1 or later, whose agent serves a Bazel remote cache; Bazel builds without the remote cache.")
-		return
-	}
-	if err != nil {
-		action.Warningf("bazel_remote_cache could not register the job with the RunsOn agent (%v); Bazel builds without the remote cache.", err)
-		return
-	}
-	// The path gives the job's cache scopes to whatever can reach the agent,
-	// until the token expires.
-	action.AddMask(cacheURL)
 	path := systemRC()
 	if err := writeSystemRC(path, cacheURL); err != nil {
-		action.Warningf("bazel_remote_cache could not write %s (%v); Bazel builds without the remote cache.", path, err)
+		action.Warningf("remote_cache: bazel could not write %s (%v); %s.", path, err, fallback)
 		return
 	}
 	action.Infof("Wrote --remote_cache to %s: Bazel uses Magic Cache as its remote cache in the next steps, unless the project sets its own --remote_cache.", path)
-}
-
-// register sends the job's runtime token to the agent behind the Magic Cache
-// URL and returns the --remote_cache URL the agent gave it.
-func register(magicCacheURL, token string) (string, error) {
-	base, err := url.Parse(magicCacheURL)
-	if err != nil || base.Host == "" {
-		return "", fmt.Errorf("invalid Magic Cache URL %q", magicCacheURL)
-	}
-	request, err := http.NewRequest(http.MethodPost, base.ResolveReference(&url.URL{Path: registerPath}).String(), nil)
-	if err != nil {
-		return "", err
-	}
-	request.Header.Set("Authorization", "Bearer "+token)
-	response, err := (&http.Client{Timeout: 30 * time.Second}).Do(request)
-	if err != nil {
-		return "", err
-	}
-	defer func() { _ = response.Body.Close() }()
-	switch response.StatusCode {
-	case http.StatusOK:
-	case http.StatusNotFound, http.StatusMethodNotAllowed:
-		return "", errUnsupported
-	default:
-		body, _ := io.ReadAll(io.LimitReader(response.Body, 512))
-		return "", fmt.Errorf("the agent answered %s: %s", response.Status, strings.TrimSpace(string(body)))
-	}
-	var registration struct {
-		Path string `json:"path"`
-	}
-	if err := json.NewDecoder(response.Body).Decode(&registration); err != nil {
-		return "", fmt.Errorf("read the agent's answer: %w", err)
-	}
-	if !strings.HasPrefix(registration.Path, registerPath+"/") {
-		return "", fmt.Errorf("the agent answered an unexpected path %q", registration.Path)
-	}
-	return base.ResolveReference(&url.URL{Path: registration.Path}).String(), nil
 }
 
 // writeSystemRC sets --remote_cache in Bazel's system rc. It replaces its own

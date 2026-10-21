@@ -10,7 +10,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -41,7 +40,7 @@ func ListKey(token string) string {
 	workflow, _, _ := strings.Cut(os.Getenv("GITHUB_WORKFLOW_REF"), "@")
 	identity := strings.Join([]string{workflow, job, os.Getenv("RUNNER_OS"), os.Getenv("RUNNER_ARCH")}, "\x00")
 	sum := sha256.Sum256([]byte(identity))
-	return namespace + "-list-" + hex.EncodeToString(sum[:8])
+	return hex.EncodeToString(sum[:8])
 }
 
 func jobFromToken(token string) string {
@@ -63,8 +62,9 @@ func jobFromToken(token string) string {
 	return job
 }
 
-func listVersion(opts Options) string {
-	return opts.Namespace + "-lists"
+// listPath is where a job's list is stored. Each save replaces it.
+func listPath(opts Options, listKey string) string {
+	return opts.Namespace + "/lists/" + listKey
 }
 
 // listUploadTimeout bounds the upload of a job's list, which the action's
@@ -85,7 +85,7 @@ func Prefetch(opts Options, listKey string) error {
 		return nil
 	}
 	var list []byte
-	body, ok, err := c.remote.open(c.ctx, listVersion(opts), listKey, listKey+"-")
+	body, ok, err := c.remote.open(c.ctx, listPath(opts, listKey))
 	if err == nil && ok {
 		list, err = io.ReadAll(body)
 		_ = body.Close()
@@ -124,13 +124,12 @@ func Prefetch(opts Options, listKey string) error {
 
 // SaveList saves the entries the job's go commands used, in the order they
 // first used them, for the job's next run to prefetch. It returns how many it
-// saved. Lists are saved under a new key each time, and a lookup by prefix
-// returns the newest. A job that only used entries it prefetched saves
-// nothing, so a job that keeps running unchanged does not add a list per run;
+// saved. Each save replaces the job's list. A job that only used entries it
+// prefetched saves nothing, so a job that keeps running unchanged does not add a list per run;
 // the entries it no longer uses stay in its list until a run uses a new one.
 // A list the prefetch could not bring whole is replaced.
 func SaveList(opts Options, listKey string) (int, error) {
-	if opts.ResultsURL == "" || opts.Token == "" {
+	if opts.Endpoint == "" {
 		return 0, nil
 	}
 	journal, _ := os.ReadFile(filepath.Join(opts.Dir, usedFile))
@@ -158,11 +157,9 @@ func SaveList(opts Options, listKey string) (int, error) {
 	if !changed || len(list) == 0 {
 		return 0, nil
 	}
-	key := listKey + "-" + strconv.FormatInt(time.Now().UnixNano(), 36)
-	client := newGHAClient(opts.ResultsURL, opts.Token)
 	ctx, cancel := context.WithTimeout(context.Background(), listUploadTimeout)
 	defer cancel()
-	if err := client.upload(ctx, listVersion(opts), key, bytes.NewReader(list), int64(len(list))); err != nil {
+	if err := newStoreClient(opts.Endpoint).put(ctx, listPath(opts, listKey), bytes.NewReader(list), int64(len(list))); err != nil {
 		return 0, err
 	}
 	// A second runs-on/action step in the job has nothing more to save.

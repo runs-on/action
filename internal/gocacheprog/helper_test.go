@@ -3,7 +3,6 @@ package gocacheprog_test
 import (
 	"bytes"
 	"crypto/sha256"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -20,34 +19,37 @@ import (
 	"github.com/runs-on/action/internal/gocacheprog"
 )
 
-// fakeCacheService is an in-memory GitHub Actions cache service (v2 Twirp):
-// immutable entries, created then uploaded then finalized.
-type fakeCacheService struct {
+// fakeStore is an in-memory copy of the RunsOn agent's gocacheprog cache:
+// GET (404 on a miss) and PUT, which replaces the entry, on
+// /_runs-on/tools/<id>/kv/gocacheprog/<key>, for the registered ID testID only.
+type fakeStore struct {
 	mu        sync.Mutex
-	pending   map[string][]byte
-	committed map[string][]byte
-	order     []string // committed ids, oldest first
+	entries_  map[string][]byte
 	downloads int
-	creates   int // CreateCacheEntry calls for outputs, rejected ones too
-	rejected  int // calls with another token, answered 401
-	// refuseDownloads answers downloads as Magic Cache does when another job
-	// replaced the entry since the lookup.
-	refuseDownloads bool
+	creates   int // PUTs of build outputs and test records
+	rejected  int // requests on another ID, answered 401
 	// cutDownloads answers downloads with a few bytes, as a transfer that
 	// breaks off.
 	cutDownloads bool
 	testData     int // uploaded entries holding what a test read or printed
 }
 
-// isList tells a job's list from a build output by its cache version.
-func isList(id string) bool { return strings.Contains(id, "-lists/") }
+const testID = "0123456789abcdef0123456789abcdef"
 
-// entries counts committed entries, build outputs and job lists apart.
-func (f *fakeCacheService) entries() (outputs, lists int) {
+// endpoint is the gocacheprog cache of the job registered as id.
+func endpoint(srv *httptest.Server, id string) string {
+	return srv.URL + "/_runs-on/tools/" + id + "/kv/gocacheprog"
+}
+
+// isList tells a job's list from a build output by its key.
+func isList(key string) bool { return strings.Contains(key, "/lists/") }
+
+// entries counts stored entries, build outputs and job lists apart.
+func (f *fakeStore) entries() (outputs, lists int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	for id := range f.committed {
-		if isList(id) {
+	for key := range f.entries_ {
+		if isList(key) {
 			lists++
 		} else {
 			outputs++
@@ -56,128 +58,81 @@ func (f *fakeCacheService) entries() (outputs, lists int) {
 	return outputs, lists
 }
 
+// list returns the content of the one job list stored.
+func (f *fakeStore) list() []byte {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for key, data := range f.entries_ {
+		if isList(key) {
+			return data
+		}
+	}
+	return nil
+}
+
 // testOutputMarker is what the module's test prints. It reaches the test
 // through its environment, so no compiled package holds it.
 const testOutputMarker = "printed-by-the-test"
 
-func (f *fakeCacheService) testDataCount() int {
+func (f *fakeStore) testDataCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.testData
 }
 
-func (f *fakeCacheService) createCount() int {
+func (f *fakeStore) createCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.creates
 }
 
-func (f *fakeCacheService) downloadCount() int {
+func (f *fakeStore) downloadCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.downloads
 }
 
-func newFakeCacheService() (*httptest.Server, *fakeCacheService) {
-	f := &fakeCacheService{pending: map[string][]byte{}, committed: map[string][]byte{}}
-	var srv *httptest.Server
-	mux := http.NewServeMux()
-	twirp := func(method string, handle func(req map[string]any) (int, any)) {
-		mux.HandleFunc("/twirp/github.actions.results.api.v1.CacheService/"+method, func(w http.ResponseWriter, r *http.Request) {
-			if r.Header.Get("Authorization") != "Bearer test-token" {
-				f.mu.Lock()
-				f.rejected++
-				f.mu.Unlock()
-				w.WriteHeader(http.StatusUnauthorized)
-				return
-			}
-			var req map[string]any
-			_ = json.NewDecoder(r.Body).Decode(&req)
-			status, resp := handle(req)
-			w.WriteHeader(status)
-			_ = json.NewEncoder(w).Encode(resp)
-		})
-	}
-	id := func(req map[string]any) string { return fmt.Sprint(req["version"], "/", req["key"]) }
-	twirp("CreateCacheEntry", func(req map[string]any) (int, any) {
+func newFakeStore() (*httptest.Server, *fakeStore) {
+	f := &fakeStore{entries_: map[string][]byte{}}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		key, ok := strings.CutPrefix(r.URL.Path, "/_runs-on/tools/"+testID+"/kv/gocacheprog/")
 		f.mu.Lock()
 		defer f.mu.Unlock()
-		if !isList(id(req)) {
-			f.creates++
+		if !ok {
+			f.rejected++
+			w.WriteHeader(http.StatusUnauthorized)
+			return
 		}
-		if _, ok := f.committed[id(req)]; ok {
-			return http.StatusConflict, map[string]string{"code": "already_exists", "msg": "exists"}
-		}
-		f.pending[id(req)] = nil
-		return http.StatusOK, map[string]any{"ok": true, "signedUploadUrl": srv.URL + "/blob/" + id(req)}
-	})
-	twirp("FinalizeCacheEntryUpload", func(req map[string]any) (int, any) {
-		f.mu.Lock()
-		defer f.mu.Unlock()
-		data, ok := f.pending[id(req)]
-		if !ok || fmt.Sprint(len(data)) != req["size_bytes"] {
-			return http.StatusOK, map[string]any{"ok": false}
-		}
-		f.committed[id(req)] = data
-		f.order = append(f.order, id(req))
-		delete(f.pending, id(req))
-		return http.StatusOK, map[string]any{"ok": true}
-	})
-	twirp("GetCacheEntryDownloadURL", func(req map[string]any) (int, any) {
-		f.mu.Lock()
-		defer f.mu.Unlock()
-		if _, ok := f.committed[id(req)]; ok {
-			return http.StatusOK, map[string]any{"ok": true, "matchedKey": req["key"], "signedDownloadUrl": srv.URL + "/blob/" + id(req)}
-		}
-		// Restore keys match by prefix, newest entry first.
-		restoreKeys, _ := req["restore_keys"].([]any)
-		for _, restoreKey := range restoreKeys {
-			prefix := fmt.Sprint(req["version"], "/", restoreKey)
-			for i := len(f.order) - 1; i >= 0; i-- {
-				if strings.HasPrefix(f.order[i], prefix) {
-					key := strings.TrimPrefix(f.order[i], fmt.Sprint(req["version"], "/"))
-					return http.StatusOK, map[string]any{"ok": true, "matchedKey": key, "signedDownloadUrl": srv.URL + "/blob/" + f.order[i]}
-				}
-			}
-		}
-		return http.StatusOK, map[string]any{"ok": false}
-	})
-	mux.HandleFunc("/blob/", func(w http.ResponseWriter, r *http.Request) {
-		key := strings.TrimPrefix(r.URL.Path, "/blob/")
-		f.mu.Lock()
-		defer f.mu.Unlock()
 		switch r.Method {
 		case http.MethodPut:
-			if _, ok := f.pending[key]; !ok {
-				w.WriteHeader(http.StatusNotFound)
-				return
+			body, _ := io.ReadAll(r.Body)
+			f.entries_[key] = body
+			if !isList(key) {
+				f.creates++
 			}
-			f.pending[key], _ = io.ReadAll(r.Body)
 			// An entry is a 44-byte header, then the output. The compiled
 			// testing/internal/testdeps package holds "# test log" further in.
-			if body := f.pending[key]; len(body) > 44 && (bytes.HasPrefix(body[44:], []byte("# test log\n")) || bytes.HasPrefix(body[44:], []byte("mode: ")) || bytes.Contains(body, []byte(testOutputMarker))) {
+			if len(body) > 44 && (bytes.HasPrefix(body[44:], []byte("# test log\n")) || bytes.HasPrefix(body[44:], []byte("mode: ")) || bytes.Contains(body, []byte(testOutputMarker))) {
 				f.testData++
 			}
-			w.WriteHeader(http.StatusCreated)
+			w.WriteHeader(http.StatusNoContent)
 		case http.MethodGet:
-			data, ok := f.committed[key]
+			data, ok := f.entries_[key]
 			if !ok {
 				w.WriteHeader(http.StatusNotFound)
 				return
 			}
-			if f.refuseDownloads {
-				w.WriteHeader(http.StatusPreconditionFailed)
-				return
-			}
 			f.downloads++
+			w.Header().Set("Content-Length", fmt.Sprint(len(data)))
 			if f.cutDownloads {
 				_, _ = w.Write(data[:8])
 				return
 			}
 			_, _ = w.Write(data)
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
 		}
-	})
-	srv = httptest.NewServer(mux)
+	}))
 	return srv, f
 }
 
@@ -219,26 +174,24 @@ func TestGoCommandSharesBuildsButNotTestResults(t *testing.T) {
 		}
 	}
 
-	srv, service := newFakeCacheService()
+	srv, service := newFakeStore()
 	defer srv.Close()
 
 	shareTests := false
-	goCmd := func(job, resultsURL string, args ...string) string {
+	goCmd := func(job, cacheEndpoint string, args ...string) string {
 		t.Helper()
 		home := filepath.Join(tmp, job)
 		prog := helper
 		if shareTests {
 			prog += " --share-test-results"
 		}
-		// As in a job: the action kept the token in a file for the helper,
-		// and run steps do not have it in their environment.
+		// As in a job: run steps have the registered key/value cache in
+		// RUNS_ON_REMOTE_CACHE_URL, and not the runtime token.
 		if err := os.MkdirAll(home, 0o755); err != nil {
 			t.Fatal(err)
 		}
 		t.Setenv("RUNNER_TEMP", home)
-		if err := gocacheprog.StoreToken("test-token"); err != nil {
-			t.Fatal(err)
-		}
+		t.Setenv("RUNS_ON_REMOTE_CACHE_URL", strings.TrimSuffix(cacheEndpoint, "/gocacheprog"))
 		stepEnv := slices.DeleteFunc(os.Environ(), func(kv string) bool { return strings.HasPrefix(kv, "ACTIONS_RUNTIME_TOKEN=") })
 		cmd := exec.Command(goBin, args...)
 		cmd.Dir = module
@@ -250,7 +203,6 @@ func TestGoCommandSharesBuildsButNotTestResults(t *testing.T) {
 			"GOCACHE="+filepath.Join(home, "gocache"),
 			"GOFLAGS=",
 			"GOTOOLCHAIN=local",
-			"ACTIONS_RESULTS_URL="+resultsURL,
 		)
 		out, err := cmd.CombinedOutput()
 		if err != nil {
@@ -266,9 +218,12 @@ func TestGoCommandSharesBuildsButNotTestResults(t *testing.T) {
 	// the job used.
 	const buildJob = "list-of-the-build-job"
 	options := func(job string) gocacheprog.Options {
+		t.Helper()
 		t.Setenv("RUNNER_TEMP", filepath.Join(tmp, job))
-		t.Setenv("ACTIONS_RESULTS_URL", srv.URL)
-		t.Setenv("ACTIONS_RUNTIME_TOKEN", "test-token")
+		if err := os.MkdirAll(filepath.Join(tmp, job), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("RUNS_ON_REMOTE_CACHE_URL", strings.TrimSuffix(endpoint(srv, testID), "/gocacheprog"))
 		return gocacheprog.OptionsFromEnv(false)
 	}
 	startJob := func(job string) {
@@ -287,7 +242,7 @@ func TestGoCommandSharesBuildsButNotTestResults(t *testing.T) {
 	}
 
 	startJob("cold")
-	goCmd("cold", srv.URL, "build", "-o", app, ".")
+	goCmd("cold", endpoint(srv, testID), "build", "-o", app, ".")
 	if saved := endJob("cold"); saved == 0 {
 		t.Fatal("a job that compiled its packages saved no list of what it used")
 	}
@@ -300,7 +255,7 @@ func TestGoCommandSharesBuildsButNotTestResults(t *testing.T) {
 	// before the go command asks.
 	startJob("warm")
 	createsBefore, downloadsBefore := service.createCount(), service.downloadCount()
-	goCmd("warm", srv.URL, "build", "-o", app, ".")
+	goCmd("warm", endpoint(srv, testID), "build", "-o", app, ".")
 	if got := service.createCount() - createsBefore; got != 0 {
 		t.Errorf("a build after its job's prefetch tried to upload %d outputs, want 0: it compiled something", got)
 	}
@@ -315,7 +270,7 @@ func TestGoCommandSharesBuildsButNotTestResults(t *testing.T) {
 	}
 
 	// A cache service that is down degrades to a local build.
-	goCmd("down", "http://127.0.0.1:1", "build", "-o", app, ".")
+	goCmd("down", "http://127.0.0.1:1/_runs-on/tools/"+testID+"/kv/gocacheprog", "build", "-o", app, ".")
 
 	// The go command stores three records for this test run: what the test
 	// read, what it printed, and its coverage profile.
@@ -323,11 +278,11 @@ func TestGoCommandSharesBuildsButNotTestResults(t *testing.T) {
 
 	// Test results stay in the job that produced them: another job runs its
 	// tests, while a repeat in the same job is cached as usual.
-	goCmd("test-job-1", srv.URL, testArgs...)
-	if out := goCmd("test-job-2", srv.URL, testArgs...); strings.Contains(out, "(cached)") {
+	goCmd("test-job-1", endpoint(srv, testID), testArgs...)
+	if out := goCmd("test-job-2", endpoint(srv, testID), testArgs...); strings.Contains(out, "(cached)") {
 		t.Errorf("a job reused another job's test result:\n%s", out)
 	}
-	if out := goCmd("test-job-2", srv.URL, testArgs...); !strings.Contains(out, "(cached)") {
+	if out := goCmd("test-job-2", endpoint(srv, testID), testArgs...); !strings.Contains(out, "(cached)") {
 		t.Errorf("a repeat in the same job reran its tests:\n%s", out)
 	}
 	if n := service.testDataCount(); n != 0 {
@@ -337,8 +292,8 @@ func TestGoCommandSharesBuildsButNotTestResults(t *testing.T) {
 	// Jobs that opt in share test results with each other, and only with
 	// each other.
 	shareTests = true
-	goCmd("shared-job-1", srv.URL, testArgs...)
-	if out := goCmd("shared-job-2", srv.URL, testArgs...); !strings.Contains(out, "(cached)") {
+	goCmd("shared-job-1", endpoint(srv, testID), testArgs...)
+	if out := goCmd("shared-job-2", endpoint(srv, testID), testArgs...); !strings.Contains(out, "(cached)") {
 		t.Errorf("a job that shares test results reran another's tests:\n%s", out)
 	}
 	// go clean -testcache expires the results stored before it, shared ones
@@ -346,65 +301,24 @@ func TestGoCommandSharesBuildsButNotTestResults(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(tmp, "shared-job-3", "gocache"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	goCmd("shared-job-3", srv.URL, "clean", "-testcache")
-	if out := goCmd("shared-job-3", srv.URL, testArgs...); strings.Contains(out, "(cached)") {
+	goCmd("shared-job-3", endpoint(srv, testID), "clean", "-testcache")
+	if out := goCmd("shared-job-3", endpoint(srv, testID), testArgs...); strings.Contains(out, "(cached)") {
 		t.Errorf("a shared test result outlived go clean -testcache:\n%s", out)
 	}
 
 	shareTests = false
-	if out := goCmd("test-job-3", srv.URL, testArgs...); strings.Contains(out, "(cached)") {
+	if out := goCmd("test-job-3", endpoint(srv, testID), testArgs...); strings.Contains(out, "(cached)") {
 		t.Errorf("a job that did not opt in reused a shared test result:\n%s", out)
 	}
 }
 
-// TestEntryReplacedDuringDownloadIsAMiss covers two jobs writing the same
-// entries at once: Magic Cache refuses the download of an entry replaced
-// since its lookup. That is a miss, and the outputs compiled after it are
-// still uploaded.
-func TestEntryReplacedDuringDownloadIsAMiss(t *testing.T) {
-	srv, service := newFakeCacheService()
-	defer srv.Close()
-	open := func() *gocacheprog.Cache {
-		c, err := gocacheprog.New(gocacheprog.Options{Dir: t.TempDir(), ResultsURL: srv.URL, Token: "test-token", Namespace: "test"})
-		if err != nil {
-			t.Fatal(err)
-		}
-		return c
-	}
-	put := func(c *gocacheprog.Cache, action byte, output string) {
-		t.Helper()
-		outputID := sha256.Sum256([]byte(output))
-		if _, err := c.Put(bytes.Repeat([]byte{action}, 32), outputID[:], []byte(output)); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	first := open()
-	put(first, 1, "one")
-	_ = first.Close()
-
-	service.mu.Lock()
-	service.refuseDownloads = true
-	service.mu.Unlock()
-	second := open()
-	if _, ok, err := second.Get(bytes.Repeat([]byte{1}, 32)); ok || err != nil {
-		t.Fatalf("a refused download returned %v, %v, want a miss", ok, err)
-	}
-	put(second, 2, "two")
-	_ = second.Close()
-
-	if outputs, _ := service.entries(); outputs != 2 {
-		t.Errorf("the cache service holds %d outputs, want the 2 that were put", outputs)
-	}
-}
-
-// TestRejectedTokenIsNotAskedAgain: a cache that rejects the job's token will
+// TestRejectedTokenIsNotAskedAgain: a cache that rejects the job's path will
 // reject every request of the build, so the go command stops asking after the
 // first one instead of paying for each lookup and upload.
 func TestRejectedTokenIsNotAskedAgain(t *testing.T) {
-	srv, service := newFakeCacheService()
+	srv, service := newFakeStore()
 	defer srv.Close()
-	c, err := gocacheprog.New(gocacheprog.Options{Dir: t.TempDir(), ResultsURL: srv.URL, Token: "expired-token", Namespace: "test"})
+	c, err := gocacheprog.New(gocacheprog.Options{Dir: t.TempDir(), Endpoint: endpoint(srv, "expired"), Namespace: "test"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -430,9 +344,9 @@ func TestRejectedTokenIsNotAskedAgain(t *testing.T) {
 // in the remote cache, so the job's next run has nothing to prefetch for it,
 // even after a later go command of the same job read it back.
 func TestJobListHoldsOnlySharedEntries(t *testing.T) {
-	srv, service := newFakeCacheService()
+	srv, service := newFakeStore()
 	defer srv.Close()
-	job := gocacheprog.Options{Dir: t.TempDir(), ResultsURL: srv.URL, Token: "test-token", Namespace: "test"}
+	job := gocacheprog.Options{Dir: t.TempDir(), Endpoint: endpoint(srv, testID), Namespace: "test"}
 	open := func() *gocacheprog.Cache {
 		c, err := gocacheprog.New(job)
 		if err != nil {
@@ -466,15 +380,7 @@ func TestJobListHoldsOnlySharedEntries(t *testing.T) {
 	if saved, err := gocacheprog.SaveList(job, "test-list"); saved != 2 || err != nil {
 		t.Fatalf("saved a list of %d entries, %v, want the 2 shared ones", saved, err)
 	}
-	service.mu.Lock()
-	defer service.mu.Unlock()
-	var list []byte
-	for _, entry := range service.order {
-		if isList(entry) {
-			list = service.committed[entry]
-		}
-	}
-	if !bytes.Equal(list, append(id(2), id(3)...)) {
+	if list := service.list(); !bytes.Equal(list, append(id(2), id(3)...)) {
 		t.Errorf("the job's list is %x, want the two shared entries in the order the job first used them", list)
 	}
 }
@@ -483,11 +389,11 @@ func TestJobListHoldsOnlySharedEntries(t *testing.T) {
 // may start from the list of a run that did. It rejects the test records in
 // it, and saves a list without them, so its next run asks for none of them.
 func TestJobReplacesAListItCouldNotUse(t *testing.T) {
-	srv, service := newFakeCacheService()
+	srv, service := newFakeStore()
 	defer srv.Close()
 	const listKey = "test-list"
 	job := func(shareTestResults bool) gocacheprog.Options {
-		return gocacheprog.Options{Dir: t.TempDir(), ResultsURL: srv.URL, Token: "test-token", Namespace: "test", ShareTestResults: shareTestResults}
+		return gocacheprog.Options{Dir: t.TempDir(), Endpoint: endpoint(srv, testID), Namespace: "test", ShareTestResults: shareTestResults}
 	}
 	id := func(action byte) []byte { return bytes.Repeat([]byte{action}, 32) }
 
@@ -543,10 +449,10 @@ func TestJobReplacesAListItCouldNotUse(t *testing.T) {
 // fail every lookup of the build the same way, so the go command stops asking
 // after the first one.
 func TestCutDownloadStopsRemoteLookups(t *testing.T) {
-	srv, service := newFakeCacheService()
+	srv, service := newFakeStore()
 	defer srv.Close()
 	open := func() *gocacheprog.Cache {
-		c, err := gocacheprog.New(gocacheprog.Options{Dir: t.TempDir(), ResultsURL: srv.URL, Token: "test-token", Namespace: "test"})
+		c, err := gocacheprog.New(gocacheprog.Options{Dir: t.TempDir(), Endpoint: endpoint(srv, testID), Namespace: "test"})
 		if err != nil {
 			t.Fatal(err)
 		}

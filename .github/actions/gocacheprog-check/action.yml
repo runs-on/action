@@ -6,7 +6,7 @@ inputs:
     description: Identifies the module's content. The job that uploads it and the job that restores it pass the same value.
     required: true
   mode:
-    description: The gocacheprog input the job gave runs-on/action.
+    description: '"with-tests" when the job gave runs-on/action remote_cache: go,tests=true, "true" for go.'
     default: 'true'
   uploads:
     description: '"true" in the job that compiles and uploads the module, "false" in a later job that only restores it.'
@@ -15,8 +15,23 @@ inputs:
 runs:
   using: composite
   steps:
+    - id: tools
+      uses: ./.github/actions/tool-caches-served
+      with:
+        protocol: kv
+    # An agent before RunsOn v3.6.0: runs-on/action warns and the go command
+    # keeps its local build cache.
+    - name: Without remote caches, GOCACHEPROG is not set
+      if: steps.tools.outputs.served != 'true'
+      shell: bash
+      run: |
+        if [[ -n "${GOCACHEPROG:-}" ]]; then
+          echo "::error::GOCACHEPROG is set on an agent without remote caches"
+          exit 1
+        fi
     # GitHub gives the job's runtime token to actions only. runs-on/action
-    # keeps it in a file for its helper and must not export it.
+    # registers it with the agent, keeps only the cache endpoint for its
+    # helper, and must not export the token.
     - name: The runtime token is not in the steps' environment
       shell: bash
       run: |
@@ -28,6 +43,7 @@ runs:
     # previous run, in the background. Once over, it leaves the list it
     # downloaded, which is empty for a job that never ran.
     - name: The job's prefetch ran
+      if: steps.tools.outputs.served == 'true'
       shell: bash
       run: |
         local_cache="${RUNNER_TEMP}/runs-on-gocacheprog"
@@ -44,6 +60,7 @@ runs:
     # One package holds the module's identity, so the first build of a run
     # always has something to compile and upload.
     - name: Create a module
+      if: steps.tools.outputs.served == 'true'
       shell: bash
       env:
         MODULE: ${{ inputs.module }}
@@ -73,7 +90,7 @@ runs:
         # last two seconds.
         sleep 3
     - name: Build and test
-      if: inputs.uploads == 'true'
+      if: steps.tools.outputs.served == 'true' && (inputs.uploads == 'true')
       shell: bash
       env:
         ATTEMPT: ${{ github.run_attempt }}
@@ -90,7 +107,7 @@ runs:
         go test ./...
     # What another job starts with: nothing on local disk.
     - name: Empty the local cache
-      if: inputs.uploads == 'true'
+      if: steps.tools.outputs.served == 'true' && (inputs.uploads == 'true')
       shell: bash
       run: |
         local_cache="${RUNNER_TEMP}/runs-on-gocacheprog"
@@ -100,6 +117,7 @@ runs:
         fi
         rm -rf "${local_cache}"
     - name: Build without compiling
+      if: steps.tools.outputs.served == 'true'
       shell: bash
       run: |
         cd "${RUNNER_TEMP}/gocacheprog"
@@ -109,7 +127,8 @@ runs:
           echo "::error::a build with every package in Magic Cache compiled some"
           exit 1
         fi
-    - name: Test results are shared only with with-tests
+    - name: Test results are shared only with tests=true
+      if: steps.tools.outputs.served == 'true'
       shell: bash
       env:
         MODE: ${{ inputs.mode }}

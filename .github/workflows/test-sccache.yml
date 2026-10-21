@@ -4,6 +4,62 @@ on:
   workflow_call:
 
 jobs:
+  # The action configures WebDAV; the first compiler starts its own daemon.
+  magic-cache:
+    name: Magic Cache (${{ matrix.leg }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - leg: linux
+            image: ubuntu24-full-x64
+          - leg: container
+            image: ubuntu24-full-x64
+            container: rust:1
+          - leg: windows
+            image: windows25-full-x64
+    runs-on: runs-on=${{ github.run_id }}/env=bootstrap/cpu=2/family=m7/image=${{ matrix.image }}/extras=s3-cache
+    container: ${{ matrix.container }}
+    env:
+      CARGO_INCREMENTAL: "0"
+      # The job's own sccache namespace in Magic Cache.
+      SCCACHE_WEBDAV_KEY_PREFIX: ${{ github.run_id }}-${{ matrix.leg }}
+    steps:
+      - uses: actions/checkout@v6
+      - if: ${{ !matrix.container }}
+        uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/use-dist
+      - uses: ./
+        with:
+          remote_cache: sccache
+      - uses: taiki-e/install-action@v2.87.28
+        with:
+          tool: sccache@0.18.0
+      - uses: ./.github/actions/sccache-check
+
+  # Magic Cache answers a runner's own uploads straight from S3. Only another
+  # job goes through its lookup index and reads entries it did not write.
+  magic-cache-another-job:
+    name: Magic Cache (another job)
+    needs: magic-cache
+    runs-on: runs-on=${{ github.run_id }}/env=bootstrap/cpu=2/family=m7/image=ubuntu24-full-x64/extras=s3-cache
+    env:
+      CARGO_INCREMENTAL: "0"
+      SCCACHE_WEBDAV_KEY_PREFIX: ${{ github.run_id }}-linux
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/use-dist
+      - uses: ./
+        with:
+          remote_cache: sccache
+      - uses: taiki-e/install-action@v2.87.28
+        with:
+          tool: sccache@0.18.0
+      - uses: ./.github/actions/sccache-check
+        with:
+          uploads: 'false'
+
   test-sccache-linux:
     runs-on: runs-on=${{ github.run_id }}/env=bootstrap/runner=2cpu-linux-x64/extras=s3-cache
     

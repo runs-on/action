@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/runs-on/action/internal/remotecache"
 	"github.com/sethvargo/go-githubactions"
 )
 
@@ -19,8 +20,7 @@ type Config struct {
 	NetworkInterface    string
 	DiskDevice          string
 	Sccache             string
-	GoCacheProg         string
-	BazelRemoteCache    string
+	RemoteCache         string
 	StickyCache         []string
 	StickyWaitTimeout   time.Duration
 	StickySave          bool
@@ -69,8 +69,7 @@ func NewConfigFromInputs(action *githubactions.Action) (*Config, error) {
 	}
 
 	cfg.Sccache = action.GetInput("sccache")
-	cfg.GoCacheProg = action.GetInput("gocacheprog")
-	cfg.BazelRemoteCache = action.GetInput("bazel_remote_cache")
+	cfg.RemoteCache = action.GetInput("remote_cache")
 
 	stickyCacheInput := action.GetInput("sticky_cache")
 	if stickyCacheInput != "" {
@@ -115,8 +114,7 @@ func NewConfigFromInputs(action *githubactions.Action) (*Config, error) {
 	action.Infof("Input 'network_interface': %s", cfg.NetworkInterface)
 	action.Infof("Input 'disk_device': %s", cfg.DiskDevice)
 	action.Infof("Input 'sccache': %s", cfg.Sccache)
-	action.Infof("Input 'gocacheprog': %s", cfg.GoCacheProg)
-	action.Infof("Input 'bazel_remote_cache': %s", cfg.BazelRemoteCache)
+	action.Infof("Input 'remote_cache': %q", cfg.RemoteCache)
 	action.Infof("Input 'sticky_cache': %v", cfg.StickyCache)
 	action.Infof("Input 'sticky_wait_timeout': %s", cfg.StickyWaitTimeout)
 	action.Infof("Input 'sticky_save': %t", cfg.StickySave)
@@ -148,12 +146,13 @@ func (c *Config) HasMetrics() bool {
 	return c.IsUsingRunsOn() && c.IsUsingLinux() && len(c.Metrics) > 0
 }
 
-func (c *Config) HasGoCacheProg() bool {
-	return c.IsUsingRunsOn() && c.GoCacheProg != "" && c.GoCacheProg != "false"
-}
-
-func (c *Config) HasBazelRemoteCache() bool {
-	return c.IsUsingRunsOn() && c.BazelRemoteCache != "" && c.BazelRemoteCache != "false"
+// RemoteCacheRequests are the tools remote_cache lists, and a problem per
+// record it skips.
+func (c *Config) RemoteCacheRequests() ([]remotecache.Request, []string) {
+	if !c.IsUsingRunsOn() {
+		return nil, nil
+	}
+	return remotecache.Parse(c.RemoteCache)
 }
 
 // HasMagicCache reports whether the runner serves the GitHub Actions cache
@@ -164,7 +163,7 @@ func (c *Config) HasMagicCache() bool {
 }
 
 func (c *Config) HasSccache() bool {
-	return c.IsUsingRunsOn() && c.Sccache != ""
+	return c.IsUsingRunsOn() && c.Sccache != "" && c.Sccache != "false"
 }
 
 // HasStickyDiskCache reports whether sticky disk caching was requested.

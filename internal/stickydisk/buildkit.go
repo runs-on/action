@@ -7,6 +7,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -26,6 +28,20 @@ const (
 	buildkitVolumeLabelValue  = "buildkit"
 	buildkitVolumeLabel       = buildkitVolumeLabelKey + "=" + buildkitVolumeLabelValue
 )
+
+const (
+	// defaultBuildkitImage is RunsOn's patched BuildKit, which runs-on/buildkit
+	// moves forward to each release that passes its smoke test.
+	defaultBuildkitImage = "public.ecr.aws/c5h5o9k1/runs-on/buildkit:buildx-stable-1"
+	// buildkitImageEnv names the BuildKit image that RunsOn runner images pin,
+	// by digest, when they are built.
+	buildkitImageEnv = "RUNS_ON_BUILDKIT_IMAGE"
+	// buildkitVersionFile records, next to the sticky state root, the output of
+	// `buildkitd --version` for the BuildKit that last wrote that state.
+	buildkitVersionFile = "buildkitd-version"
+)
+
+var buildkitVersionPattern = regexp.MustCompile(`v(\d+)\.(\d+)\.(\d+)`)
 
 type dockerVolumeInspect struct {
 	Driver  string            `json:"Driver"`
@@ -48,6 +64,114 @@ type dockerContainerInspect struct {
 func SetDefaultOutputs(action *githubactions.Action) {
 	action.SetOutput("cache-hit", "false")
 	action.SetOutput("buildkit-builder", buildkitBuilderName)
+	action.SetOutput("buildkit-image", buildkitImage())
+}
+
+// buildkitImage returns the BuildKit image to pass to
+// docker/setup-buildx-action: the one pinned by the runner image, or RunsOn's
+// stable channel on runner images that don't pin one.
+func buildkitImage() string {
+	if image := strings.TrimSpace(os.Getenv(buildkitImageEnv)); image != "" {
+		return image
+	}
+	return defaultBuildkitImage
+}
+
+// buildkitVersion extracts the vX.Y.Z release from `buildkitd --version`
+// output or from an image reference's tag. It reports false when there is
+// none, as for the buildx-stable-1 tag.
+func buildkitVersion(s string) ([3]int, bool) {
+	match := buildkitVersionPattern.FindStringSubmatch(s)
+	if match == nil {
+		return [3]int{}, false
+	}
+	var version [3]int
+	for i := range version {
+		n, err := strconv.Atoi(match[i+1])
+		if err != nil {
+			return [3]int{}, false
+		}
+		version[i] = n
+	}
+	return version, true
+}
+
+// imageTag returns the tag of an image reference, without registry, name or
+// digest.
+func imageTag(image string) string {
+	image, _, _ = strings.Cut(image, "@")
+	colon := strings.LastIndex(image, ":")
+	if colon < 0 || colon < strings.LastIndex(image, "/") {
+		return ""
+	}
+	return image[colon+1:]
+}
+
+func olderBuildkit(a, b [3]int) bool {
+	for i := range a {
+		if a[i] != b[i] {
+			return a[i] < b[i]
+		}
+	}
+	return false
+}
+
+func formatBuildkitVersion(v [3]int) string {
+	return fmt.Sprintf("v%d.%d.%d", v[0], v[1], v[2])
+}
+
+// recordedBuildkitVersion reads the version of the BuildKit that last wrote
+// the sticky state next to stateRoot.
+func recordedBuildkitVersion(stateRoot string) ([3]int, bool) {
+	path := filepath.Join(filepath.Dir(stateRoot), buildkitVersionFile)
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return [3]int{}, false
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return [3]int{}, false
+	}
+	return buildkitVersion(string(data))
+}
+
+// warnIfBuildkitImageIsOlder warns before the build when the buildkit-image
+// output is older than the BuildKit that last wrote the sticky state: BuildKit
+// doesn't document that an older daemon can read state from a newer one.
+func warnIfBuildkitImageIsOlder(action *githubactions.Action, stateRoot string) {
+	recorded, ok := recordedBuildkitVersion(stateRoot)
+	if !ok {
+		return
+	}
+	image := buildkitImage()
+	version, ok := buildkitVersion(imageTag(image))
+	if ok && olderBuildkit(version, recorded) {
+		action.Warningf("The buildkit-image output %s (%s) is older than BuildKit %s, which last wrote this sticky BuildKit state. BuildKit doesn't document that an older version can read state written by a newer one; if builds fail, use a newer image or start a new sticky-disk lineage.", image, formatBuildkitVersion(version), formatBuildkitVersion(recorded))
+	}
+}
+
+// recordBuildkitVersion records the running BuildKit version next to the
+// sticky state root, and warns when it is older than the version that wrote
+// the state before this job.
+func recordBuildkitVersion(action *githubactions.Action, stateRoot string) {
+	out, err := exec.Command("docker", "exec", buildkitContainerName, "buildkitd", "--version").CombinedOutput()
+	if err != nil {
+		action.Debugf("Could not read the BuildKit version of %s: %v: %s", buildkitContainerName, err, strings.TrimSpace(string(out)))
+		return
+	}
+	line := strings.TrimSpace(string(out))
+	running, ok := buildkitVersion(line)
+	if !ok {
+		action.Debugf("Could not parse the BuildKit version from %q", line)
+		return
+	}
+	if recorded, ok := recordedBuildkitVersion(stateRoot); ok && olderBuildkit(running, recorded) {
+		action.Warningf("This job's BuildKit %s is older than BuildKit %s, which last wrote this sticky BuildKit state. BuildKit doesn't document that an older version can read state written by a newer one; if builds fail, use a newer image or start a new sticky-disk lineage.", formatBuildkitVersion(running), formatBuildkitVersion(recorded))
+	}
+	path := filepath.Join(filepath.Dir(stateRoot), buildkitVersionFile)
+	if err := writeFileFresh(path, []byte(line+"\n"), 0o644); err != nil {
+		action.Warningf("Could not record the BuildKit version of the sticky state: %v", err)
+	}
 }
 
 // setupBuildkit pre-creates the state volume expected by Buildx's single-node
@@ -68,6 +192,7 @@ func setupBuildkit(action *githubactions.Action, mountRoot string) (hit bool, er
 	if err := writeFileFresh(buildkitPreparedStateFile(), []byte(stateRoot), 0o600); err != nil {
 		return hit, fmt.Errorf("record prepared BuildKit volume: %w", err)
 	}
+	warnIfBuildkitImageIsOlder(action, stateRoot)
 
 	action.Infof("Prepared sticky BuildKit state volume '%s' for builder '%s'. Run docker/setup-buildx-action next with name=%s, driver=docker-container, and cleanup=false.", buildkitStateVolumeName, buildkitBuilderName, buildkitBuilderName)
 	return hit, nil
@@ -222,6 +347,7 @@ func cleanupBuildkit(action *githubactions.Action) error {
 				verificationErr = fmt.Errorf("BuildKit state volume %s is not backed by %s", buildkitStateVolumeName, stateRoot)
 			default:
 				action.Infof("Verified sticky BuildKit state mount: %s -> %s", stateRoot, buildkitStateTarget)
+				recordBuildkitVersion(action, stateRoot)
 			}
 		}
 	}

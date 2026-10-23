@@ -95,13 +95,7 @@ func (s *Server) handleUploadPack(w http.ResponseWriter, r *http.Request, t targ
 }
 
 func missingWants(ctx context.Context, mirror *Mirror, repoPath string, wants []string) []string {
-	missing := make([]string, 0, len(wants))
-	for _, want := range wants {
-		if !mirror.HasObject(ctx, repoPath, want) {
-			missing = append(missing, want)
-		}
-	}
-	return missing
+	return mirror.MissingObjects(ctx, repoPath, wants)
 }
 
 // bufferBody reads up to limit bytes. When the body is larger, the buffered

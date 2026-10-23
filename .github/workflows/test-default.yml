@@ -1,12 +1,6 @@
 name: Test / Default
 on:
-  push:
-    branches:
-      - main
-      - v*
-      - feature/*
-      - fix/*
-  workflow_dispatch:
+  workflow_call:
 
 jobs:
   github:
@@ -28,6 +22,7 @@ jobs:
       - name: Run Windows sticky-cache unit tests
         if: runner.os == 'Windows'
         run: go test ./internal/stickydisk
+      - uses: ./.github/actions/use-dist
       # expectation: this is just a noop on managed runners
       - uses: ./
       - run: sleep 30
@@ -51,5 +46,6 @@ jobs:
       - name: Run Windows sticky-cache unit tests
         if: runner.os == 'Windows'
         run: go test ./internal/stickydisk
+      - uses: ./.github/actions/use-dist
       - uses: ./
       - run: sleep 30

@@ -39,12 +39,57 @@ exec /bin/rm "$@"
 		t.Fatal(err)
 	}
 
-	if _, err := cacheMount(githubactions.New(), mountRoot, target, false); err == nil {
+	if _, err := cacheMount(githubactions.New(), mountRoot, target, false, true); err == nil {
 		t.Fatal("cache mount unexpectedly succeeded")
 	}
 	src := filepath.Join(mountRoot, "mounts", sourceDirName(target))
 	if _, err := os.Stat(src); !os.IsNotExist(err) {
 		t.Fatalf("cold source survived bind failure: %v", err)
+	}
+}
+
+func TestCacheMountCanExcludeExistingTargetContents(t *testing.T) {
+	bin := t.TempDir()
+	sudo := `#!/bin/sh
+if [ "$1" = "mount" ]; then
+  exit 0
+fi
+shift
+exec "$@"
+`
+	if err := os.WriteFile(filepath.Join(bin, "sudo"), []byte(sudo), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	root := t.TempDir()
+	mountRoot := filepath.Join(root, "sticky")
+	target := filepath.Join(root, "tool-cache")
+	src := filepath.Join(mountRoot, "mounts", sourceDirName(target))
+	for _, dir := range []string{target, src} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(target, "image-only"), []byte("image"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "restored-only"), []byte("restored"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	hit, err := cacheMount(githubactions.New(), mountRoot, target, false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hit {
+		t.Fatal("restored cache reported a miss")
+	}
+	if _, err := os.Stat(filepath.Join(src, "restored-only")); err != nil {
+		t.Fatalf("restored content was lost: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(src, "image-only")); !os.IsNotExist(err) {
+		t.Fatalf("image content was inherited by the sticky cache: %v", err)
 	}
 }
 
@@ -67,7 +112,7 @@ func TestCacheMountRejectsSymlinkedTargetBeforeMerge(t *testing.T) {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
 
-	if _, err := cacheMount(githubactions.New(), mountRoot, target, false); err == nil || !strings.Contains(err.Error(), "symbolic link") {
+	if _, err := cacheMount(githubactions.New(), mountRoot, target, false, true); err == nil || !strings.Contains(err.Error(), "symbolic link") {
 		t.Fatalf("symlinked cache target error = %v", err)
 	}
 	src := filepath.Join(mountRoot, "mounts", sourceDirName(target))
@@ -111,7 +156,7 @@ func TestCacheMountRejectsSymlinkedStickySource(t *testing.T) {
 				}
 			}
 
-			if _, err := cacheMount(githubactions.New(), mountRoot, target, false); err == nil || !strings.Contains(err.Error(), "real directory") {
+			if _, err := cacheMount(githubactions.New(), mountRoot, target, false, true); err == nil || !strings.Contains(err.Error(), "real directory") {
 				t.Fatalf("symlinked sticky source error = %v", err)
 			}
 			if got, err := os.ReadFile(filepath.Join(outside, "marker")); err != nil || string(got) != "outside" {
@@ -365,7 +410,7 @@ func TestCacheMountDiscardsWarmSourceAfterFailedMerge(t *testing.T) {
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	action := githubactions.New(githubactions.WithWriter(os.Stderr))
-	hit, err := cacheMount(action, mountRoot, target, false)
+	hit, err := cacheMount(action, mountRoot, target, false, true)
 	if err == nil {
 		t.Fatal("cacheMount succeeded with a failing merge")
 	}

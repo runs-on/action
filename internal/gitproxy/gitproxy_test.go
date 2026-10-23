@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -870,6 +871,10 @@ func TestMirrorEnsureRepo(t *testing.T) {
 	if mirror.HasObject(ctx, repoPath, strings.Repeat("0", 40)) {
 		t.Errorf("HasObject(zeros) = true, want false")
 	}
+	zeros := strings.Repeat("0", 40)
+	if got := mirror.MissingObjects(ctx, repoPath, []string{headSHA, zeros}); !slices.Equal(got, []string{zeros}) {
+		t.Errorf("MissingObjects = %v, want [%s]", got, zeros)
+	}
 
 	// An upstream sync failure must reach the HTTP handler so it can forward the
 	// ref advertisement upstream instead of serving stale public refs.
@@ -1400,6 +1405,48 @@ func TestServerServesGitClients(t *testing.T) {
 			t.Errorf("%s = %q, want mirror-*", statusHeader, status)
 		}
 	})
+}
+
+// TestServerServesChunkedLazyBlobFetch covers a blob:none checkout whose
+// lazy fetch of every blob exceeds http.postBuffer, so git sends it chunked.
+func TestServerServesChunkedLazyBlobFetch(t *testing.T) {
+	dir := t.TempDir()
+	work := filepath.Join(dir, "work")
+	for i := range 3000 {
+		path := filepath.Join(work, fmt.Sprintf("d%02d", i%50), fmt.Sprintf("f%d.txt", i))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(fmt.Sprintf("content %d\n", i)), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	gitCmd(t, work, "init", "-q", "-b", "main", ".")
+	gitCmd(t, work, "add", ".")
+	gitCmd(t, work, "-c", "gc.auto=0", "commit", "-q", "-m", "initial")
+	gitCmd(t, dir, "clone", "-q", "--bare", "--no-local", work, filepath.Join(dir, "owner", "repo.git"))
+
+	server := newTestServer(t, "file://"+dir)
+	var chunked atomic.Bool
+	handler := server.Handler()
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if len(r.TransferEncoding) > 0 {
+			chunked.Store(true)
+		}
+		handler.ServeHTTP(w, r)
+	}))
+	defer ts.Close()
+
+	dst := filepath.Join(t.TempDir(), "dst")
+	gitCmd(t, t.TempDir(), "clone", "-q", "--filter=blob:none", "--no-checkout", ts.URL+"/github.com/owner/repo", dst)
+	// A small postBuffer (git requires > 64 KiB) keeps the fixture small.
+	gitCmd(t, dst, "-c", "http.postBuffer=131072", "checkout", "-q", "main")
+	if !chunked.Load() {
+		t.Fatal("lazy blob fetch was not chunked; the test no longer covers CGI buffering")
+	}
+	if data, err := os.ReadFile(filepath.Join(dst, "d07", "f2957.txt")); err != nil || string(data) != "content 2957\n" {
+		t.Errorf("f2957.txt = %q, err=%v", data, err)
+	}
 }
 
 // TestServerFallbacks verifies that anything the mirror cannot serve is

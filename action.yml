@@ -11,11 +11,11 @@ inputs:
     required: false
     default: 'false'
   show_costs:
-    description: 'Control how execution costs are displayed: "inline" for log output, "summary" for GitHub job summary, any other value disables the feature. When the action is used more than once in a job, only the first enabled invocation reports costs.'
+    description: 'Control how execution costs are displayed: "inline" for log output, "summary" for GitHub job summary, any other value disables the feature. With RunsOn v3.4.0+, the RunsOn agent reports the cost at the end of the job and this input only sets how it is displayed. When the action is used more than once in a job, only the first enabled invocation reports costs.'
     required: false
     default: 'inline'
   metrics:
-    description: 'Comma separated list of additional metrics to send to CloudWatch (cpu, network, memory, disk, io)'
+    description: 'Comma separated list of additional metrics to send to CloudWatch (cpu, network, memory, disk, io). disk publishes used_percent, inodes_used, free and total.'
     required: false
     default: ''
   network_interface:
@@ -27,11 +27,15 @@ inputs:
     required: false
     default: 'nvme0n1p1'
   sccache:
-    description: 'Enable sccache. Can take either "s3" (RunsOn S3 cache bucket) or be empty (disabled). You still need to setup sccache in your workflow, for instance with mozilla-actions/sccache-action.'
+    description: 'Set to "s3" to have sccache write straight to the RunsOn S3 cache bucket, shared by every branch. Empty or "false" disables it. For sccache through the RunsOn agent, with GitHub''s branch scoping, use remote_cache: sccache instead.'
+    required: false
+    default: ''
+  remote_cache:
+    description: 'Newline-separated build tools whose remote cache the RunsOn agent stores in the stack''s S3 cache bucket, with GitHub''s branch scoping. Each line is a tool followed by comma-separated key=value options: bazel (writes --remote_cache into Bazel''s system rc; Bazel 6.3+), go (exports GOCACHEPROG; Go 1.24+; go,tests=true also shares test results), gradle (writes an init script for Gradle''s HTTP build cache, and GRADLE_USER_HOME when unset; Gradle 7.6+), mbx (exports MBX_REMOTE_URL), sccache (exports RUSTC_WRAPPER and SCCACHE_WEBDAV_ENDPOINT; install sccache before compiling). Later steps get RUNS_ON_REMOTE_CACHE_URL for other clients. Requires Magic Cache (extras=s3-cache) and RunsOn v3.6.0 or later; otherwise the action warns and each tool builds without the remote cache.'
     required: false
     default: ''
   sticky_cache:
-    description: 'Newline-separated sticky-disk cache records. Each line is a mode followed by comma-separated key=value options, for example buildkit or custom,path=vendor/cache. Custom paths must be directories. Supported modes: go, node, yarn, pnpm, ruby, rust, python, uv, poetry, apt, buildkit, git, git-full, gradle, maven, playwright, custom. Requires a sticky=<size> or sticky=<name>:<size> label; an incomplete agent contract or readiness timeout fails the action, while an explicit unavailable marker warns and continues cold. Linux and Windows (apt, buildkit, git and git-full modes are Linux only). Run after actions/checkout for workspace-relative caches; git and git-full must run before checkout and cannot share an invocation with workspace-relative caches; buildkit must run before docker/setup-buildx-action.'
+    description: 'Newline-separated sticky-disk cache records. Each line is a mode followed by comma-separated key=value options, for example buildkit or custom,path=vendor/cache. Custom paths must be directories. Supported modes: go, node, yarn, pnpm, ruby, rust, python, uv, poetry, apt, buildkit, git, git-full, gradle, maven, playwright, tool-cache, custom. Requires a sticky=<size> or sticky=<name>:<size> label; an incomplete agent contract or readiness timeout fails the action, while an explicit unavailable marker warns and continues cold. Linux and Windows (apt, buildkit, git and git-full modes are Linux only). Run after actions/checkout for workspace-relative caches; git and git-full must run before checkout and cannot share an invocation with workspace-relative caches; buildkit must run before docker/setup-buildx-action; tool-cache must run before setup-* actions.'
     required: false
     default: ''
   token:
@@ -42,6 +46,10 @@ inputs:
     description: 'How long to wait for the sticky disk to be ready (positive Go duration, e.g. "15m")'
     required: false
     default: '15m'
+  sticky_save:
+    description: 'Set to false to restore the sticky_cache caches without saving this job''s changes: the sticky disk is released at job end without a snapshot. Applies to the whole job once any invocation sets it. Requires RunsOn v3.5.0 or later.'
+    required: false
+    default: 'true'
 
 outputs:
   cache-hit:

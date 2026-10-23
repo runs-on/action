@@ -8,6 +8,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/runs-on/action/internal/config"
+	"github.com/runs-on/action/internal/costs"
+	"github.com/runs-on/action/internal/remotecache"
 	"github.com/sethvargo/go-githubactions"
 )
 
@@ -95,6 +98,91 @@ func TestShouldTrackCostsInPost(t *testing.T) {
 			t.Setenv(costTrackingStateEnv, tt.state)
 			if got := shouldTrackCostsInPost(); got != tt.want {
 				t.Fatalf("shouldTrackCostsInPost() = %t, want %t", got, tt.want)
+			}
+		})
+	}
+}
+
+// A RunsOn agent that reports costs reads the mode from a file in RUNNER_TEMP.
+func TestRequestAgentCostMode(t *testing.T) {
+	for _, tt := range []struct {
+		name           string
+		showCosts      string
+		claimed        bool // this invocation owns cost reporting
+		alreadyClaimed bool // an earlier invocation owns it
+		previous       string
+		want           string // "" means no file
+	}{
+		{name: "first enabled invocation sets inline", showCosts: "inline", claimed: true, want: "inline"},
+		{name: "first enabled invocation sets summary", showCosts: "summary", claimed: true, want: "summary"},
+		{name: "disabled invocation turns the report off", showCosts: "false", want: "off"},
+		{name: "later enabled invocation overrides an earlier off", showCosts: "summary", claimed: true, previous: "off", want: "summary"},
+		{name: "disabled invocation keeps an earlier enabled mode", showCosts: "false", alreadyClaimed: true, previous: "summary", want: "summary"},
+		{name: "later enabled invocation keeps the first mode", showCosts: "inline", alreadyClaimed: true, previous: "summary", want: "summary"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("RUNNER_TEMP", t.TempDir())
+			t.Setenv(costs.AgentModeFileNameEnv, "runs-on-show-costs")
+			if tt.alreadyClaimed {
+				t.Setenv(costTrackingClaimEnv, "true")
+			} else {
+				t.Setenv(costTrackingClaimEnv, "")
+			}
+			path := costs.AgentModeFile()
+			if path == "" {
+				t.Fatal("AgentModeFile() is empty although the agent advertised the file")
+			}
+			if tt.previous != "" {
+				if err := os.WriteFile(path, []byte(tt.previous+"\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			requestAgentCostMode(githubactions.New(githubactions.WithWriter(io.Discard)), path, tt.showCosts, tt.claimed)
+
+			got, err := os.ReadFile(path)
+			if tt.want == "" {
+				if err == nil {
+					t.Fatalf("mode file = %q, want none", got)
+				}
+				return
+			}
+			if err != nil || strings.TrimSpace(string(got)) != tt.want {
+				t.Fatalf("mode file = %q (%v), want %q", got, err, tt.want)
+			}
+		})
+	}
+}
+
+// sccache: s3 and remote_cache: sccache would both export their settings, and
+// sccache would pick S3: remote_cache wins.
+func TestConfigureSccacheInputYieldsToRemoteCache(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		requests   []remotecache.Request
+		wantS3     bool
+		wantWarned bool
+	}{
+		{name: "sccache: s3 alone", requests: []remotecache.Request{{Tool: "go"}}, wantS3: true},
+		{name: "with remote_cache: sccache", requests: []remotecache.Request{{Tool: "sccache"}}, wantWarned: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			envFile := filepath.Join(t.TempDir(), "env")
+			t.Setenv("GITHUB_ENV", envFile)
+			t.Setenv("RUNS_ON_RUNNER_NAME", "runner")
+			t.Setenv("RUNS_ON_S3_BUCKET_CACHE", "cache-bucket")
+			t.Setenv("RUNS_ON_AWS_REGION", "us-east-1")
+			t.Setenv("RUNS_ON_MAGIC_CACHE_URL", "")
+			var log strings.Builder
+
+			configureSccacheInput(githubactions.New(githubactions.WithWriter(&log)), &config.Config{Sccache: "s3"}, tc.requests)
+
+			exported, _ := os.ReadFile(envFile)
+			if got := strings.Contains(string(exported), "SCCACHE_BUCKET"); got != tc.wantS3 {
+				t.Errorf("exported SCCACHE_BUCKET: %v, want %v", got, tc.wantS3)
+			}
+			if got := strings.Contains(log.String(), "::warning::sccache: s3 and remote_cache: sccache"); got != tc.wantWarned {
+				t.Errorf("warned: %v, want %v; log %q", got, tc.wantWarned, log.String())
 			}
 		})
 	}

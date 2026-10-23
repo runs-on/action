@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/runs-on/action/internal/remotecache"
 	"github.com/sethvargo/go-githubactions"
 )
 
@@ -19,8 +20,10 @@ type Config struct {
 	NetworkInterface    string
 	DiskDevice          string
 	Sccache             string
+	RemoteCache         string
 	StickyCache         []string
 	StickyWaitTimeout   time.Duration
+	StickySave          bool
 	ZctionsResultsURL   string
 	ZctionsCacheURL     string
 	ActionsResultsURL   string
@@ -66,6 +69,7 @@ func NewConfigFromInputs(action *githubactions.Action) (*Config, error) {
 	}
 
 	cfg.Sccache = action.GetInput("sccache")
+	cfg.RemoteCache = action.GetInput("remote_cache")
 
 	stickyCacheInput := action.GetInput("sticky_cache")
 	if stickyCacheInput != "" {
@@ -90,6 +94,15 @@ func NewConfigFromInputs(action *githubactions.Action) (*Config, error) {
 		}
 	}
 
+	cfg.StickySave = true
+	if saveStr := action.GetInput("sticky_save"); saveStr != "" {
+		save, err := strconv.ParseBool(saveStr)
+		if err != nil {
+			return nil, fmt.Errorf("parse 'sticky_save' input %q: %w", saveStr, err)
+		}
+		cfg.StickySave = save
+	}
+
 	cfg.ZctionsResultsURL = os.Getenv("ZCTIONS_RESULTS_URL")
 	cfg.ZctionsCacheURL = os.Getenv("ZCTIONS_CACHE_URL")
 	cfg.ActionsResultsURL = os.Getenv("ACTIONS_RESULTS_URL")
@@ -101,8 +114,10 @@ func NewConfigFromInputs(action *githubactions.Action) (*Config, error) {
 	action.Infof("Input 'network_interface': %s", cfg.NetworkInterface)
 	action.Infof("Input 'disk_device': %s", cfg.DiskDevice)
 	action.Infof("Input 'sccache': %s", cfg.Sccache)
+	action.Infof("Input 'remote_cache': %q", cfg.RemoteCache)
 	action.Infof("Input 'sticky_cache': %v", cfg.StickyCache)
 	action.Infof("Input 'sticky_wait_timeout': %s", cfg.StickyWaitTimeout)
+	action.Infof("Input 'sticky_save': %t", cfg.StickySave)
 
 	if cfg.ZctionsResultsURL != "" {
 		action.Infof("ZCTIONS_RESULTS_URL is set: %s", cfg.ZctionsResultsURL)
@@ -131,8 +146,24 @@ func (c *Config) HasMetrics() bool {
 	return c.IsUsingRunsOn() && c.IsUsingLinux() && len(c.Metrics) > 0
 }
 
+// RemoteCacheRequests are the tools remote_cache lists, and a problem per
+// record it skips.
+func (c *Config) RemoteCacheRequests() ([]remotecache.Request, []string) {
+	if !c.IsUsingRunsOn() {
+		return nil, nil
+	}
+	return remotecache.Parse(c.RemoteCache)
+}
+
+// HasMagicCache reports whether the runner serves the GitHub Actions cache
+// from Magic Cache: the agent then hides GitHub's own results URL behind
+// ZCTIONS_RESULTS_URL, or on custom runners sets RUNS_ON_MAGIC_CACHE_URL.
+func (c *Config) HasMagicCache() bool {
+	return c.ZctionsResultsURL != "" || os.Getenv("RUNS_ON_MAGIC_CACHE_URL") != ""
+}
+
 func (c *Config) HasSccache() bool {
-	return c.IsUsingRunsOn() && c.Sccache != ""
+	return c.IsUsingRunsOn() && c.Sccache != "" && c.Sccache != "false"
 }
 
 // HasStickyDiskCache reports whether sticky disk caching was requested.
@@ -140,6 +171,13 @@ func (c *Config) HasSccache() bool {
 // so an explicit persistence request never degrades into a silent no-op.
 func (c *Config) HasStickyDiskCache() bool {
 	return len(c.StickyCache) > 0
+}
+
+// ConfiguresStickyDisk reports whether this invocation sets up the sticky
+// disk: it mounts caches, or makes the job restore-only. sticky_save: false
+// alone still applies to caches an earlier invocation mounted.
+func (c *Config) ConfiguresStickyDisk() bool {
+	return c.HasStickyDiskCache() || !c.StickySave
 }
 
 func (c *Config) IsUsingRunsOn() bool {

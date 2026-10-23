@@ -21,10 +21,12 @@ func isMountpoint(path string) bool {
 }
 
 // cacheMount persists target on the sticky disk by bind-mounting a
-// runner-owned (or root-owned) directory from the volume onto it.
+// runner-owned (or root-owned) directory from the volume onto it. When
+// inheritTarget is false, the bind mount hides the original target without
+// copying its contents into the sticky source.
 // The returned hit indicates whether the source directory already had content
 // (i.e. was restored from a previous snapshot).
-func cacheMount(action *githubactions.Action, mountRoot, target string, rootOwned bool) (hit bool, err error) {
+func cacheMount(action *githubactions.Action, mountRoot, target string, rootOwned, inheritTarget bool) (hit bool, err error) {
 	if err := validateCacheDirectory(target); err != nil {
 		return false, err
 	}
@@ -55,10 +57,10 @@ func cacheMount(action *githubactions.Action, mountRoot, target string, rootOwne
 		return false, fmt.Errorf("cache path %s is already an unrelated mountpoint; expected sticky source %s", target, src)
 	}
 
-	// Merge files already created by checkout or the runner image before the
-	// bind mount hides the target. This also keeps newly checked-in files when
-	// a warm snapshot contains an older version of a workspace cache.
-	if dirNonEmpty(target) {
+	// When requested, merge files already created by checkout or the runner
+	// image before the bind mount hides the target. This also keeps newly
+	// checked-in files when a warm snapshot contains an older workspace cache.
+	if inheritTarget && dirNonEmpty(target) {
 		if err := mergeTargetIntoCache(action, target, src, rootOwned); err != nil {
 			// The merge is the only step that mutates a warm source; a partial
 			// copy (e.g. the disk filling) leaves truncated entries that must

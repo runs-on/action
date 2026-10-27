@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/sethvargo/go-githubactions"
 )
@@ -84,8 +85,13 @@ func checkCritical(action *githubactions.Action, mountRoot string) {
 		action.Warningf("Failed to list sticky disk caches: %v", err)
 		return
 	}
+	skipSave := strings.TrimSpace(os.Getenv(stickyDiskSkipSaveFileEnv))
 	for _, entry := range entries {
 		path := filepath.Join(mountRoot, entry.Name())
+		if path == skipSave {
+			// An earlier invocation's restore-only marker is not a cache.
+			continue
+		}
 		if err := removeCacheDir(action, path); err != nil {
 			action.Warningf("Failed to reset %s: %v", path, err)
 		}

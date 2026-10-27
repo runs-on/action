@@ -5,15 +5,22 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 
-	"github.com/runs-on/action/internal/cache"
+	"github.com/runs-on/action/internal/bazel"
 	"github.com/runs-on/action/internal/config"
 	"github.com/runs-on/action/internal/costs"
 	"github.com/runs-on/action/internal/env"
 	"github.com/runs-on/action/internal/gitproxy"
+	"github.com/runs-on/action/internal/gocacheprog"
+	"github.com/runs-on/action/internal/gradle"
+	"github.com/runs-on/action/internal/magiccache"
+	"github.com/runs-on/action/internal/mbx"
 	"github.com/runs-on/action/internal/monitoring"
+	"github.com/runs-on/action/internal/remotecache"
 	"github.com/runs-on/action/internal/sccache"
 	"github.com/runs-on/action/internal/stickydisk"
 	"github.com/sethvargo/go-githubactions"
@@ -72,6 +79,18 @@ func shouldTrackCostsInPost() bool {
 	return err == nil && track
 }
 
+// spotInterrupted reports whether the RunsOn agent (v3.3.0+) has failed this
+// job for an EC2 Spot interruption. The agent writes this marker right before
+// it stops the active step; the instance shuts down about 20 seconds later.
+func spotInterrupted() bool {
+	marker := "/runs-on/spot-interrupted"
+	if runtime.GOOS == "windows" {
+		marker = `C:\runs-on\spot-interrupted`
+	}
+	_, err := os.Stat(marker)
+	return err == nil
+}
+
 // handleMainExecution contains the original main logic.
 func handleMainExecution(action *githubactions.Action, ctx context.Context) {
 	if healthToken := os.Getenv(gitproxy.EnvHealthToken); healthToken != "" {
@@ -91,7 +110,7 @@ func handleMainExecution(action *githubactions.Action, ctx context.Context) {
 		env.DisplayEnvVars()
 	}
 
-	cache.UpdateZctionsConfig(action, cfg.ActionsResultsURL, cfg.ZctionsResultsURL, cfg.ZctionsCacheURL, cfg.ActionsRuntimeToken)
+	magiccache.UpdateZctionsConfig(action, cfg.ActionsResultsURL, cfg.ZctionsResultsURL, cfg.ZctionsCacheURL, cfg.ActionsRuntimeToken)
 
 	claimed := claimCostTracking(action, cfg.ShowCosts)
 	if modeFile := costs.AgentModeFile(); modeFile != "" {
@@ -102,18 +121,32 @@ func handleMainExecution(action *githubactions.Action, ctx context.Context) {
 		action.Infof("Cost tracking is already registered by an earlier runs-on/action invocation; this invocation will skip duplicate cost reporting.")
 	}
 
-	// Configure sccache if requested
-	if cfg.HasSccache() {
-		if err := sccache.ConfigureSccache(action, cfg.Sccache); err != nil {
-			action.Errorf("Failed to configure sccache: %v", err)
+	requests, problems := cfg.RemoteCacheRequests()
+	for _, problem := range problems {
+		action.Warningf("remote_cache %s; that record is skipped.", problem)
+	}
+	configureSccacheInput(action, cfg, requests)
+	for _, request := range requests {
+		switch request.Tool {
+		case "bazel":
+			bazel.Configure(action, cfg.HasMagicCache(), cfg.ActionsRuntimeToken)
+		case "go":
+			gocacheprog.Configure(action, request.Tests, cfg.HasMagicCache(), cfg.ActionsRuntimeToken)
+		case "gradle":
+			gradle.Configure(action, cfg.HasMagicCache(), cfg.ActionsRuntimeToken)
+		case "mbx":
+			mbx.Configure(action, cfg.HasMagicCache(), cfg.ActionsRuntimeToken)
+		case "sccache":
+			sccache.ConfigureRemoteCache(action, cfg.HasMagicCache(), cfg.ActionsRuntimeToken)
 		}
 	}
 
-	// Configure sticky disk cache mounts if requested
-	if cfg.HasStickyDiskCache() {
+	// Configure sticky disk cache mounts (or restore-only mode) if requested
+	if cfg.ConfiguresStickyDisk() {
 		if err := stickydisk.Configure(action, stickydisk.Options{
 			StickyCache:       cfg.StickyCache,
 			StickyWaitTimeout: cfg.StickyWaitTimeout,
+			SkipSave:          !cfg.StickySave,
 		}); err != nil {
 			action.Fatalf("Failed to configure sticky disk cache: %v", err)
 		}
@@ -132,6 +165,13 @@ func handleMainExecution(action *githubactions.Action, ctx context.Context) {
 // handlePostExecution contains the logic for the post-execution phase.
 func handlePostExecution(action *githubactions.Action, ctx context.Context) {
 	action.Infof("Running post-execution phase...")
+	// The agent gives the runner seconds to report the interruption before it
+	// terminates the job, and RunsOn discards the sticky disk's changes. Post
+	// work such as stopping BuildKit would only delay that report.
+	if spotInterrupted() {
+		action.Infof("EC2 Spot interruption: skipping post-execution work so the runner can report the interruption before the instance shuts down.")
+		return
+	}
 	cfg, err := config.NewConfigFromInputs(action)
 	if err != nil {
 		action.Errorf("Failed to load configuration in post-execution: %v", err)
@@ -162,6 +202,16 @@ func handlePostExecution(action *githubactions.Action, ctx context.Context) {
 		monitoring.GenerateMetricsSummary(action, cfg.Metrics, "chart", cfg.NetworkInterface, cfg.DiskDevice)
 	}
 
+	requests, _ := cfg.RemoteCacheRequests()
+	for _, request := range requests {
+		switch request.Tool {
+		case "go":
+			gocacheprog.SaveJobList(action, request.Tests)
+		case "gradle":
+			gradle.Finish()
+		}
+	}
+
 	// Run cache mode post-job hooks (e.g. stop the Buildx builder) before the sticky
 	// disk is unmounted and snapshotted, then display usage
 	if cfg.HasStickyDiskCache() {
@@ -175,11 +225,45 @@ func handlePostExecution(action *githubactions.Action, ctx context.Context) {
 	action.Infof("Post-execution phase finished.")
 }
 
+// configureSccacheInput applies the sccache input, unless remote_cache also
+// lists sccache, which wins: both would export their settings, and sccache
+// ranks its S3 storage above the agent's WebDAV cache.
+func configureSccacheInput(action *githubactions.Action, cfg *config.Config, requests []remotecache.Request) {
+	if !cfg.HasSccache() {
+		return
+	}
+	if slices.ContainsFunc(requests, func(request remotecache.Request) bool { return request.Tool == "sccache" }) {
+		action.Warningf("sccache: %s and remote_cache: sccache both configure sccache; remote_cache: sccache is used, and the sccache input is ignored.", cfg.Sccache)
+		return
+	}
+	sccache.Configure(action, cfg.Sccache)
+}
+
 func main() {
 	ctx := context.Background()
 	postFlag := flag.Bool("post", false, "Indicates the post-execution phase")
 	gitProxyFlag := flag.Bool("git-proxy-serve", false, "Run the local git mirror proxy (internal, spawned by the git cache mode)")
+	goCacheProgFlag := flag.Bool(strings.TrimLeft(gocacheprog.Flag, "-"), false, "Serve the go command's build cache (internal, started by the go command through GOCACHEPROG)")
+	goCachePrefetchFlag := flag.Bool(strings.TrimLeft(gocacheprog.PrefetchFlag, "-"), false, "Download the build cache entries the job's previous run used (internal, started by the action)")
+	shareTestResultsFlag := flag.Bool(strings.TrimLeft(gocacheprog.ShareTestResultsFlag, "-"), false, "With --gocacheprog or --gocacheprog-prefetch, share test results between jobs too (internal)")
 	flag.Parse()
+
+	if *goCacheProgFlag {
+		if err := gocacheprog.Run(os.Stdin, os.Stdout, *shareTestResultsFlag); err != nil {
+			fmt.Fprintf(os.Stderr, "gocacheprog: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	if *goCachePrefetchFlag {
+		opts := gocacheprog.OptionsFromEnv(*shareTestResultsFlag)
+		if err := gocacheprog.Prefetch(opts, gocacheprog.ListKey(os.Getenv("ACTIONS_RUNTIME_TOKEN"))); err != nil {
+			fmt.Fprintf(os.Stderr, "gocacheprog prefetch: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	if *gitProxyFlag {
 		if err := gitproxy.RunFromEnv(ctx); err != nil {

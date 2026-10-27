@@ -1,14 +1,7 @@
 name: Test / Sticky Git
 
 on:
-  push:
-    branches:
-      - main
-      - v*
-      - feature/*
-      - fix/*
-      - auto/*
-  workflow_dispatch:
+  workflow_call:
 
 jobs:
   cold:
@@ -16,6 +9,7 @@ jobs:
     steps:
       - name: Checkout action under test
         uses: actions/checkout@v7
+      - uses: ./.github/actions/use-dist
       - name: Start sticky Git cache
         id: git-cache
         uses: ./
@@ -59,6 +53,7 @@ jobs:
     steps:
       - name: Checkout action under test
         uses: actions/checkout@v7
+      - uses: ./.github/actions/use-dist
       - name: Restore sticky Git cache
         id: git-cache
         uses: ./

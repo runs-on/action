@@ -28,26 +28,27 @@ const (
 // component, so a surprising repository or platform value cannot reshape the key.
 var unsafeScopeChars = regexp.MustCompile(`[^a-z0-9._-]+`)
 
-// ConfigureSccache configures sccache with the appropriate backend.
-// Currently only supports "s3" backend for RunsOn S3 cache bucket.
-func ConfigureSccache(action *githubactions.Action, backend string) error {
-	if backend != "s3" {
-		action.Warningf("Unsupported sccache backend: %s. Only 's3' is currently supported.", backend)
-		return nil
+// Configure sets sccache up for the job's next steps from the sccache input,
+// whose one value, "s3", stores its cache straight in the RunsOn S3 cache
+// bucket. remote_cache: sccache stores it through the agent instead
+// (ConfigureRemoteCache).
+func Configure(action *githubactions.Action, mode string) {
+	if mode != "s3" {
+		action.Warningf("sccache is %q, want \"s3\"; sccache is not configured. For the RunsOn agent's cache, use remote_cache: sccache.", mode)
+		return
 	}
-
 	// Get required environment variables for RunsOn S3 cache
 	bucket := os.Getenv("RUNS_ON_S3_BUCKET_CACHE")
 	region := os.Getenv("RUNS_ON_AWS_REGION")
 
 	if bucket == "" {
 		action.Errorf("RUNS_ON_S3_BUCKET_CACHE environment variable is not set. sccache S3 backend requires this.")
-		return nil
+		return
 	}
 
 	if region == "" {
 		action.Errorf("RUNS_ON_AWS_REGION environment variable is not set. sccache S3 backend requires this.")
-		return nil
+		return
 	}
 
 	prefix := DefaultKeyPrefix()
@@ -72,7 +73,6 @@ func ConfigureSccache(action *githubactions.Action, backend string) error {
 	}
 
 	action.Infof("sccache S3 backend configured successfully!")
-	return nil
 }
 
 // DefaultKeyPrefix builds the repository-scoped default prefix, for example

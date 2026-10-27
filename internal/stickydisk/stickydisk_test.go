@@ -395,6 +395,26 @@ func TestConfigureKeepsMissingAndUnreadyDisksFatal(t *testing.T) {
 	})
 }
 
+func TestMarkRestoreOnly(t *testing.T) {
+	t.Run("agent contract", func(t *testing.T) {
+		marker := filepath.Join(t.TempDir(), ".runs-on-skip-save")
+		t.Setenv(stickyDiskSkipSaveFileEnv, marker)
+		if err := markRestoreOnly(githubactions.New()); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Stat(marker); err != nil {
+			t.Fatalf("skip-save marker not created: %v", err)
+		}
+	})
+
+	t.Run("agent without restore-only support", func(t *testing.T) {
+		t.Setenv(stickyDiskSkipSaveFileEnv, "")
+		if err := markRestoreOnly(githubactions.New()); err == nil {
+			t.Fatal("restore-only was accepted by an agent that would still snapshot the disk")
+		}
+	})
+}
+
 func TestPostJobSkipsInvalidCacheConfigWhenDiskIsUnavailable(t *testing.T) {
 	root := t.TempDir()
 	unavailableFile := filepath.Join(root, "stickydisk.unavailable")

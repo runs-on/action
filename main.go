@@ -23,6 +23,7 @@ import (
 	"github.com/runs-on/action/internal/remotecache"
 	"github.com/runs-on/action/internal/sccache"
 	"github.com/runs-on/action/internal/stickydisk"
+	"github.com/runs-on/action/internal/turbo"
 	"github.com/sethvargo/go-githubactions"
 )
 
@@ -138,6 +139,8 @@ func handleMainExecution(action *githubactions.Action, ctx context.Context) {
 			mbx.Configure(action, cfg.HasMagicCache(), cfg.ActionsRuntimeToken)
 		case "sccache":
 			sccache.ConfigureRemoteCache(action, cfg.HasMagicCache(), cfg.ActionsRuntimeToken)
+		case "turbo":
+			turbo.Configure(action, cfg.HasMagicCache(), cfg.ActionsRuntimeToken)
 		}
 	}
 

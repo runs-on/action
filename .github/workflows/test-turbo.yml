@@ -1,0 +1,49 @@
+name: Test / Turborepo
+
+on:
+  workflow_call:
+
+jobs:
+  # Each leg builds a workspace with turbo and uploads its tasks through the
+  # agent's Turborepo cache.
+  turbo:
+    name: turbo (${{ matrix.leg }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - leg: linux
+            image: ubuntu24-full-x64
+          - leg: container
+            image: ubuntu24-full-x64
+            container: node:22
+          - leg: windows
+            image: windows25-full-x64
+    runs-on: runs-on=${{ github.run_id }}/env=bootstrap/cpu=2/family=m7/image=${{ matrix.image }}/extras=s3-cache
+    container: ${{ matrix.container }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/use-dist
+      - uses: ./
+        with:
+          remote_cache: turbo
+      - uses: ./.github/actions/turbo-check
+        with:
+          workspace: ${{ github.run_id }}-${{ matrix.leg }}
+
+  # Magic Cache answers a runner's own uploads straight from S3. Only another
+  # job reads artifacts it did not write.
+  another-job:
+    name: turbo (another job)
+    needs: turbo
+    runs-on: runs-on=${{ github.run_id }}/env=bootstrap/cpu=2/family=m7/image=ubuntu24-full-x64/extras=s3-cache
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/use-dist
+      - uses: ./
+        with:
+          remote_cache: turbo
+      - uses: ./.github/actions/turbo-check
+        with:
+          workspace: ${{ github.run_id }}-linux
+          uploads: 'false'

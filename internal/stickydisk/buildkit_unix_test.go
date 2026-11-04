@@ -273,3 +273,65 @@ exit 1
 		t.Fatalf("unsafe cleanup lost prepared-state marker: got %q, err=%v", got, readErr)
 	}
 }
+
+func TestCleanupBuildkitRecordsRunningVersion(t *testing.T) {
+	previousState, previousErr := os.ReadFile(buildkitPreparedStateFile())
+	t.Cleanup(func() {
+		if previousErr == nil {
+			_ = os.WriteFile(buildkitPreparedStateFile(), previousState, 0o600)
+		} else {
+			_ = os.Remove(buildkitPreparedStateFile())
+		}
+	})
+
+	bin := t.TempDir()
+	stateRoot := filepath.Join(t.TempDir(), "buildkit", "root")
+	if err := os.MkdirAll(stateRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	versionFile := filepath.Join(filepath.Dir(stateRoot), buildkitVersionFile)
+	if err := os.WriteFile(versionFile, []byte("buildkitd github.com/moby/buildkit v0.33.0 newer\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	script := `#!/bin/sh
+case "$1 $2" in
+  "buildx ls")
+    printf '%s\n' "runs-on0"
+    ;;
+  "container inspect")
+    printf '[{"Mounts":[{"Type":"volume","Name":"buildx_buildkit_runs-on0_state","Destination":"/var/lib/buildkit"}]}]\n'
+    ;;
+  "volume inspect")
+    printf '[{"Driver":"local","Labels":{"runs-on.stickydisk":"buildkit"},"Options":{"type":"none","o":"bind","device":"%s"}}]\n' "$STATE_ROOT"
+    ;;
+  "exec buildx_buildkit_runs-on0")
+    printf '%s\n' "buildkitd github.com/moby/buildkit v0.32.2 older"
+    ;;
+esac
+exit 0
+`
+	if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(buildkitPreparedStateFile(), []byte(stateRoot), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("STATE_ROOT", stateRoot)
+
+	var out strings.Builder
+	if err := cleanupBuildkit(githubactions.New(githubactions.WithWriter(&out))); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "::warning") || !strings.Contains(out.String(), "v0.32.2 is older than BuildKit v0.33.0") {
+		t.Fatalf("running an older BuildKit on newer state did not warn:\n%s", out.String())
+	}
+	recorded, err := os.ReadFile(versionFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(string(recorded)); got != "buildkitd github.com/moby/buildkit v0.32.2 older" {
+		t.Fatalf("recorded BuildKit version = %q, want the running one", got)
+	}
+}
+

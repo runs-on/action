@@ -1,0 +1,120 @@
+name: Check the Bazel remote cache
+description: Builds a one-rule Bazel workspace through the remote cache that runs-on/action configured, and checks what came from it.
+
+inputs:
+  workspace:
+    description: Identifies the workspace's only action. The job that uploads it and the job that reads it pass the same value.
+    required: true
+  bazel:
+    description: Bazel version, run through Bazelisk.
+    default: 9.3.0
+  uploads:
+    description: '"true" in the job that builds and uploads, "false" in a later job that only reads.'
+    default: 'true'
+
+runs:
+  using: composite
+  steps:
+    - name: Install Bazelisk
+      shell: bash
+      run: |
+        set -euo pipefail
+        mkdir -p "${RUNNER_TEMP}/bazelisk"
+        if [[ "${RUNNER_OS}" == "Windows" ]]; then
+          asset=bazelisk-windows-amd64.exe sum=023734f33ed6b9c6d65468fe20bb2c5fb32473ccb8aca2fc5bf1521e61ce1622 bin=bazel.exe
+        else
+          asset=bazelisk-linux-amd64 sum=6539c12842ad76966f3d493e8f80d67caa84ec4a000e220d5459833c967c12bc bin=bazel
+        fi
+        curl -fsSL -o "${RUNNER_TEMP}/bazelisk/${bin}" "https://github.com/bazelbuild/bazelisk/releases/download/v1.26.0/${asset}"
+        echo "${sum}  ${RUNNER_TEMP}/bazelisk/${bin}" | sha256sum -c -
+        chmod +x "${RUNNER_TEMP}/bazelisk/${bin}"
+        echo "${RUNNER_TEMP}/bazelisk" >> "${GITHUB_PATH}"
+    - id: agent
+      uses: ./.github/actions/tool-caches-served
+      with:
+        protocol: bazel
+    - name: The system rc points Bazel at the agent only when it serves the cache
+      shell: bash
+      env:
+        SERVES: ${{ steps.agent.outputs.served }}
+      run: |
+        set -euo pipefail
+        rc=/etc/bazel.bazelrc
+        if [[ "${RUNNER_OS}" == "Windows" ]]; then
+          rc=/c/ProgramData/bazel.bazelrc
+        fi
+        configured=false
+        if grep -q '^common --remote_cache=http://.*[0-9a-f]\{32\}' "${rc}" 2>/dev/null; then
+          configured=true
+        fi
+        if [[ "${configured}" != "${SERVES}" ]]; then
+          echo "::error::${rc} sets --remote_cache: ${configured}, but the agent serves the Bazel cache: ${SERVES}"
+          cat "${rc}" || true
+          exit 1
+        fi
+    - name: Create a workspace
+      shell: bash
+      env:
+        WORKSPACE_ID: ${{ inputs.workspace }}
+      run: |
+        set -euo pipefail
+        dir="${RUNNER_TEMP}/bazel-remote-cache"
+        rm -rf "${dir}"
+        mkdir -p "${dir}"
+        cd "${dir}"
+        : > MODULE.bazel
+        : > WORKSPACE
+        cat > BUILD.bazel <<EOF
+        genrule(
+            name = "out",
+            outs = ["out.txt"],
+            cmd_bash = "echo ${WORKSPACE_ID} > \$@",
+            cmd_bat = "echo ${WORKSPACE_ID}> \$@",
+        )
+        EOF
+    # --incompatible_strict_action_env keeps the job's PATH out of the action's
+    # key, so another runner computes the same key.
+    - name: Build twice
+      if: inputs.uploads == 'true'
+      shell: bash
+      env:
+        USE_BAZEL_VERSION: ${{ inputs.bazel }}
+        SERVES: ${{ steps.agent.outputs.served }}
+        ATTEMPT: ${{ github.run_attempt }}
+      run: |
+        set -euo pipefail
+        cd "${RUNNER_TEMP}/bazel-remote-cache"
+        bazel build --incompatible_strict_action_env //:out 2>&1 | tee first.log
+        bazel clean
+        bazel build --incompatible_strict_action_env //:out 2>&1 | tee second.log
+        # A re-run finds what the first attempt uploaded.
+        if [[ "${ATTEMPT}" == "1" ]] && grep -q "remote cache hit" first.log; then
+          echo "::error::the first build of a new action hit the remote cache"
+          exit 1
+        fi
+        if [[ "${SERVES}" == "true" ]] && ! grep -q "1 remote cache hit" second.log; then
+          echo "::error::the second build did not come from the remote cache"
+          exit 1
+        fi
+        if grep -q "Remote Cache:" first.log second.log; then
+          echo "::error::Bazel reported remote cache errors"
+          exit 1
+        fi
+    - name: Build what another job uploaded
+      if: inputs.uploads != 'true'
+      shell: bash
+      env:
+        USE_BAZEL_VERSION: ${{ inputs.bazel }}
+        SERVES: ${{ steps.agent.outputs.served }}
+      run: |
+        set -euo pipefail
+        cd "${RUNNER_TEMP}/bazel-remote-cache"
+        bazel build --incompatible_strict_action_env //:out 2>&1 | tee build.log
+        if [[ "${SERVES}" == "true" ]] && ! grep -q "1 remote cache hit" build.log; then
+          echo "::error::the build did not come from what another job uploaded"
+          exit 1
+        fi
+        if grep -q "Remote Cache:" build.log; then
+          echo "::error::Bazel reported remote cache errors"
+          exit 1
+        fi

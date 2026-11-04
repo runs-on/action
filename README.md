@@ -374,6 +374,7 @@ Gives build tools a remote cache that the RunsOn agent stores in the stack's S3 
       go,tests=true
       gradle
       mbx
+      nx
       sccache
       turbo
 ```
@@ -384,6 +385,7 @@ Gives build tools a remote cache that the RunsOn agent stores in the stack's S3 
 | `go` | `GOCACHEPROG` (Go 1.24 or later); `go,tests=true` also shares test results |
 | `gradle` | an init script for Gradle's HTTP build cache (Gradle 7.6 or later) |
 | `mbx` | `MBX_REMOTE_URL` and `MBX_REMOTE_NAMESPACE` |
+| `nx` | `NX_SELF_HOSTED_REMOTE_CACHE_SERVER` for Nx's self-hosted remote cache (Nx 20.8 or later, RunsOn v3.6.2 or later) |
 | `sccache` | `RUSTC_WRAPPER` and `SCCACHE_WEBDAV_ENDPOINT` |
 | `turbo` | `TURBO_API`, `TURBO_TOKEN` and `TURBO_TEAM` for Turborepo's remote cache (RunsOn v3.6.0 or later) |
 
@@ -509,6 +511,35 @@ jobs:
 ```
 
 The action also stores mbx's capabilities document in the cache, claiming none of the protocol's optional features, which is what mbx builds assume without one; `mbx doctor`, and so mbx's setup action, require it. By default, mbx publishes only from pushes to protected branches, so pull requests read what their base branch published. mbx sends the agent no token: the URL stands for the job's runtime token. mbx refuses to send its own credentials over plain HTTP, so a job that sets `MBX_REMOTE_TOKEN`, `MBX_REMOTE_TOKEN_FILE` or `MBX_REMOTE_OIDC_AUDIENCE` gets a warning, and the action leaves mbx alone. So does a job that sets `MBX_REMOTE_S3_*` settings, which mbx refuses with an HTTP cache.
+
+#### `remote_cache: nx`
+
+Gives [Nx](https://nx.dev) a remote cache in the agent, which serves Nx's [self-hosted remote cache API](https://nx.dev/docs/guides/tasks--caching/self-hosted-caching). Later steps get `NX_SELF_HOSTED_REMOTE_CACHE_SERVER` with the URL the agent gives Nx's cache (`<Magic Cache URL>/_runs-on/tools/<id>/nx`). Nx needs no access token: the URL stands for the job's runtime token.
+
+```yaml
+jobs:
+  build:
+    runs-on: runs-on=${{ github.run_id }}/runner=8cpu-linux-x64/extras=s3-cache
+    env:
+      NX_NO_CLOUD: true # only if nx.json has nxCloudId or nxCloudAccessToken
+    steps:
+      - uses: runs-on/action@v2
+        with:
+          remote_cache: nx
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx nx run-many -t build test
+```
+
+Nx prints `[remote cache]` next to each task it restores. Task outputs follow GitHub's branch scoping: a job writes them to its own branch or pull request, and reads its own first, then its base and default branch's, so the default branch warms the cache for pull requests, and a pull request never writes what the default branch reads. An entry is never replaced (the agent answers `409`, as Nx's API requires), which with the branch scoping closes the cache poisoning of [CVE-2025-36852](https://nx.dev/blog/cve-2025-36852-critical-cache-poisoning-vulnerability-creep) that made Nx deprecate `@nx/s3-cache` and its other bucket caches. For the same protection against a job that writes to the bucket itself, turn on the stack's cache credential broker. A pull request from a fork reads the cache, and Nx skips its uploads. Nx's task hash leaves out the platform, so each runner OS and architecture has its own entries.
+
+Nx fails its run when its remote cache answers an error, so the agent answers a failed read as a miss and a failed upload as one Nx skips: a cache problem slows the build down, and never fails it.
+
+Nx Cloud and cache plugins win over this cache: when `nx.json` has `nxCloudId` or `nxCloudAccessToken`, or the job sets `NX_CLOUD_ACCESS_TOKEN`, set `NX_NO_CLOUD=true`, and remove `@nx/s3-cache`, `@nx/gcs-cache`, `@nx/azure-cache` or `@nx/shared-fs-cache` (and their `nx.json` settings). A job that sets `NX_SELF_HOSTED_REMOTE_CACHE_SERVER` keeps its own server: the action warns and leaves Nx alone. Tested with Nx 24. Container jobs reach the agent too.
 
 #### `remote_cache: turbo`
 

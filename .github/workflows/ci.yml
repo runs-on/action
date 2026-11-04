@@ -72,6 +72,9 @@ jobs:
   mbx:
     needs: build
     uses: ./.github/workflows/test-mbx.yml
+  nx:
+    needs: build
+    uses: ./.github/workflows/test-nx.yml
   metrics:
     needs: build
     permissions:

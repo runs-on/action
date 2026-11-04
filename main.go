@@ -20,6 +20,7 @@ import (
 	"github.com/runs-on/action/internal/magiccache"
 	"github.com/runs-on/action/internal/mbx"
 	"github.com/runs-on/action/internal/monitoring"
+	"github.com/runs-on/action/internal/nx"
 	"github.com/runs-on/action/internal/remotecache"
 	"github.com/runs-on/action/internal/sccache"
 	"github.com/runs-on/action/internal/stickydisk"
@@ -137,6 +138,8 @@ func handleMainExecution(action *githubactions.Action, ctx context.Context) {
 			gradle.Configure(action, cfg.HasMagicCache(), cfg.ActionsRuntimeToken)
 		case "mbx":
 			mbx.Configure(action, cfg.HasMagicCache(), cfg.ActionsRuntimeToken)
+		case "nx":
+			nx.Configure(action, cfg.HasMagicCache(), cfg.ActionsRuntimeToken)
 		case "sccache":
 			sccache.ConfigureRemoteCache(action, cfg.HasMagicCache(), cfg.ActionsRuntimeToken)
 		case "turbo":

@@ -81,6 +81,9 @@ jobs:
   sccache:
     needs: build
     uses: ./.github/workflows/test-sccache.yml
+  turbo:
+    needs: build
+    uses: ./.github/workflows/test-turbo.yml
   sticky-buildkit:
     needs: build
     uses: ./.github/workflows/test-sticky-buildkit.yml

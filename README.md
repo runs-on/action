@@ -375,6 +375,7 @@ Gives build tools a remote cache that the RunsOn agent stores in the stack's S3 
       gradle
       mbx
       sccache
+      turbo
 ```
 
 | Tool | What the action configures |
@@ -384,6 +385,7 @@ Gives build tools a remote cache that the RunsOn agent stores in the stack's S3 
 | `gradle` | an init script for Gradle's HTTP build cache (Gradle 7.6 or later) |
 | `mbx` | `MBX_REMOTE_URL` and `MBX_REMOTE_NAMESPACE` |
 | `sccache` | `RUSTC_WRAPPER` and `SCCACHE_WEBDAV_ENDPOINT` |
+| `turbo` | `TURBO_API`, `TURBO_TOKEN` and `TURBO_TEAM` for Turborepo's remote cache (RunsOn v3.6.0 or later) |
 
 Requires Magic Cache (`extras=s3-cache`) and RunsOn v3.6.0 or later. Otherwise, the action warns and each tool builds without the remote cache. A line with an unknown tool or option is skipped with a warning; the other tools are still configured.
 
@@ -507,6 +509,31 @@ jobs:
 ```
 
 The action also stores mbx's capabilities document in the cache, claiming none of the protocol's optional features, which is what mbx builds assume without one; `mbx doctor`, and so mbx's setup action, require it. By default, mbx publishes only from pushes to protected branches, so pull requests read what their base branch published. mbx sends the agent no token: the URL stands for the job's runtime token. mbx refuses to send its own credentials over plain HTTP, so a job that sets `MBX_REMOTE_TOKEN`, `MBX_REMOTE_TOKEN_FILE` or `MBX_REMOTE_OIDC_AUDIENCE` gets a warning, and the action leaves mbx alone. So does a job that sets `MBX_REMOTE_S3_*` settings, which mbx refuses with an HTTP cache.
+
+#### `remote_cache: turbo`
+
+Gives [Turborepo](https://turborepo.dev) a [remote cache](https://turborepo.dev/docs/core-concepts/remote-caching) in the agent, which serves Turborepo's remote cache API. Later steps get `TURBO_API` with the URL the agent gives turbo's cache (`<Magic Cache URL>/_runs-on/tools/<id>/turbo`), and `TURBO_TOKEN` and `TURBO_TEAM` set to `runs-on`: turbo needs both to turn its remote cache on, and the agent ignores them, since the URL stands for the job's runtime token.
+
+```yaml
+jobs:
+  build:
+    runs-on: runs-on=${{ github.run_id }}/runner=8cpu-linux-x64/extras=s3-cache
+    steps:
+      - uses: runs-on/action@v2
+        with:
+          remote_cache: turbo
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx turbo run build test
+```
+
+turbo prints `Remote caching enabled` when it uses the cache, and `cache hit, replaying logs` for each task it restores. Task outputs follow GitHub's branch scoping: a job writes them to its own branch or pull request, and reads its own first, then its base and default branch's, so the default branch warms the cache for pull requests. turbo's task hash leaves out the platform, so each runner OS and architecture has its own entries. A hit restores only the files a task lists in `outputs` in `turbo.json`. Signed artifacts (`remoteCache.signature` and `TURBO_REMOTE_CACHE_SIGNATURE_KEY`) work unchanged: the agent stores the signature with the artifact.
+
+A job that sets `TURBO_API`, `TURBO_TOKEN`, `TURBO_TEAM` or `TURBO_TEAMID`, for example for Vercel's remote cache, keeps it: the action warns and leaves turbo alone. When the job's token cannot write to the cache, as in a pull request from a fork, the action also sets `TURBO_CACHE=local:rw,remote:r` unless the job sets `TURBO_CACHE`, so turbo reads the cache without trying to upload: after a refused upload, turbo stops using the remote cache for the rest of its run. `--cache` on turbo's command line wins over it. Tested with Turborepo 2.11; `TURBO_CACHE` needs 2.2 or later. Container jobs reach the agent too.
 
 #### Other clients
 

@@ -26,12 +26,18 @@ func TestRegister(t *testing.T) {
 		status   int
 		body     string
 		wantURLs map[string]string
+		readOnly bool
 		wantErr  error
 	}{
 		{
 			name: "registered", status: http.StatusOK,
 			body:     reply(`"bazel":"/_runs-on/tools/` + id + `/bazel","kv":"/_runs-on/kv/` + id + `"`),
 			wantURLs: map[string]string{"bazel": "/_runs-on/tools/" + id + "/bazel", "kv": "/_runs-on/kv/" + id},
+		},
+		{
+			name: "read-only token", status: http.StatusOK,
+			body:     `{"id":"` + id + `","protocols":{"turbo":"/_runs-on/tools/` + id + `/turbo"},"writable":false}`,
+			wantURLs: map[string]string{"turbo": "/_runs-on/tools/" + id + "/turbo"}, readOnly: true,
 		},
 		{name: "older agent", status: http.StatusNotFound, wantErr: ErrToolsNotServed},
 		{name: "older agent, other route", status: http.StatusMethodNotAllowed, wantErr: ErrToolsNotServed},
@@ -65,7 +71,7 @@ func TestRegister(t *testing.T) {
 				for protocol, path := range tc.wantURLs {
 					want[protocol] = agent.URL + path
 				}
-				if tools.ID != id || !maps.Equal(tools.URLs, want) {
+				if tools.ID != id || !maps.Equal(tools.URLs, want) || tools.Writable == tc.readOnly {
 					t.Errorf("Register = %+v, want URLs %v", tools, want)
 				}
 			case tc.wantErr == errAny && err == nil, tc.wantErr != errAny && !errors.Is(err, tc.wantErr):

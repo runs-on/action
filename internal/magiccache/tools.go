@@ -34,6 +34,10 @@ var ErrToolsNotServed = errors.New("this RunsOn agent does not serve remote cach
 type Tools struct {
 	ID   string
 	URLs map[string]string
+	// Writable is false when the token cannot store entries, as in a pull
+	// request from a fork. Agents before the turbo protocol do not say, and
+	// count as writable.
+	Writable bool
 }
 
 // noRedirect keeps requests to the agent from following a redirect elsewhere.
@@ -86,6 +90,7 @@ func Register(runtimeToken string) (Tools, error) {
 	var registration struct {
 		ID        string            `json:"id"`
 		Protocols map[string]string `json:"protocols"`
+		Writable  *bool             `json:"writable"`
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&registration); err != nil {
 		return Tools{}, fmt.Errorf("invalid registration response")
@@ -95,7 +100,7 @@ func Register(runtimeToken string) (Tools, error) {
 	if !validID.MatchString(registration.ID) {
 		return Tools{}, fmt.Errorf("invalid registration ID")
 	}
-	tools := Tools{ID: registration.ID, URLs: make(map[string]string, len(registration.Protocols))}
+	tools := Tools{ID: registration.ID, URLs: make(map[string]string, len(registration.Protocols)), Writable: registration.Writable == nil || *registration.Writable}
 	for protocol, path := range registration.Protocols {
 		if !validToolPath.MatchString(path) {
 			return Tools{}, fmt.Errorf("invalid registration path for %q", protocol)
@@ -167,4 +172,11 @@ func RegisterFor(action *githubactions.Action, input, protocol, fallback string,
 		_ = os.Setenv(RemoteCacheURLEnv, kv)
 	}
 	return toolURL, true
+}
+
+// Writable reports whether the job's registration can store entries. It
+// reuses the registration RegisterFor made, and is false without one.
+func Writable(runtimeToken string) bool {
+	tools, err := registerOnce(runtimeToken)
+	return err == nil && tools.Writable
 }

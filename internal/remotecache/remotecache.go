@@ -10,7 +10,7 @@ import (
 )
 
 // Tools are the tools remote_cache configures.
-var Tools = []string{"bazel", "go", "gradle", "mbx", "sccache"}
+var Tools = []string{"bazel", "go", "gradle", "mbx", "sccache", "turbo"}
 
 // Request is one tool to configure.
 type Request struct {

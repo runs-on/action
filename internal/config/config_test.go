@@ -1,6 +1,7 @@
 package config
 
 import (
+	"io"
 	"testing"
 	"time"
 
@@ -104,5 +105,28 @@ func TestUndeclaredLegacyInputsRemainIgnored(t *testing.T) {
 	}
 	if got, want := cfg.StickyWaitTimeout, 15*time.Minute; got != want {
 		t.Fatalf("StickyWaitTimeout = %s, want %s", got, want)
+	}
+}
+
+// show_costs defaults to inline, and the action tells a workflow that set it
+// apart from one that did not.
+func TestShowCostsDefault(t *testing.T) {
+	for _, tc := range []struct {
+		input    string
+		wantMode string
+		wantSet  bool
+	}{
+		{input: "", wantMode: "inline"},
+		{input: "inline", wantMode: "inline", wantSet: true},
+		{input: "summary", wantMode: "summary", wantSet: true},
+	} {
+		t.Setenv("INPUT_SHOW_COSTS", tc.input)
+		cfg, err := NewConfigFromInputs(githubactions.New(githubactions.WithWriter(io.Discard)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.ShowCosts != tc.wantMode || cfg.ShowCostsSet != tc.wantSet {
+			t.Fatalf("show_costs %q: ShowCosts = %q, ShowCostsSet = %t; want %q, %t", tc.input, cfg.ShowCosts, cfg.ShowCostsSet, tc.wantMode, tc.wantSet)
+		}
 	}
 }

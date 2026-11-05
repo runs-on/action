@@ -116,9 +116,12 @@ func handleMainExecution(action *githubactions.Action, ctx context.Context) {
 
 	claimed := claimCostTracking(action, cfg.ShowCosts)
 	if modeFile := costs.AgentModeFile(); modeFile != "" {
+		if cfg.ShowCostsSet && cfg.ShowCosts == "inline" {
+			action.Warningf("show_costs: inline is legacy: since RunsOn v3.4.0, the RunsOn agent reports the job cost in the \"Complete runner\" step without runs-on/action. Remove the input: only a job summary (show_costs: summary) or turning the report off still needs it.")
+		}
 		requestAgentCostMode(action, modeFile, cfg.ShowCosts, claimed)
 	} else if claimed {
-		action.Infof("show_costs is enabled. You will find cost details in the post-execution step of this action.")
+		action.Infof("show_costs is enabled. You will find cost details in the post-execution step of this action. Cost reporting in runs-on/action is legacy: RunsOn v3.4.0 and later report each job's cost themselves, in the \"Complete runner\" step.")
 	} else if costTrackingRequested(cfg.ShowCosts) {
 		action.Infof("Cost tracking is already registered by an earlier runs-on/action invocation; this invocation will skip duplicate cost reporting.")
 	}

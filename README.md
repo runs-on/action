@@ -1,6 +1,16 @@
 # runs-on/action
 
-RunsOn Action for magic caching, and more. This action is required if you are using the magic caching feature of [RunsOn](https://runs-on.com) (`extras=s3-cache` job label).
+RunsOn Action for build caches and sticky-disk caches on [RunsOn](https://runs-on.com) runners:
+
+* [`remote_cache`](#remote_cache) gives build tools (Bazel, Go, Gradle, mbx, Nx, sccache, Turborepo) a remote cache through Magic Cache (`extras=s3-cache`).
+* [`sticky_cache`](#sticky_cache) keeps package manager, Docker layer, git and tool caches on a sticky disk (`sticky=<size>`).
+
+You don't need this action for the rest of RunsOn. Since RunsOn v3.4.0, the RunsOn agent does it on every job:
+
+* Magic Cache (`extras=s3-cache`) serves `actions/cache`, the setup actions' caches and `actions/upload-artifact`/`download-artifact` without this action. On earlier versions, add the action to Magic Cache jobs that upload or download artifacts.
+* The "Complete runner" step shows the job's estimated cost and charts its CPU, memory, disk, network and I/O use.
+
+Inputs that RunsOn now covers natively are listed under [Deprecated inputs](#deprecated-inputs).
 
 ## Usage
 
@@ -9,8 +19,11 @@ jobs:
   build:
     runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/extras=s3-cache
     steps:
+      - uses: actions/checkout@v7
       - uses: runs-on/action@v2
-      - other steps
+        with:
+          remote_cache: go
+      - run: go build ./...
 ```
 
 When RunsOn fails a job because AWS is reclaiming its EC2 Spot instance, the
@@ -39,328 +52,6 @@ Possible values:
 
 * `true` - Show all environment variables
 * `false` - Don't show environment variables (default)
-
-### `show_costs`
-
-Displays how much it cost to run that workflow job, and compares it with a similar GitHub-hosted runner.
-
-**RunsOn v3.4.0 and later.** The RunsOn agent reports the cost itself, at the very end of the job, in the "Complete runner" step. This happens for every job, with or without this action, so `show_costs` only chooses how it is displayed. The estimate:
-
-* covers EC2 (on-demand or spot), the root EBS volume, and any sticky disk, from when the instance starts (or the job starts, on a warm-pool instance) until the job ends;
-* uses prices your RunsOn control plane already resolves, so the runner makes no pricing or EC2 API calls and needs no internet access.
-
-Example output in the "Complete runner" step:
-
-```
-💰 Estimated cost: $0.0034 (GitHub-hosted: $0.0120)
-| Metric                   | Value                                      |
-| ------------------------ | ------------------------------------------ |
-| Instance type            | c7a.large                                  |
-| Instance lifecycle       | spot                                       |
-| Region                   | us-east-1                                  |
-| Availability zone        | us-east-1b                                 |
-| Platform                 | linux/x64, 2 vCPUs                         |
-| Billed duration          | 2m45s (boot, job, and 5s for shutdown)     |
-| Job duration             | 1m44s                                      |
-| EC2                      | $0.0014                                    |
-| EBS root volume          | $0.0008                                    |
-| EBS sticky disk          | $0.0012                                    |
-| Total                    | $0.0034                                    |
-| GitHub-hosted equivalent | $0.0120 (job duration rounded up to 2 min) |
-| Savings                  | $0.0086 (71.7%)                            |
-```
-
-The GitHub-hosted equivalent uses GitHub's published per-minute price for the smallest runner with at least as many vCPUs. It bills only the job duration, rounded up to the next whole minute as GitHub does, since GitHub doesn't bill runner boot.
-
-**Earlier RunsOn versions.** The action's post step computes the cost from https://ec2-pricing.runs-on.com, for both on-demand and spot pricing across all regions and availability zones. It covers EC2 only, up to the post step. When the cost API has no matching pricing data, cost reporting logs an informational message and skips the cost table and job summary. This includes unsupported regions and unavailable instance or zone prices. Other API and network failures still warn.
-
-Possible values:
-
-* `inline` - Display costs in the log output (default)
-* `summary` - Display costs in the log output and in the GitHub job summary
-* Any other value - Disables the feature
-
-When `runs-on/action` is invoked more than once in the same job, only the first
-invocation with cost reporting enabled calculates and displays the job cost.
-Later invocations skip duplicate reporting automatically. An invocation with
-cost reporting disabled does not prevent a later enabled invocation from
-reporting.
-
-### `metrics`
-
-**Note: this is currently only available with a development release of RunsOn. This will be fully functional with v2.8.4+**
-
-Send additional metrics using CloudWatch agent.
-
-Supported metrics:
-
-| Metric Type | Available Metrics |
-|------------|------------------|
-| `cpu` | `usage_user`, `usage_system` |
-| `network` | `bytes_recv`, `bytes_sent` |
-| `memory` | `used_percent` |
-| `disk` | `used_percent`, `inodes_used`, `free`, `total` |
-| `io` | `io_time`, `reads`, `writes` |
-
-```yaml
-jobs:
-  build:
-    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/extras=s3-cache
-    steps:
-      - uses: runs-on/action@v2
-        with:
-          metrics: cpu,network,memory,disk,io
-```
-
-Possible values:
-
-* `cpu` - CPU usage metrics (`usage_user`, `usage_system`)
-* `network` - Network metrics (`bytes_recv`, `bytes_sent`)
-* `memory` - Memory metrics (`used_percent`)
-* `disk` - Disk metrics (`used_percent`, `inodes_used`, `free`, `total`)
-* `io` - I/O metrics (`io_time`, `reads`, `writes`)
-* Comma-separated combinations (e.g., `cpu,network,memory,disk,io`)
-* Empty string - No additional metrics (default)
-
-Disk metrics are published for each of `/`, `/tmp`, `/var/lib/docker` and `/home/runner` that is a mount point, with the `InstanceId`, `path`, `fstype`, `device` and `VolumeId` dimensions. `VolumeId` is the EBS volume behind that mount, so a sticky disk or snapshot volume mounted at `/var/lib/docker` reports its own volume. Mounts that aren't on an EBS volume have no `VolumeId`, for example `tmpfs`, `overlay`, or the `md0` array RunsOn builds from local instance storage. Earlier versions published disk metrics without the `device` and `VolumeId` dimensions, so update dashboards or alarms that match on the previous set.
-
-The action will display live metrics with charts in the post-execution summary.
-
-```
-📈 Metrics (since 2025-06-30T14:18:56Z):
-
-
-📊 CPU User:
-   100.0 ┤
-    87.5 ┤                                        ╭─╮╭───────────╮
-    75.0 ┤                                       ╭╯ ╰╯           │
-    62.5 ┤                                      ╭╯               ╰╮
-    50.0 ┤                                      │                 │
-    37.5 ┤                                      │                 ╰╮
-    25.0 ┤                                     ╭╯                  │
-    12.5 ┤                    ╭─────────╮╭─────╯                   ╰╮
-     0.0 ┼────────────────────╯         ╰╯                          ╰
-                               CPU User (Percent)
-  Stats: min:0.0 avg:29.0 max:93.4 Percent
-
-
-📊 Memory Used:
-   100.0 ┤
-    87.5 ┤
-    75.0 ┤
-    62.5 ┤
-    50.0 ┤
-    37.5 ┤
-    25.0 ┤                                             ╭────────╮
-    12.5 ┤                            ╭──╮      ╭──────╯        ╰───╮
-     0.0 ┼────────────────────────────╯  ╰──────╯                   ╰
-                             Memory Used (Percent)
-  Stats: min:0.5 avg:7.4 max:20.9 Percent
-```
-
-<details>
-<summary>Example full output:</summary>
-
-```
-📈 Metrics (since 2025-06-30T14:18:56Z):
-
-
-📊 CPU User:
-   100.0 ┤
-    87.5 ┤                                        ╭─╮╭───────────╮
-    75.0 ┤                                       ╭╯ ╰╯           │
-    62.5 ┤                                      ╭╯               ╰╮
-    50.0 ┤                                      │                 │
-    37.5 ┤                                      │                 ╰╮
-    25.0 ┤                                     ╭╯                  │
-    12.5 ┤                    ╭─────────╮╭─────╯                   ╰╮
-     0.0 ┼────────────────────╯         ╰╯                          ╰
-                               CPU User (Percent)
-  Stats: min:0.0 avg:29.0 max:93.4 Percent
-
-
-
-📊 CPU System:
-   100.0 ┤
-    87.5 ┤
-    75.0 ┤
-    62.5 ┤
-    50.0 ┤
-    37.5 ┤
-    25.0 ┤                                     ╭──╮
-    12.5 ┤                                    ╭╯  ╰──────────────╮
-     0.0 ┼────────────────────────────────────╯                  ╰───
-                              CPU System (Percent)
-  Stats: min:0.2 avg:5.0 max:33.7 Percent
-
-
-
-📊 Memory Used:
-   100.0 ┤
-    87.5 ┤
-    75.0 ┤
-    62.5 ┤
-    50.0 ┤
-    37.5 ┤
-    25.0 ┤                                             ╭────────╮
-    12.5 ┤                            ╭──╮      ╭──────╯        ╰───╮
-     0.0 ┼────────────────────────────╯  ╰──────╯                   ╰
-                             Memory Used (Percent)
-  Stats: min:0.5 avg:7.4 max:20.9 Percent
-
-
-
-📊 Disk Used:
-   100.0 ┤
-    87.5 ┤
-    75.0 ┤            ╭──────────────────────────────────────────────
-    62.5 ┤         ╭──╯
-    50.0 ┤   ╭─────╯
-    37.5 ┼───╯
-    25.0 ┤
-    12.5 ┤
-     0.0 ┤
-                              Disk Used (Percent)
-  Stats: min:35.6 avg:68.7 max:75.8 Percent
-
-
-
-📊 Disk Inodes Used:
-   481238 ┤           ╭───────────────────────────────────────────────
-   450852 ┤          ╭╯
-   420466 ┤          │
-   390080 ┤         ╭╯
-   359694 ┤         │
-   329307 ┤        ╭╯
-   298921 ┤       ╭╯
-   268535 ┤   ╭───╯
-   238149 ┼───╯
-                            Disk Inodes Used (Inodes)
-  Stats: min:238149.0 avg:440393.1 max:481238.0 Inodes
-
-
-
-📊 Disk IO Time:
-   10000 ┤             ╭─╮
-    8750 ┤   ╭╮       ╭╯ ╰╮
-    7500 ┤   ││      ╭╯   │
-    6251 ┤   ││      │    │
-    5001 ┤  ╭╯╰╮ ╭╮ ╭╯    │
-    3751 ┤  │  │ ││ │     ╰╮
-    2502 ┤  │  │╭╯╰─╯      │
-    1252 ┤ ╭╯  ╰╯          ╰╮                ╭──╮
-       2 ┼─╯                ╰────────────────╯  ╰────────────────────
-                               Disk IO Time (ms)
-  Stats: min:1.0 avg:1581.3 max:10000.0 ms
-
-
-
-📊 Disk Reads:
-   1472 ┤   ╭╮
-   1288 ┤   ││
-   1104 ┤   ││
-    920 ┤  ╭╯│
-    736 ┤  │ ╰╮
-    552 ┤  │  │
-    368 ┤  │  │         ╭─╮
-    184 ┤ ╭╯  ╰╮       ╭╯ ╰─╮
-      0 ┼─╯    ╰───────╯    ╰───────────────────────────────────────
-                              Disk Reads (Ops/s)
-  Stats: min:0.0 avg:81.8 max:1519.0 Ops/s
-
-
-
-📊 Disk Writes:
-   18816 ┤            ╭─╮
-   16465 ┤         ╭──╯ ╰╮
-   14113 ┤        ╭╯     ╰╮
-   11762 ┤   ╭╮  ╭╯       │
-    9411 ┤   ││  │        │
-    7059 ┤  ╭╯╰╮╭╯        ╰╮
-    4708 ┤  │  ││          │
-    2356 ┤ ╭╯  ╰╯          │                ╭───╮
-       5 ┼─╯               ╰────────────────╯   ╰────────────────────
-                              Disk Writes (Ops/s)
-  Stats: min:4.0 avg:3373.4 max:19192.0 Ops/s
-
-
-
-📊 Network Received:
-   934237025 ┤ ╭╮
-   817458485 ┤ ││     ╭─╮
-   700679945 ┤ ││    ╭╯ │
-   583901406 ┤╭╯│    │  │
-   467122866 ┤│ ╰╮   │  │
-   350344327 ┤│  │  ╭╯  ╰╮
-   233565787 ┼╯  │  │    │
-   116787247 ┤   │  │    │
-        8708 ┤   ╰──╯    ╰───────────────────────────────────────────────
-                                Network Received (Bytes)
-  Stats: min:8707.0 avg:91377905.1 max:950344235.0 Bytes
-
-
-
-📊 Network Sent:
-   1866827 ┼╮
-   1634232 ┤│
-   1401638 ┤╰╮
-   1169043 ┤ │
-    936449 ┤ ╰╮
-    703854 ┤  │    ╭──╮
-    471259 ┤  ╰╮  ╭╯  │
-    238665 ┤   │  │   ╰╮                        ╭╮
-      6070 ┤   ╰──╯    ╰────────────────────────╯╰─────────────────────
-                                Network Sent (Bytes)
-  Stats: min:6068.0 avg:159559.6 max:1866827.0 Bytes
-```
-</details>
-
-### `sccache`
-
-Available on RunsOn Linux and Windows runners.
-
-`sccache: s3` configures [`sccache`](https://github.com/mozilla/sccache), which caches the compilation of C/C++ code, Rust and NVIDIA's CUDA, with its [S3 cache backend](https://github.com/mozilla/sccache/blob/main/docs/S3.md): sccache writes straight to the RunsOn S3 cache bucket, with the runner's instance role. For sccache through the RunsOn agent, with GitHub's branch scoping and cache isolation, use [`remote_cache: sccache`](#remote_cache-sccache) instead. When `remote_cache` also lists `sccache`, it wins, and the action ignores `sccache: s3` with a warning.
-
-```yaml
-jobs:
-  build:
-    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/extras=s3-cache
-    env:
-      CARGO_INCREMENTAL: "0"
-    steps:
-      - uses: actions/checkout@v7
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: sccache
-      - uses: runs-on/action@v2
-        with:
-          sccache: s3
-      - run: cargo build --release --locked
-```
-
-For Rust, disable incremental compilation as shown above. This mode needs no secret, so the action only exports settings, and the first sccache client of a later step, such as Cargo through `RUSTC_WRAPPER`, starts the server, which reads them then. The installer can therefore run before or after this action, but nothing may start the sccache server before it: a running server keeps its startup configuration.
-
-What this does under the hood is the equivalent of:
-
-```bash
-echo "SCCACHE_GHA_ENABLED=false" >> $GITHUB_ENV
-echo "SCCACHE_BUCKET=${{ env.RUNS_ON_S3_BUCKET_CACHE}}" >> $GITHUB_ENV
-echo "SCCACHE_REGION=${{ env.RUNS_ON_AWS_REGION}}" >> $GITHUB_ENV
-echo "SCCACHE_S3_KEY_PREFIX=cache/sccache/${{ github.repository_id }}/linux-x64/v1" >> $GITHUB_ENV
-echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
-```
-
-The action scopes compiler cache objects per repository and per runner platform:
-
-```text
-cache/sccache/<repository id>/<runner os>-<runner arch>/v1
-```
-
-The repository id is used rather than the `owner/name` slug so that renaming or transferring a repository does not invalidate its cache; the action falls back to the slug (as two key components, `<owner>/<name>`) when `GITHUB_REPOSITORY_ID` is not exposed. The trailing `v1` is a layout version, so a future change to the key layout can be rolled out without reusing existing objects.
-
-This is operational isolation, not a security boundary: repositories sharing a RunsOn stack still share the bucket and the runner IAM role, every branch of a repository reads and writes the same entries, and the stack's cache isolation does not cover them. It provides per-repository cache ownership, growth and cost attribution, targeted invalidation, and freedom to change one repository's cache layout without touching the others.
-
-Previously every repository on a stack shared the flat `cache/sccache` prefix. Moving to the scoped layout starts one cold cache per repository and platform. Objects written under the old prefix are left to the stack's cache lifecycle rule, which expires everything under `cache/` after `S3CacheExpirationInDays` (10 by default).
 
 ### `remote_cache`
 
@@ -775,6 +466,181 @@ Restore-only jobs let one job keep a cache current while others only read it, fo
 ```
 
 The action sets a `cache-hit` output: `true` when every requested path was restored from a previous snapshot. It also sets `buildkit-builder` to the stable builder name.
+
+## Deprecated inputs
+
+These inputs still work in `runs-on/action@v2`, but RunsOn v3 now covers them natively. Setting `metrics`, `network_interface`, `disk_device` or `sccache` logs a deprecation warning in the job, and they may be removed in a future major version of the action.
+
+| Input | Use instead |
+| ----- | ----------- |
+| `show_costs` | Nothing, on RunsOn v3.4.0 and later: the RunsOn agent reports every job's cost in the "Complete runner" step. Keep `show_costs: summary` only to add the cost to the job summary. |
+| `metrics`, `network_interface`, `disk_device` | The built-in runner metrics: the "Complete runner" step of every job charts CPU, memory, disk, network and I/O, and uploads the samples as `metrics.jsonl`. Add `extras=otel` to export them to an OTLP backend. See [per-job runner metrics](https://runs-on.com/docs/observability/opentelemetry/#per-job-runner-metrics). |
+| `sccache` | [`remote_cache: sccache`](#remote_cache-sccache) (RunsOn v3.6.0 and later), which follows GitHub's cache scopes and the stack's cache isolation. |
+
+### `show_costs`
+
+Legacy. Displays how much it cost to run that workflow job, and compares it with a similar GitHub-hosted runner.
+
+**RunsOn v3.4.0 and later.** The RunsOn agent reports the cost itself, at the very end of the job, in the "Complete runner" step. This happens for every job, with or without this action, so `show_costs` only chooses how it is displayed: leave it unset for the log, or set `summary` to add the cost to the job summary. An explicit `show_costs: inline` logs a warning asking to remove it. The estimate:
+
+* covers EC2 (on-demand or spot), the root EBS volume, and any sticky disk, from when the instance starts (or the job starts, on a warm-pool instance) until the job ends;
+* uses prices your RunsOn control plane already resolves, so the runner makes no pricing or EC2 API calls and needs no internet access.
+
+Example output in the "Complete runner" step:
+
+```
+💰 Estimated cost: $0.0034 (GitHub-hosted: $0.0120)
+| Metric                   | Value                                      |
+| ------------------------ | ------------------------------------------ |
+| Instance type            | c7a.large                                  |
+| Instance lifecycle       | spot                                       |
+| Region                   | us-east-1                                  |
+| Availability zone        | us-east-1b                                 |
+| Platform                 | linux/x64, 2 vCPUs                         |
+| Billed duration          | 2m45s (boot, job, and 5s for shutdown)     |
+| Job duration             | 1m44s                                      |
+| EC2                      | $0.0014                                    |
+| EBS root volume          | $0.0008                                    |
+| EBS sticky disk          | $0.0012                                    |
+| Total                    | $0.0034                                    |
+| GitHub-hosted equivalent | $0.0120 (job duration rounded up to 2 min) |
+| Savings                  | $0.0086 (71.7%)                            |
+```
+
+The GitHub-hosted equivalent uses GitHub's published per-minute price for the smallest runner with at least as many vCPUs. It bills only the job duration, rounded up to the next whole minute as GitHub does, since GitHub doesn't bill runner boot.
+
+**Earlier RunsOn versions.** The action's post step computes the cost from RunsOn's pricing service, for both on-demand and spot pricing across all regions and availability zones. It covers EC2 only, up to the post step. When the cost API has no matching pricing data, cost reporting logs an informational message and skips the cost table and job summary. This includes unsupported regions and unavailable instance or zone prices. Other API and network failures still warn.
+
+Possible values:
+
+* `inline` - Display costs in the log output (default when unset)
+* `summary` - Display costs in the log output and in the GitHub job summary
+* Any other value - Disables the feature
+
+When `runs-on/action` is invoked more than once in the same job, only the first
+invocation with cost reporting enabled calculates and displays the job cost.
+Later invocations skip duplicate reporting automatically. An invocation with
+cost reporting disabled does not prevent a later enabled invocation from
+reporting.
+
+### `metrics`
+
+Deprecated: use the built-in runner metrics, which chart the same data in every job's "Complete runner" step without CloudWatch costs, and work in container jobs. Linux only.
+
+Sends additional metrics to CloudWatch through the CloudWatch agent, and charts them in the action's post step. `network_interface` (default `enp39s0`) and `disk_device` (default `nvme0n1p1`) choose the network interface and disk device to monitor.
+
+Supported metrics:
+
+| Metric Type | Available Metrics |
+|------------|------------------|
+| `cpu` | `usage_user`, `usage_system` |
+| `network` | `bytes_recv`, `bytes_sent` |
+| `memory` | `used_percent` |
+| `disk` | `used_percent`, `inodes_used`, `free`, `total` |
+| `io` | `io_time`, `reads`, `writes` |
+
+```yaml
+jobs:
+  build:
+    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/extras=s3-cache
+    steps:
+      - uses: runs-on/action@v2
+        with:
+          metrics: cpu,network,memory,disk,io
+```
+
+Possible values:
+
+* `cpu` - CPU usage metrics (`usage_user`, `usage_system`)
+* `network` - Network metrics (`bytes_recv`, `bytes_sent`)
+* `memory` - Memory metrics (`used_percent`)
+* `disk` - Disk metrics (`used_percent`, `inodes_used`, `free`, `total`)
+* `io` - I/O metrics (`io_time`, `reads`, `writes`)
+* Comma-separated combinations (e.g., `cpu,network,memory,disk,io`)
+* Empty string - No additional metrics (default)
+
+Disk metrics are published for each of `/`, `/tmp`, `/var/lib/docker` and `/home/runner` that is a mount point, with the `InstanceId`, `path`, `fstype`, `device` and `VolumeId` dimensions. `VolumeId` is the EBS volume behind that mount, so a sticky disk or snapshot volume mounted at `/var/lib/docker` reports its own volume. Mounts that aren't on an EBS volume have no `VolumeId`, for example `tmpfs`, `overlay`, or the `md0` array RunsOn builds from local instance storage. Earlier versions published disk metrics without the `device` and `VolumeId` dimensions, so update dashboards or alarms that match on the previous set.
+
+The action will display live metrics with charts in the post-execution summary.
+
+```
+📈 Metrics (since 2025-06-30T14:18:56Z):
+
+
+📊 CPU User:
+   100.0 ┤
+    87.5 ┤                                        ╭─╮╭───────────╮
+    75.0 ┤                                       ╭╯ ╰╯           │
+    62.5 ┤                                      ╭╯               ╰╮
+    50.0 ┤                                      │                 │
+    37.5 ┤                                      │                 ╰╮
+    25.0 ┤                                     ╭╯                  │
+    12.5 ┤                    ╭─────────╮╭─────╯                   ╰╮
+     0.0 ┼────────────────────╯         ╰╯                          ╰
+                               CPU User (Percent)
+  Stats: min:0.0 avg:29.0 max:93.4 Percent
+
+
+📊 Memory Used:
+   100.0 ┤
+    87.5 ┤
+    75.0 ┤
+    62.5 ┤
+    50.0 ┤
+    37.5 ┤
+    25.0 ┤                                             ╭────────╮
+    12.5 ┤                            ╭──╮      ╭──────╯        ╰───╮
+     0.0 ┼────────────────────────────╯  ╰──────╯                   ╰
+                             Memory Used (Percent)
+  Stats: min:0.5 avg:7.4 max:20.9 Percent
+```
+
+### `sccache`
+
+Deprecated: use [`remote_cache: sccache`](#remote_cache-sccache) on RunsOn v3.6.0 and later. Available on RunsOn Linux and Windows runners.
+
+`sccache: s3` configures [`sccache`](https://github.com/mozilla/sccache), which caches the compilation of C/C++ code, Rust and NVIDIA's CUDA, with its [S3 cache backend](https://github.com/mozilla/sccache/blob/main/docs/S3.md): sccache writes straight to the RunsOn S3 cache bucket, with the runner's instance role. For sccache through the RunsOn agent, with GitHub's branch scoping and cache isolation, use [`remote_cache: sccache`](#remote_cache-sccache) instead. When `remote_cache` also lists `sccache`, it wins, and the action ignores `sccache: s3` with a warning.
+
+```yaml
+jobs:
+  build:
+    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/extras=s3-cache
+    env:
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: sccache
+      - uses: runs-on/action@v2
+        with:
+          sccache: s3
+      - run: cargo build --release --locked
+```
+
+For Rust, disable incremental compilation as shown above. This mode needs no secret, so the action only exports settings, and the first sccache client of a later step, such as Cargo through `RUSTC_WRAPPER`, starts the server, which reads them then. The installer can therefore run before or after this action, but nothing may start the sccache server before it: a running server keeps its startup configuration.
+
+What this does under the hood is the equivalent of:
+
+```bash
+echo "SCCACHE_GHA_ENABLED=false" >> $GITHUB_ENV
+echo "SCCACHE_BUCKET=${{ env.RUNS_ON_S3_BUCKET_CACHE}}" >> $GITHUB_ENV
+echo "SCCACHE_REGION=${{ env.RUNS_ON_AWS_REGION}}" >> $GITHUB_ENV
+echo "SCCACHE_S3_KEY_PREFIX=cache/sccache/${{ github.repository_id }}/linux-x64/v1" >> $GITHUB_ENV
+echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
+```
+
+The action scopes compiler cache objects per repository and per runner platform:
+
+```text
+cache/sccache/<repository id>/<runner os>-<runner arch>/v1
+```
+
+The repository id is used rather than the `owner/name` slug so that renaming or transferring a repository does not invalidate its cache; the action falls back to the slug (as two key components, `<owner>/<name>`) when `GITHUB_REPOSITORY_ID` is not exposed. The trailing `v1` is a layout version, so a future change to the key layout can be rolled out without reusing existing objects.
+
+This is operational isolation, not a security boundary: repositories sharing a RunsOn stack still share the bucket and the runner IAM role, every branch of a repository reads and writes the same entries, and the stack's cache isolation does not cover them. It provides per-repository cache ownership, growth and cost attribution, targeted invalidation, and freedom to change one repository's cache layout without touching the others.
+
+Previously every repository on a stack shared the flat `cache/sccache` prefix. Moving to the scoped layout starts one cold cache per repository and platform. Objects written under the old prefix are left to the stack's cache lifecycle rule, which expires everything under `cache/` after `S3CacheExpirationInDays` (10 by default).
 
 ## Development
 

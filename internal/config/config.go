@@ -16,6 +16,7 @@ import (
 type Config struct {
 	ShowEnv             bool
 	ShowCosts           string
+	ShowCostsSet        bool // the workflow set show_costs; unset means inline
 	Metrics             []string
 	NetworkInterface    string
 	DiskDevice          string
@@ -49,6 +50,7 @@ func NewConfigFromInputs(action *githubactions.Action) (*Config, error) {
 	}
 
 	cfg.ShowCosts = action.GetInput("show_costs")
+	cfg.ShowCostsSet = cfg.ShowCosts != ""
 	if cfg.ShowCosts == "" {
 		cfg.ShowCosts = "inline"
 	}

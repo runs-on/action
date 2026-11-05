@@ -118,7 +118,7 @@ func handleMainExecution(action *githubactions.Action, ctx context.Context) {
 	if modeFile := costs.AgentModeFile(); modeFile != "" {
 		requestAgentCostMode(action, modeFile, cfg.ShowCosts, claimed)
 	} else if claimed {
-		action.Infof("show_costs is enabled. You will find cost details in the post-execution step of this action.")
+		action.Infof("show_costs is enabled. You will find cost details in the post-execution step of this action. Cost reporting in runs-on/action is deprecated: RunsOn v3.4.0 and later report each job's cost themselves, in the \"Complete runner\" step.")
 	} else if costTrackingRequested(cfg.ShowCosts) {
 		action.Infof("Cost tracking is already registered by an earlier runs-on/action invocation; this invocation will skip duplicate cost reporting.")
 	}

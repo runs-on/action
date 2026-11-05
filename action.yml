@@ -11,9 +11,10 @@ inputs:
     required: false
     default: 'false'
   show_costs:
-    description: 'Legacy. RunsOn v3.4.0 and later report every job''s cost in the "Complete runner" step without this action. Set "summary" to also add it to the GitHub job summary, or any value other than "inline" or "summary" to turn the report off. Unset or "inline" shows it in the log. On earlier RunsOn versions, the action''s post step computes the cost. When the action is used more than once in a job, only the first enabled invocation reports costs.'
+    description: 'Deprecated: RunsOn v3.4.0 and later report every job''s cost in the "Complete runner" step without this action. Set "summary" to also add it to the GitHub job summary, or any value other than "inline" or "summary" to turn the report off. Unset or "inline" shows it in the log. On earlier RunsOn versions, the action''s post step computes the cost. When the action is used more than once in a job, only the first enabled invocation reports costs.'
     required: false
     default: ''
+    deprecationMessage: 'show_costs is deprecated and will be removed in a future major version of runs-on/action. RunsOn v3.4.0 and later report every job''s cost in the "Complete runner" step without this action. See https://github.com/runs-on/action#deprecated-inputs'
   metrics:
     description: 'Deprecated: every RunsOn job already charts CPU, memory, disk, network and I/O in its "Complete runner" step, and extras=otel exports them to an OTLP backend. Comma separated list of additional metrics to send to CloudWatch (cpu, network, memory, disk, io). disk publishes used_percent, inodes_used, free and total.'
     required: false

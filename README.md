@@ -469,19 +469,19 @@ The action sets a `cache-hit` output: `true` when every requested path was resto
 
 ## Deprecated inputs
 
-These inputs still work in `runs-on/action@v2`, but RunsOn v3 now covers them natively. Setting `metrics`, `network_interface`, `disk_device` or `sccache` logs a deprecation warning in the job, and they may be removed in a future major version of the action.
+These inputs still work in `runs-on/action@v2`, but RunsOn v3 now covers them natively. Setting one logs a deprecation warning in the job, and they may be removed in a future major version of the action.
 
 | Input | Use instead |
 | ----- | ----------- |
-| `show_costs` | Nothing, on RunsOn v3.4.0 and later: the RunsOn agent reports every job's cost in the "Complete runner" step. Keep `show_costs: summary` only to add the cost to the job summary. |
+| `show_costs` | Nothing, on RunsOn v3.4.0 and later: the RunsOn agent reports every job's cost in the "Complete runner" step. |
 | `metrics`, `network_interface`, `disk_device` | The built-in runner metrics: the "Complete runner" step of every job charts CPU, memory, disk, network and I/O, and uploads the samples as `metrics.jsonl`. Add `extras=otel` to export them to an OTLP backend. See [per-job runner metrics](https://runs-on.com/docs/observability/opentelemetry/#per-job-runner-metrics). |
 | `sccache` | [`remote_cache: sccache`](#remote_cache-sccache) (RunsOn v3.6.0 and later), which follows GitHub's cache scopes and the stack's cache isolation. |
 
 ### `show_costs`
 
-Legacy. Displays how much it cost to run that workflow job, and compares it with a similar GitHub-hosted runner.
+Deprecated. Displays how much it cost to run that workflow job, and compares it with a similar GitHub-hosted runner.
 
-**RunsOn v3.4.0 and later.** The RunsOn agent reports the cost itself, at the very end of the job, in the "Complete runner" step. This happens for every job, with or without this action, so `show_costs` only chooses how it is displayed: leave it unset for the log, or set `summary` to add the cost to the job summary. An explicit `show_costs: inline` logs a warning asking to remove it. The estimate:
+**RunsOn v3.4.0 and later.** The RunsOn agent reports the cost itself, at the very end of the job, in the "Complete runner" step. This happens for every job, with or without this action, so `show_costs` only chooses how it is displayed: unset for the log, or `summary` to also add the cost to the job summary. The estimate:
 
 * covers EC2 (on-demand or spot), the root EBS volume, and any sticky disk, from when the instance starts (or the job starts, on a warm-pool instance) until the job ends;
 * uses prices your RunsOn control plane already resolves, so the runner makes no pricing or EC2 API calls and needs no internet access.

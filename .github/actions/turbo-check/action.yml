@@ -1,0 +1,108 @@
+name: Check Turborepo
+description: Builds a two-package Turborepo workspace through the RunsOn agent's Turborepo cache, and checks what went to and came from Magic Cache.
+
+inputs:
+  workspace:
+    description: Identifies the workspace's content, so its task hashes are the run's own. The job that uploads and the job that restores pass the same value.
+    required: true
+  uploads:
+    description: '"true" in the job that builds and uploads, "false" in a later job that restores every task.'
+    default: 'true'
+
+runs:
+  using: composite
+  steps:
+    - id: tools
+      uses: ./.github/actions/tool-caches-served
+      with:
+        protocol: turbo
+    # An agent without the turbo protocol: runs-on/action warns and leaves
+    # turbo alone.
+    - name: Without the turbo protocol, TURBO_API is not set
+      if: steps.tools.outputs.served != 'true'
+      shell: bash
+      run: |
+        if [[ -n "${TURBO_API:-}" ]]; then
+          echo "::error::TURBO_API is set on an agent without the turbo protocol"
+          exit 1
+        fi
+    # GitHub gives the job's runtime token to actions only. turbo gets a URL
+    # that stands for it, and a placeholder token.
+    - name: turbo gets the agent's cache, and no runtime token
+      if: steps.tools.outputs.served == 'true'
+      shell: bash
+      run: |
+        if [[ -n "${ACTIONS_RUNTIME_TOKEN:-}" ]]; then
+          echo "::error::the runtime token is in the environment of the job's run steps"
+          exit 1
+        fi
+        if [[ "${TURBO_API:-}" != http://*/turbo || "${TURBO_TOKEN:-}" != runs-on || "${TURBO_TEAM:-}" != runs-on ]]; then
+          echo "::error::TURBO_API is '${TURBO_API:-}', TURBO_TOKEN '${TURBO_TOKEN:-}' and TURBO_TEAM '${TURBO_TEAM:-}', want the agent's Turborepo cache"
+          exit 1
+        fi
+    # turbo hashes the files git tracks, so the workspace is a repository.
+    - name: Create a workspace
+      if: steps.tools.outputs.served == 'true'
+      shell: bash
+      env:
+        WORKSPACE: ${{ inputs.workspace }}
+      run: |
+        set -euo pipefail
+        dir="${RUNNER_TEMP}/turbo-check"
+        rm -rf "${dir}"
+        mkdir -p "${dir}/packages/lib" "${dir}/packages/app"
+        cd "${dir}"
+        printf '{"name":"turbo-check","private":true,"packageManager":"npm@10.9.4","workspaces":["packages/*"],"devDependencies":{"turbo":"2.11.10"}}\n' > package.json
+        printf '{"tasks":{"build":{"dependsOn":["^build"],"outputs":["dist/**"]}}}\n' > turbo.json
+        printf 'node_modules\ndist\n.turbo\n' > .gitignore
+        printf '%s\n' "${WORKSPACE}" > packages/lib/seed.txt
+        printf '{"name":"lib","version":"1.0.0","scripts":{"build":"node -e \\"require(%s).mkdirSync(%s,{recursive:true});require(%s).copyFileSync(%s,%s)\\""}}\n' "'fs'" "'dist'" "'fs'" "'seed.txt'" "'dist/out.txt'" > packages/lib/package.json
+        printf '{"name":"app","version":"1.0.0","dependencies":{"lib":"*"},"scripts":{"build":"node -e \\"require(%s).mkdirSync(%s,{recursive:true});require(%s).copyFileSync(%s,%s)\\""}}\n' "'fs'" "'dist'" "'fs'" "'../lib/dist/out.txt'" "'dist/out.txt'" > packages/app/package.json
+        npm install --no-audit --no-fund --loglevel=error
+        git init -q
+        git add -A
+        git -c user.name=check -c user.email=check@runs-on.com commit -qm workspace
+    - name: Build through turbo
+      if: steps.tools.outputs.served == 'true'
+      shell: bash
+      env:
+        UPLOADS: ${{ inputs.uploads }}
+        WORKSPACE: ${{ inputs.workspace }}
+      run: |
+        set -euo pipefail
+        cd "${RUNNER_TEMP}/turbo-check"
+        # Remote only, so a hit can only come from the agent.
+        npx turbo run build --cache=local:,remote:rw 2>&1 | tee build.log
+        if grep -q WARNING build.log; then
+          echo "::error::turbo warned about its remote cache"
+          exit 1
+        fi
+        grep -q 'Remote caching enabled' build.log
+        if [[ "${UPLOADS}" == true ]]; then
+          grep -Eq 'Cached: +0 cached, 2 total' build.log
+        elif ! grep -q 'FULL TURBO' build.log; then
+          echo "::error::turbo did not restore every task from the agent's cache"
+          exit 1
+        fi
+        test "$(tr -d '\r' < packages/app/dist/out.txt)" = "${WORKSPACE}"
+    - name: Check what went through the agent
+      if: steps.tools.outputs.served == 'true'
+      shell: bash
+      env:
+        UPLOADS: ${{ inputs.uploads }}
+      run: |
+        set -euo pipefail
+        cache_url="${RUNS_ON_MAGIC_CACHE_URL:-${ACTIONS_RESULTS_URL}}"
+        diagnostics=$(curl -fsS "${cache_url%/}/_runs-on/diagnostics")
+        count() { { grep -o "\"operation\":\"$1\",\"key\":\"[^\"]*\",\"objectKey\":\"[^\"]*\",\"version\":\"turbo\"" <<<"${diagnostics}" || true; } | wc -l | tr -d ' '; }
+        reads=$(count read)
+        writes=$(count write)
+        echo "turbo reads: ${reads}, writes: ${writes}"
+        if [[ "${UPLOADS}" == true && "${writes}" != 2 ]]; then
+          echo "::error::turbo uploaded ${writes} artifacts through the agent, want 2"
+          exit 1
+        fi
+        if [[ "${UPLOADS}" != true && "${reads}" != 2 ]]; then
+          echo "::error::turbo restored ${reads} artifacts through the agent, want 2"
+          exit 1
+        fi

@@ -1,0 +1,13 @@
+name: Reject committed build output
+description: "Fail if the checkout tracks the generated binaries or JS entrypoints. Only release branches carry them; see release.yml."
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        set -euo pipefail
+        tracked=$(git ls-files main-linux-amd64 main-linux-arm64 main-windows-amd64.exe index.js post.js)
+        if [[ -n "${tracked}" ]]; then
+          echo "::error::Remove the committed build output; CI builds it: ${tracked//$'\n'/ }"
+          exit 1
+        fi

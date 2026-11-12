@@ -1,0 +1,54 @@
+name: Test / Bazel remote cache
+
+on:
+  workflow_call:
+
+jobs:
+  # Each leg builds a one-rule workspace through the remote cache, cleans, and
+  # builds it again from the cache.
+  bazel:
+    name: bazel (${{ matrix.leg }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - leg: linux
+            image: ubuntu24-full-x64
+          # The oldest Bazel that takes the common --remote_cache line.
+          - leg: bazel-6.3
+            image: ubuntu24-full-x64
+            bazel: 6.3.0
+          - leg: container
+            image: ubuntu24-full-x64
+            container: golang:1.26
+          - leg: windows
+            image: windows25-full-x64
+    runs-on: runs-on=${{ github.run_id }}/env=bootstrap/cpu=2/family=m7/image=${{ matrix.image }}/extras=s3-cache
+    container: ${{ matrix.container }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/use-dist
+      - uses: ./
+        with:
+          remote_cache: bazel
+      - uses: ./.github/actions/bazel-remote-cache-check
+        with:
+          workspace: ${{ github.run_id }}-${{ matrix.leg }}
+          bazel: ${{ matrix.bazel || '9.3.0' }}
+
+  # What a cache is for: a later job, on another runner, builds from what the
+  # linux leg uploaded.
+  another-job:
+    name: another job (linux)
+    needs: bazel
+    runs-on: runs-on=${{ github.run_id }}/env=bootstrap/cpu=2/family=m7/image=ubuntu24-full-x64/extras=s3-cache
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/use-dist
+      - uses: ./
+        with:
+          remote_cache: bazel
+      - uses: ./.github/actions/bazel-remote-cache-check
+        with:
+          workspace: ${{ github.run_id }}-linux
+          uploads: 'false'

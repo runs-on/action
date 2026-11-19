@@ -156,10 +156,11 @@ func (c *Config) RemoteCacheRequests() ([]remotecache.Request, []string) {
 }
 
 // HasMagicCache reports whether the runner serves the GitHub Actions cache
-// from Magic Cache: the agent then hides GitHub's own results URL behind
-// ZCTIONS_RESULTS_URL, or on custom runners sets RUNS_ON_MAGIC_CACHE_URL.
+// from Magic Cache: the agent hides GitHub's original URLs behind
+// ZCTIONS_RESULTS_URL or ZCTIONS_CACHE_URL, or on custom runners sets
+// RUNS_ON_MAGIC_CACHE_URL.
 func (c *Config) HasMagicCache() bool {
-	return c.ZctionsResultsURL != "" || os.Getenv("RUNS_ON_MAGIC_CACHE_URL") != ""
+	return c.ZctionsResultsURL != "" || c.ZctionsCacheURL != "" || os.Getenv("RUNS_ON_MAGIC_CACHE_URL") != ""
 }
 
 func (c *Config) HasSccache() bool {

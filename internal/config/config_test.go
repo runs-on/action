@@ -1,6 +1,7 @@
 package config
 
 import (
+	"io"
 	"testing"
 	"time"
 
@@ -104,5 +105,38 @@ func TestUndeclaredLegacyInputsRemainIgnored(t *testing.T) {
 	}
 	if got, want := cfg.StickyWaitTimeout, 15*time.Minute; got != want {
 		t.Fatalf("StickyWaitTimeout = %s, want %s", got, want)
+	}
+}
+
+func TestHasMagicCache(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		resultsURL string
+		cacheURL   string
+		customURL  string
+		want       bool
+	}{
+		{name: "no Magic Cache"},
+		{name: "GHES v1 cache URL only", cacheURL: "https://ghes.example/_services/artifactcache/", want: true},
+		{name: "results URL only", resultsURL: "https://results.example/", want: true},
+		{name: "both original URLs", cacheURL: "https://ghes.example/_services/artifactcache/", resultsURL: "https://results.example/", want: true},
+		{name: "custom runner", customURL: "http://localhost:6871/", want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("ZCTIONS_RESULTS_URL", tc.resultsURL)
+			t.Setenv("ZCTIONS_CACHE_URL", tc.cacheURL)
+			t.Setenv("RUNS_ON_MAGIC_CACHE_URL", tc.customURL)
+			// GitHub's standard URLs also exist without Magic Cache, so they
+			// alone must not cause its cache to be treated as the agent's.
+			t.Setenv("ACTIONS_RESULTS_URL", "https://results.example/")
+			t.Setenv("ACTIONS_CACHE_URL", "https://ghes.example/_services/artifactcache/")
+			cfg, err := NewConfigFromInputs(githubactions.New(githubactions.WithWriter(io.Discard)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := cfg.HasMagicCache(); got != tc.want {
+				t.Fatalf("HasMagicCache() = %t, want %t", got, tc.want)
+			}
+		})
 	}
 }

@@ -23,7 +23,8 @@ func URL() string {
 // UpdateZctionsConfig sends the original GitHub backend URLs and runtime token
 // to the local RunsOn cache service. The token is intentionally never logged.
 func UpdateZctionsConfig(action *githubactions.Action, actionsResultsURL string, zctionsResultsURL string, zctionsCacheURL string, actionsRuntimeToken string) {
-	if zctionsResultsURL == "" {
+	// GHES may provide only the v1 cache URL; it still needs registration.
+	if zctionsResultsURL == "" && zctionsCacheURL == "" {
 		return
 	}
 
@@ -31,7 +32,9 @@ func UpdateZctionsConfig(action *githubactions.Action, actionsResultsURL string,
 	data := url.Values{}
 	// Send the ZCTIONS_RESULTS_URL value under the key 'ACTIONS_RESULTS_URL'.
 	// This value is only known by the GitHub Actions runner, and is needed by the RunsOn agent cache proxy to handle artefacts caching.
-	data.Set("ACTIONS_RESULTS_URL", zctionsResultsURL)
+	if zctionsResultsURL != "" {
+		data.Set("ACTIONS_RESULTS_URL", zctionsResultsURL)
+	}
 	if zctionsCacheURL != "" {
 		data.Set("ACTIONS_CACHE_URL", zctionsCacheURL)
 	}
